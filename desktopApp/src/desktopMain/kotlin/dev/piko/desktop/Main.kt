@@ -11,6 +11,7 @@ import java.util.Locale
 import dev.piko.shared.i18n.PikoLocale
 import dev.piko.shared.lan.LanShareRepository
 import dev.piko.shared.lan.DesktopLanShareHost
+import dev.piko.shared.lan.UdpLanDiscovery
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -710,6 +711,7 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         lanShareHostFactory = { repository, hostPreferences, settings, name ->
             DesktopLanShareHost(repository, hostPreferences, settings, name, lanPlatform, appScope)
         },
+        lanDiscovery = UdpLanDiscovery(),
     )
 }
 

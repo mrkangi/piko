@@ -29,6 +29,7 @@ import dev.piko.shared.data.PikoDriveRepository
 import dev.piko.shared.lan.LanShareHost
 import dev.piko.shared.lan.LanShareRepository
 import dev.piko.shared.lan.LanShareSettings
+import dev.piko.shared.lan.LanDiscovery
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.state.ArchiveBrowser
 import dev.piko.shared.state.ArchiveExtractSession
@@ -80,6 +81,7 @@ class PikoServices(
     platformName: String = "unknown",
     lanSharesFactory: ((LanShareSettings, CoroutineScope) -> LanShareRepository?)? = null,
     lanShareHostFactory: ((PikoDriveRepository, PikoUserPreferences, LanShareSettings, String) -> LanShareHost)? = null,
+    val lanDiscovery: LanDiscovery? = null,
 ) {
     val memoryGovernor = dev.piko.shared.memory.PikoMemoryGovernor.Shared
 

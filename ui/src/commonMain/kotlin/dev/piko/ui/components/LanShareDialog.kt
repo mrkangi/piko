@@ -40,6 +40,7 @@ import dev.piko.shared.i18n.tr
 import dev.piko.shared.lan.LanHostStatus
 import dev.piko.shared.lan.LanLocalSettings
 import dev.piko.shared.lan.LanPeer
+import dev.piko.shared.lan.LanDiscoveredHost
 import dev.piko.ui.LocalPikoServices
 import kotlinx.coroutines.launch
 
@@ -65,6 +66,8 @@ fun LanShareDialog(onDismiss: () -> Unit) {
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var discovered by remember { mutableStateOf(emptyList<LanDiscoveredHost>()) }
+    var discovering by remember { mutableStateOf(false) }
 
     PikoDialog(
         onDismissRequest = onDismiss,
@@ -188,6 +191,34 @@ fun LanShareDialog(onDismiss: () -> Unit) {
                 }
 
                 if (services.lanShares != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(tr("发现局域网主机", "Discover LAN hosts", "LAN ホストを検出", "LAN 호스트 찾기", "探索區域網路主機"), Modifier.weight(1f))
+                        TextButton(
+                            enabled = !discovering && services.lanDiscovery != null,
+                            onClick = {
+                                discovering = true
+                                scope.launch {
+                                    discovered = services.lanDiscovery?.discover().orEmpty()
+                                    discovering = false
+                                }
+                            },
+                        ) { Text(if (discovering) tr("搜索中…", "Searching…", "検索中…", "검색 중…", "搜尋中…") else tr("搜索", "Search", "検索", "검색", "搜尋")) }
+                    }
+                    discovered.forEach { host ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(host.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${host.address}:${host.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            TextButton(onClick = {
+                                address = host.address
+                                port = host.port.toString()
+                            }) { Text(tr("填入", "Use", "使用", "사용", "填入")) }
+                        }
+                    }
                     OutlinedTextField(
                         value = address,
                         onValueChange = { address = it },

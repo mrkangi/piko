@@ -21,6 +21,7 @@ import io.ktor.client.statement.bodyAsBytes
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
 import java.io.File
+import java.awt.image.BufferedImage
 import java.net.ServerSocket
 import java.nio.file.Files
 import kotlin.test.Test
@@ -35,7 +36,8 @@ class LanShareHostTest {
         try {
             File(root, "movie.mp4").writeBytes(ByteArray(1024) { it.toByte() })
             File(root, "sub").mkdirs()
-            File(root, "sub/photo.jpg").writeBytes(ByteArray(64) { 7 })
+            val photo = File(root, "sub/photo.png")
+            javax.imageio.ImageIO.write(BufferedImage(16, 8, BufferedImage.TYPE_INT_RGB), "png", photo)
             val preferences = preferences()
             val repository = PikoDriveRepository(FakePikPakServer().provider(), preferences)
             repository.localMounts.access = FileAccess(root)
@@ -69,11 +71,13 @@ class LanShareHostTest {
                 val rootListing = client.list(shareRoot)
                 assertEquals(setOf("movie.mp4", "sub"), rootListing.map { it.name }.toSet())
                 val subFolder = assertNotNull(rootListing.firstOrNull { it.name == "sub" })
-                assertEquals(listOf("photo.jpg"), client.list(LanLocation.of(subFolder.id)!!).map { it.name })
+                val photos = client.list(LanLocation.of(subFolder.id)!!)
+                assertEquals(listOf("photo.png"), photos.map { it.name })
+                assertTrue(photos.single().thumbnailLink.contains("/v1/thumb"))
 
                 client.ensureIndex(shareRoot)
                 assertEquals(setOf("movie.mp4", "sub"), client.list(shareRoot).map { it.name }.toSet())
-                assertEquals(listOf("photo.jpg"), client.list(LanLocation.of(subFolder.id)!!).map { it.name })
+                assertEquals(listOf("photo.png"), client.list(LanLocation.of(subFolder.id)!!).map { it.name })
 
                 val movie = assertNotNull(rootListing.firstOrNull { it.name == "movie.mp4" })
                 val movieLocation = assertNotNull(LanLocation.of(movie.id))
@@ -81,6 +85,9 @@ class LanShareHostTest {
                 val ranged = http.get(url) { header("Range", "bytes=10-19") }
                 assertEquals(HttpStatusCode.PartialContent, ranged.status)
                 assertEquals(10, ranged.bodyAsBytes().size)
+                val thumbnail = http.get(photos.single().thumbnailLink)
+                assertEquals(HttpStatusCode.OK, thumbnail.status)
+                assertEquals("image/jpeg", thumbnail.headers["Content-Type"])
             } finally {
                 http.close()
                 host.stop()
@@ -115,7 +122,11 @@ class LanShareHostTest {
             name = file.name,
             kind = if (file.isDirectory) FileKind.FOLDER else FileKind.FILE,
             size = if (file.isDirectory) "0" else file.length().toString(),
-            mimeType = if (file.extension.equals("jpg", true)) "image/jpeg" else "",
+            mimeType = when (file.extension.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                else -> ""
+            },
             modifiedTime = kotlin.time.Instant.fromEpochMilliseconds(file.lastModified()).toString(),
             phase = TaskPhase.COMPLETE,
             fileExtension = file.name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" },

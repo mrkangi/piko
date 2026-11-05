@@ -32,6 +32,7 @@ import dev.piko.shared.i18n.PikoLocale
 import dev.piko.shared.log.LogLevel
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.lan.LanShareRepository
+import dev.piko.shared.lan.UdpLanDiscovery
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.memory.MemoryPolicy
@@ -198,6 +199,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     clientPlatform = "android",
                 )
             },
+            lanDiscovery = UdpLanDiscovery(),
         )
         appScope.launch {
             sessionManager.remoteDownloadEnabledFlow.distinctUntilChanged().collect { enabled ->

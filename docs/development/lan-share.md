@@ -30,6 +30,7 @@
 | GET | `/v1/list?share=&path=` | Bearer | 一层目录 |
 | GET | `/v1/stat?share=&path=` | Bearer | 单个条目元数据 |
 | GET | `/v1/index?share=` | Bearer | host 预建的整棵共享索引（上限 50,000 项，可能标记 truncated） |
+| GET | `/v1/thumb?share=&path=&w=` | Bearer 或 token 查询 | 图片缩略图，host 端用 ImageIO 缩放并缓存 |
 | GET/HEAD | `/v1/content?share=&path=&token=` | Bearer 或 token 查询 | 文件内容，支持 `Range`、`ETag`、`Accept-Ranges` |
 
 `/v1/content` 同时接受查询参数里的令牌，因为 mpv / ExoPlayer 加载外挂字幕时未必转发自定义请求头。令牌只在本机可信局域网内使用。
@@ -38,13 +39,17 @@
 
 `VideoDiscovery` 在开始遍历前调用 `PikoDriveRepository.prefetchLanIndex(rootId)`。若根是局域网共享，客户端先取 `/v1/index`，之后逐层列目录直接命中内存树；host 端索引缓存 60 秒，超限后标记 truncated，客户端对未知目录回退 `/v1/list`。
 
+## 发现
+
+host 启动后每 2 秒向 UDP `47822` 广播 `LanDiscoveryPacket`（同时发往 `255.255.255.255` 与 `127.0.0.1`）。客户端的「搜索」按钮监听 3 秒收集主机，选中后填入地址与端口，仍需输入 host 上显示的一次性配对码。广播被防火墙拦截时，手动输入 `IP:端口` 仍可配对。
+
 ## 安全边界
 
 - 共享目录必须显式打开 `lanShared`；默认不发布。
 - 服务只读；上传、删除、重命名、移动都不支持。
 - host 端把相对路径交给 `LocalLocation`，拒绝 `.`、`..`、绝对路径、反斜杠与冒号；符号链接策略由 `LocalFileAccess` 负责。
 - 令牌与配对设置存在设备本地偏好，不进入网盘设置同步。
-- v1 是明文 HTTP + 配对令牌，只应在可信局域网使用；TLS 与 mDNS 在后续阶段接入。
+- v1 是明文 HTTP + 配对令牌，只应在可信局域网使用；TLS 在后续阶段接入。发现使用 UDP 广播，不参与鉴权。
 - Android 作为 host 需要 SAF 随机读与前台服务，v1 只支持桌面 host；Android/桌面都可作为客户端。
 
 ## 已知限制

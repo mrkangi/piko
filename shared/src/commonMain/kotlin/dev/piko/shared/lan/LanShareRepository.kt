@@ -258,7 +258,7 @@ class LanShareRepository(
             modifiedTime = entry.modifiedMs.takeIf { it > 0 }?.let { kotlin.time.Instant.fromEpochMilliseconds(it).toString() }.orEmpty(),
             phase = TaskPhase.COMPLETE,
             fileExtension = extension,
-            thumbnailLink = if (isImage) contentUrl(peer, shareId, entry.path) else "",
+            thumbnailLink = if (isImage) thumbUrl(peer, shareId, entry.path) else "",
             params = buildMap {
                 put("lan_peer", peer.hostDeviceId)
                 put("lan_share", shareId)
@@ -272,6 +272,10 @@ class LanShareRepository(
     private fun contentUrl(peer: LanPeer, shareId: String, path: String): String =
         "http://${hostForUrl(peer.address)}:${peer.port}/v1/content" +
             "?share=${shareId.encodeURLParameter()}&path=${path.encodeURLParameter()}&token=${peer.token.encodeURLParameter()}"
+
+    private fun thumbUrl(peer: LanPeer, shareId: String, path: String): String =
+        "http://${hostForUrl(peer.address)}:${peer.port}/v1/thumb" +
+            "?share=${shareId.encodeURLParameter()}&path=${path.encodeURLParameter()}&token=${peer.token.encodeURLParameter()}&w=320"
 
     private suspend inline fun <reified T> getJson(peer: LanPeer, path: String, authenticated: Boolean = true): T {
         val response = try {

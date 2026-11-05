@@ -6,6 +6,7 @@ import dev.piko.data.auth.PikoUserPreferences
 import dev.piko.shared.data.LocalMount
 import dev.piko.shared.data.LocalLocation
 import dev.piko.shared.data.PikoDriveRepository
+import dev.piko.shared.PikoHome
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.log.logFailure
@@ -25,6 +26,10 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.RandomAccessFile
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.security.MessageDigest
+import javax.imageio.ImageIO
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -59,6 +64,7 @@ class DesktopLanShareHost(
 
     private var server: HttpServer? = null
     private var executor: ExecutorService? = null
+    private var announcer: UdpLanAnnouncer? = null
     private val indexCache = ConcurrentHashMap<String, CachedIndex>()
     private val startLock = Mutex()
 
@@ -90,8 +96,10 @@ class DesktopLanShareHost(
         running = false
         runCatching { server?.stop(1) }
         runCatching { executor?.shutdownNow() }
+        announcer?.stop()
         server = null
         executor = null
+        announcer = null
         _status.value = LanHostStatus()
     }
 
@@ -125,6 +133,9 @@ class DesktopLanShareHost(
         executor = pool
         running = true
         pairingCode = newPairingCode()
+        announcer = UdpLanAnnouncer(
+            LanDiscoveryPacket(deviceId = deviceId, deviceName = deviceName, port = boundPort, platform = platformName),
+        ).also { it.start() }
         _status.value = LanHostStatus(
             running = true,
             address = localAddress(),
@@ -181,6 +192,8 @@ class DesktopLanShareHost(
             path == "/v1/index" && exchange.requestMethod == "GET" -> withAuth(exchange, query) {
                 sendJson(exchange, 200, indexShare(query["share"].orEmpty()))
             }
+            path == "/v1/thumb" && exchange.requestMethod == "GET" ->
+                withAuth(exchange, query) { serveThumbnail(exchange, query) }
             path == "/v1/content" && (exchange.requestMethod == "GET" || exchange.requestMethod == "HEAD") ->
                 withAuth(exchange, query) { streamContent(exchange, query["share"].orEmpty(), query["path"].orEmpty()) }
             else -> sendError(exchange, 404, "not_found")
@@ -337,6 +350,54 @@ class DesktopLanShareHost(
                 }
             }
         }
+    }
+
+    private fun serveThumbnail(exchange: HttpExchange, query: Map<String, String>) {
+        val shareId = query["share"].orEmpty()
+        val relativePath = query["path"].orEmpty()
+        val width = query["w"]?.toIntOrNull()?.coerceIn(96, 1024) ?: 320
+        val mount = runBlocking { mountFor(shareId) } ?: return sendError(exchange, 404, "share_not_found")
+        val location = LocalLocation(mount.mountId, pathSegments(relativePath), directory = false)
+        val localPath = runBlocking { repository.localMounts.resolve(location.id) }
+            ?: return sendError(exchange, 404, "not_found")
+        if (localPath.startsWith("content://")) return sendError(exchange, 501, "unsupported_host")
+        val source = File(localPath)
+        if (!source.isFile) return sendError(exchange, 404, "not_found")
+        val key = MessageDigest.getInstance("SHA-256")
+            .digest("$shareId|$relativePath|${source.lastModified()}|$width".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val directory = PikoHome.root.resolve("cache/lan-thumbs").toFile().apply { mkdirs() }
+        val output = File(directory, "$key.jpg")
+        if (!output.isFile || output.length() == 0L) {
+            val image = runCatching { ImageIO.read(source) }.getOrNull()
+                ?: return sendError(exchange, 415, "not_an_image")
+            val targetWidth = minOf(width, image.width).coerceAtLeast(1)
+            val targetHeight = (image.height.toLong() * targetWidth / image.width).toInt().coerceAtLeast(1)
+            val scaled = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB)
+            val graphics = scaled.createGraphics()
+            try {
+                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                graphics.drawImage(image, 0, 0, targetWidth, targetHeight, null)
+            } finally {
+                graphics.dispose()
+            }
+            val tmp = File.createTempFile("lan-thumb-", ".jpg", directory)
+            try {
+                ImageIO.write(scaled, "jpg", tmp)
+                if (!tmp.renameTo(output)) tmp.copyTo(output, overwrite = true)
+            } finally {
+                tmp.delete()
+            }
+            directory.listFiles().orEmpty()
+                .sortedByDescending { it.lastModified() }
+                .drop(512)
+                .forEach { it.delete() }
+        }
+        val data = output.readBytes()
+        exchange.responseHeaders.set("Content-Type", "image/jpeg")
+        exchange.responseHeaders.set("Cache-Control", "private, max-age=3600")
+        exchange.sendResponseHeaders(200, data.size.toLong())
+        exchange.responseBody.use { it.write(data) }
     }
 
     private fun FileStat.toEntry(relativePath: String): LanShareEntry = LanShareEntry(
