@@ -108,6 +108,7 @@ internal class DriveItemActionIntents(
     val fullyVaultedFolders: Set<String>,
     val pinnedFolders: List<PathBreadcrumb>,
     val onDownload: (files: List<FileStat>, chooseQuality: Boolean) -> Unit,
+    val onRemoteDownload: (files: List<FileStat>) -> Unit,
     val onExtractArchives: (List<FileStat>) -> Unit,
     val onExtractFromArchive: (List<FileStat>) -> Unit,
     val onShare: (List<FileStat>) -> Unit,
@@ -278,6 +279,10 @@ internal fun buildSelectionActions(
         )
     }
     if (commands.downloadAtQuality) add(DriveActions.downloadAtQuality { intents.onDownload(files, true) })
+    if (commands.download) {
+        val remoteTargets = files.filterNot { it.isFolder || it.isUploading || it.isVaulted || it.isImportPreview }
+        if (remoteTargets.isNotEmpty()) add(DriveActions.downloadToDevice { intents.onRemoteDownload(remoteTargets) })
+    }
     if (commands.moveCopyTo) {
         add(DriveActions.moveTo { intents.onMove(ids.toSet()) })
         add(DriveActions.copyTo { intents.onCopy(ids.toSet()) })
@@ -463,6 +468,9 @@ internal fun buildDriveOperations(
         togglePreview = { state.toggleSpoiler(file.id) },
         putOnClipboard = { cut -> state.putOnClipboard(listOf(file.id), cut) },
         copyDownloadLink = if (!file.isFolder && !file.isVaulted && !file.isUploading) ({ intents.onCopyDownloadLink(file) }) else null,
+        remoteDownload = if (!file.isFolder && !file.isVaulted && !file.isUploading && !file.isImportPreview) {
+            ({ intents.onRemoteDownload(listOf(file)) })
+        } else null,
     )
     return reveal + removeRecord + fileActions(file, commands, handlers)
 }

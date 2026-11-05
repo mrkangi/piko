@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
@@ -165,6 +166,7 @@ fun SettingsScreen(
     val isClipAutoExtendEnabled by sessionManager.clipAutoExtendFlow.collectAsStateWithLifecycle(initialValue = true)
     val isSyncPlayHistoryEnabled by sessionManager.syncPlayHistoryFlow.collectAsStateWithLifecycle(initialValue = true)
     val isSettingsSyncEnabled by sessionManager.settingsSyncFlow.collectAsStateWithLifecycle(initialValue = true)
+    val isRemoteDownloadEnabled by sessionManager.remoteDownloadEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val settingsSync = services.settingsSync
     val syncStatus by settingsSync.status.collectAsStateWithLifecycle()
     val lastSynced by settingsSync.lastSynced.collectAsStateWithLifecycle()
@@ -562,6 +564,19 @@ fun SettingsScreen(
                                 supporting = tr("多连接并发传输，提升播放与下载速度", "Use multiple connections for faster streaming and downloads", "複数接続で再生とダウンロードを高速化", "여러 연결로 재생 및 다운로드 속도 향상", "多連線並行傳輸，提升播放與下載速度"),
                                 checked = isConcurrentAccelerationEnabled,
                                 onCheckedChange = { scope.launch { sessionManager.setConcurrentAccelerationEnabled(it) } },
+                            )
+                            SettingsSwitchRow(
+                                icon = Icons.Outlined.DevicesOther,
+                                title = tr("远程下载", "Remote downloads", "リモートダウンロード", "원격 다운로드", "遠端下載"),
+                                supporting = tr(
+                                    "允许同一 PikPak 账号的其他设备向本机发送下载任务",
+                                    "Allow other devices on this PikPak account to send downloads here",
+                                    "同じ PikPak アカウントの他の端末からこの端末へダウンロードを送信できるようにします",
+                                    "같은 PikPak 계정의 다른 기기에서 이 기기로 다운로드를 보낼 수 있게 합니다",
+                                    "允許同一 PikPak 帳號的其他裝置向本機傳送下載工作",
+                                ),
+                                checked = isRemoteDownloadEnabled,
+                                onCheckedChange = { scope.launch { sessionManager.setRemoteDownloadEnabled(it) } },
                             )
                             if (backgroundTransferAccess != null) {
                                 SettingsNavigationRow(

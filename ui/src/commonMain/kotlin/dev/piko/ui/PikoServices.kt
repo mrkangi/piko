@@ -24,6 +24,7 @@ import dev.piko.shared.data.PikoClientManager
 import dev.piko.shared.data.PreviewTempFolder
 import dev.piko.shared.data.TaskRepository
 import dev.piko.shared.download.PikoDownloadCoordinator
+import dev.piko.shared.download.RemoteDownloadCoordinator
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.state.ArchiveBrowser
 import dev.piko.shared.state.ArchiveExtractSession
@@ -71,6 +72,8 @@ class PikoServices(
     val metaTube: MetaTubeService? = null,
     localFileAccess: (((String) -> Unit) -> dev.piko.shared.data.LocalFileAccess)? = null,
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
+    deviceName: String = "Piko",
+    platformName: String = "unknown",
 ) {
     val memoryGovernor = dev.piko.shared.memory.PikoMemoryGovernor.Shared
 
@@ -95,6 +98,15 @@ class PikoServices(
         mediaRepository.localMounts = it.localMounts
         mediaRepository.metadataSink = it.metadataSink
     }
+    val remoteDownloads: RemoteDownloadCoordinator = RemoteDownloadCoordinator(
+        clients = clientManager,
+        driveRepo = driveRepository,
+        executor = downloadManager,
+        preferences = preferences,
+        deviceName = deviceName,
+        platformName = platformName,
+        scope = backgroundScope,
+    ).also { it.start() }
     internal val presentationStores = dev.piko.ui.workbench.AccountPresentationStores()
     val fileExecutionScopes = dev.piko.shared.state.AccountExecutionScopes(
         driveRepository, CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Main.immediate),
@@ -174,6 +186,7 @@ class PikoServices(
             launch { sourceLedgerSync.syncNow() }
             launch { archivePasswordSync?.syncNow() }
             launch { metaTubeSync?.syncNow() }
+            launch { remoteDownloads.refresh() }
         }
     }
 
@@ -187,6 +200,7 @@ class PikoServices(
                 pinnedTabSync.syncNow()
                 settingsSync.syncNow()
                 metaTubeSync?.syncNow()
+                remoteDownloads.refresh()
             }
         }
     }

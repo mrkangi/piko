@@ -281,6 +281,25 @@ class DriveSettingsStore(
         if (stale.isNotEmpty()) driveRepo.delete(stale.map { it.id }).logFailure(TAG, "删除旧的 $filePrefix 文件失败（${stale.size} 个）")
     }
 
+    /**
+     * 读取同一前缀下的全部完整文件，按文件名返回。给远程设备账本这类「每台设备一份」的
+     * 多文件同步用；普通的单文件同步仍走 [read]。
+     */
+    suspend fun readAll(account: String, prefix: String = filePrefix): List<Pair<String, String>> {
+        val folder = folderOf(account)
+        val files = driveRepo.listAllFiles(folder).getOrThrow()
+            .filter { file ->
+                !file.isFolder &&
+                    file.phase == TaskPhase.COMPLETE &&
+                    file.name.startsWith(prefix) &&
+                    file.name.endsWith(FILE_SUFFIX)
+            }
+        requireCurrent(account)
+        return files.map { file ->
+            file.name to driveRepo.readBytes(file.id).getOrThrow().decodeToString()
+        }
+    }
+
     // 记着的文件夹可能已被删掉或移走：列不出来就忘掉它，重新找一次。找与建在全部实例共用的锁里：
     // 设置与归档树两份同步在登录后同时开始，各自没找到就各建一个 .piko
     private suspend fun folderOf(account: String): String = folderLock.withLock {

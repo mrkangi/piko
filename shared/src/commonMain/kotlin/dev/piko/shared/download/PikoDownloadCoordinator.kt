@@ -72,9 +72,9 @@ class PikoDownloadCoordinator(
     /** 片段抽取经它开本机代理会话读源文件。缺省时退回任务里存下的直链。 */
     private val mediaRepository: PikoMediaRepository? = null,
     private val cacheStore: PikoCacheStore? = null,
-) {
+) : RemoteDownloadExecutor {
     private val _tasks = MutableStateFlow<Map<String, DownloadTask>>(emptyMap())
-    val tasks: StateFlow<Map<String, DownloadTask>> = _tasks.asStateFlow()
+    override val tasks: StateFlow<Map<String, DownloadTask>> = _tasks.asStateFlow()
 
     // 视图在主线程启停任务，任务协程在 IO 线程上结束时自己摘除，两边会同时改这张表。
     // 用 StateFlow.update 的 CAS 代替普通 Map，commonMain 里没有 ConcurrentHashMap。
@@ -336,7 +336,7 @@ class PikoDownloadCoordinator(
 
     private fun localNameOf(file: FileStat): String = localFileNameOf(file)
 
-    suspend fun findCompletedLocalPath(file: FileStat): String? = withContext(Dispatchers.IO) {
+    override suspend fun findCompletedLocalPath(file: FileStat): String? = withContext(Dispatchers.IO) {
         restoreCompleted.await()
         if (file.sizeBytes <= 0L) return@withContext null
         // 随文件夹下载下来的落在子文件夹里，路径只有任务表知道；任务表是持久化的，重启后照样查得到
@@ -349,6 +349,21 @@ class PikoDownloadCoordinator(
     }
 
     fun enqueue(file: FileStat) = enqueueFiles(listOf(file))
+
+    override fun enqueueRemote(file: FileStat, request: RemoteDownloadRequest, onQueued: (List<String>) -> Unit) {
+        enqueueFiles(
+            files = listOf(file),
+            leasedSource = false,
+            maxHeight = request.qualityCap,
+            remoteRequestId = request.requestId,
+            originDeviceId = request.sourceDeviceId,
+            onQueued = onQueued,
+        )
+    }
+
+    override fun cancelRemote(taskId: String) {
+        cancelDownload(taskId)
+    }
 
     /**
      * 多选文件一次入队，共用全局并发上限；重复文件复用已有任务。视频按画质上限 [maxHeight] 挑档（0 是原画，
@@ -376,7 +391,15 @@ class PikoDownloadCoordinator(
     }
 
     /** [chosen] 为 null 时按上限 [maxHeight] 挑档，它也为 null 时取设置里的下载画质。 */
-    private fun enqueueFiles(files: List<FileStat>, leasedSource: Boolean, chosen: DownloadQuality? = null, maxHeight: Int? = null) {
+    private fun enqueueFiles(
+        files: List<FileStat>,
+        leasedSource: Boolean,
+        chosen: DownloadQuality? = null,
+        maxHeight: Int? = null,
+        remoteRequestId: String = "",
+        originDeviceId: String = "",
+        onQueued: ((List<String>) -> Unit)? = null,
+    ) {
         val account = currentAccount()
         val accepted = files.filter { !it.isFolder && !it.isUploading }.distinctBy { it.id }
         if (accepted.isEmpty()) return
@@ -391,9 +414,13 @@ class PikoDownloadCoordinator(
                 val added = accepted.map { file ->
                     val existing = existingTask(file, account, chosen)
                     if (existing != null) {
-                        existing.copy(status = if (existing.status == DownloadStatus.PAUSED || existing.status == DownloadStatus.FAILED) DownloadStatus.PENDING else existing.status)
+                        existing.copy(
+                            status = if (existing.status == DownloadStatus.PAUSED || existing.status == DownloadStatus.FAILED) DownloadStatus.PENDING else existing.status,
+                            remoteRequestId = remoteRequestId.ifBlank { existing.remoteRequestId },
+                            originDeviceId = originDeviceId.ifBlank { existing.originDeviceId },
+                        )
                     } else if (chosen?.name != null) {
-                        transcodeTask(file, chosen, account, now, taken)
+                        transcodeTask(file, chosen, account, now, taken, remoteRequestId, originDeviceId)
                     } else {
                         val wanted = localNameOf(file)
                         val matches = wanted.lowercase() !in taken && file.sizeBytes > 0L && storage.exists(wanted) && storage.existingLength(wanted) == file.sizeBytes
@@ -409,10 +436,13 @@ class PikoDownloadCoordinator(
                             fullFileSize = file.sizeBytes, thumbnailLink = file.thumbnailLink, parentId = file.parentId,
                             createdAtMs = now, account = account, batch = batch, leasedSource = leasedSource,
                             qualityCap = if (complete || leasedSource) 0 else qualityCapFor(file, name, cap),
+                            remoteRequestId = remoteRequestId,
+                            originDeviceId = originDeviceId,
                         )
                     }
                 }
                 _tasks.update { current -> current + added.filter { jobs.value[it.taskId]?.isActive != true }.associateBy { it.taskId } }
+                onQueued?.invoke(added.map { it.taskId })
                 PikoLog.i(TAG, "入队 ${accepted.size} 个文件${if (leasedSource) "（解析内容，借出取流）" else ""}：" +
                     "复用已有任务 $reused 个，本机已完整 ${added.count { it.status == DownloadStatus.COMPLETED }} 个，共 ${accepted.sumOf { it.sizeBytes }} 字节" +
                     (chosen?.let { "，指定画质 ${it.name ?: ORIGINAL_QUALITY}" } ?: cap.takeIf { it > 0 }?.let { "，画质上限 ${it}P" } ?: ""))
@@ -422,7 +452,15 @@ class PikoDownloadCoordinator(
     }
 
     /** 指定转码档的任务。文件名带上档位，与原画的下载分开；大小没探到时开始下载前再探。 */
-    private suspend fun transcodeTask(file: FileStat, quality: DownloadQuality, account: String, now: Long, taken: MutableSet<String>): DownloadTask {
+    private suspend fun transcodeTask(
+        file: FileStat,
+        quality: DownloadQuality,
+        account: String,
+        now: Long,
+        taken: MutableSet<String>,
+        remoteRequestId: String = "",
+        originDeviceId: String = "",
+    ): DownloadTask {
         val label = quality.name ?: error("原画不是转码档")
         val wanted = transcodeFileName(localNameOf(file), label)
         val size = quality.sizeBytes ?: 0L
@@ -436,6 +474,7 @@ class PikoDownloadCoordinator(
             destinationPath = if (complete) storage.locate(name) ?: name else name, fullFileSize = file.sizeBytes,
             thumbnailLink = file.thumbnailLink, parentId = file.parentId, createdAtMs = now, account = account,
             quality = label, mediaId = quality.mediaId, endMs = quality.durationMs,
+            remoteRequestId = remoteRequestId, originDeviceId = originDeviceId,
         )
     }
 

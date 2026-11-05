@@ -102,6 +102,17 @@ class MemoryPreferences : PikoUserPreferences {
     override suspend fun saveDownloadTasks(serialized: String) {
         downloadTasks = serialized
     }
+    private val remoteEnabled = MutableStateFlow(false)
+    override val remoteDownloadEnabledFlow: Flow<Boolean> = remoteEnabled
+    override suspend fun setRemoteDownloadEnabled(enabled: Boolean) { remoteEnabled.value = enabled }
+    private var remoteDeviceId: String = ""
+    private var remoteDeviceName: String = ""
+    override suspend fun loadOrCreateRemoteDeviceId(): String {
+        if (remoteDeviceId.isBlank()) remoteDeviceId = dev.piko.shared.download.newRemoteDeviceId()
+        return remoteDeviceId
+    }
+    override suspend fun loadRemoteDeviceName(): String = remoteDeviceName
+    override suspend fun saveRemoteDeviceName(name: String) { remoteDeviceName = name }
     @Volatile var uploadTasks: String = ""
     override suspend fun loadUploadTasks(): String = uploadTasks
     override suspend fun saveUploadTasks(serialized: String) {

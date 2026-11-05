@@ -62,6 +62,10 @@ data class DownloadTask(
     val qualityCap: Int = 0,
     /** 转码档已经下完、正在本机转封装，进度在 [progressFraction]。 */
     val converting: Boolean = false,
+    /** 远程下载请求 ID。非空表示这条任务是其他设备发来的。 */
+    val remoteRequestId: String = "",
+    /** 发起远程下载的设备。为空表示本机任务或旧版本存下的任务。 */
+    val originDeviceId: String = "",
 ) {
     val progress: Float
         get() = progressFraction?.coerceIn(0f, 1f)

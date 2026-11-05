@@ -163,6 +163,8 @@ internal class FileActionHandlers(
     val putOnClipboard: ((cut: Boolean) -> Unit)?,
     val downloadAtQuality: () -> Unit,
     val copyDownloadLink: (() -> Unit)? = null,
+    /** 把这一项发送到同一账号的另一台设备；目标端负责实际下载。 */
+    val remoteDownload: (() -> Unit)? = null,
 )
 
 /**
@@ -186,6 +188,7 @@ internal fun fileActions(file: FileStat, commands: ItemCommands, on: FileActionH
     )
     if (commands.extract) add(DriveActions.extract(on.extract))
     if (commands.downloadAtQuality) add(DriveActions.downloadAtQuality(on.prepareQualities.takeIf { video }, on.downloadAtQuality))
+    if (commands.download && !file.isFolder) on.remoteDownload?.let { add(DriveActions.downloadToDevice(it)) }
     if (video) add(DriveActions.downloadSegment(on.downloadSegment, on.prepareQualities))
     if (!file.isFolder && commands.download) on.copyDownloadLink?.let { add(DriveActions.copyDownloadLink(it)) }
     if (video) on.openInExternalPlayer?.let { add(DriveActions.openInExternalPlayer(it)) }

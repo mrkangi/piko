@@ -8,6 +8,7 @@ import dev.piko.data.auth.PlayerGestureDefaults
 import dev.piko.data.auth.SidePanelPrefs
 import dev.piko.data.auth.SnailMode
 import dev.piko.shared.auth.SecretVault
+import dev.piko.shared.download.newRemoteDeviceId
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.net.ProxySetting
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +87,7 @@ class DesktopPikoPreferences(
     )
     private val acceleration = MutableStateFlow(settings.get(KEY_ACCELERATION, "true").toBoolean())
     private val connections = MutableStateFlow(settings.get(KEY_CONNECTIONS, "8").toIntOrNull() ?: 8)
+    private val remoteDownloadEnabled = MutableStateFlow(settings.get(KEY_REMOTE_DOWNLOAD_ENABLED, "false").toBoolean())
     private val recentMoveTargets = MutableStateFlow(settings.get(KEY_RECENT_MOVE_TARGETS))
     private val pinnedFolders = MutableStateFlow(settings.get(KEY_PINNED_FOLDERS))
     private val foldersFirst = MutableStateFlow(settings.get(KEY_FOLDERS_FIRST, "true").toBoolean())
@@ -338,6 +340,26 @@ class DesktopPikoPreferences(
         settings.set(KEY_DOWNLOAD_TASKS, serialized)
     }
 
+    override val remoteDownloadEnabledFlow: Flow<Boolean> = remoteDownloadEnabled.asStateFlow()
+
+    override suspend fun setRemoteDownloadEnabled(enabled: Boolean) {
+        settings.set(KEY_REMOTE_DOWNLOAD_ENABLED, enabled.toString())
+        remoteDownloadEnabled.value = enabled
+    }
+
+    override suspend fun loadOrCreateRemoteDeviceId(): String {
+        settings.get(KEY_REMOTE_DEVICE_ID).takeIf { it.isNotBlank() }?.let { return it }
+        val created = newRemoteDeviceId()
+        settings.set(KEY_REMOTE_DEVICE_ID, created)
+        return created
+    }
+
+    override suspend fun loadRemoteDeviceName(): String = settings.get(KEY_REMOTE_DEVICE_NAME)
+
+    override suspend fun saveRemoteDeviceName(name: String) {
+        settings.set(KEY_REMOTE_DEVICE_NAME, name)
+    }
+
     override suspend fun loadUploadTasks(): String = settings.get(KEY_UPLOAD_TASKS)
 
     override suspend fun saveUploadTasks(serialized: String) {
@@ -468,6 +490,9 @@ class DesktopPikoPreferences(
 
         const val MAX_PLAYBACK_ENTRIES = 500
         const val KEY_DOWNLOAD_TASKS = "download.tasks"
+        const val KEY_REMOTE_DOWNLOAD_ENABLED = "download.remote.enabled"
+        const val KEY_REMOTE_DEVICE_ID = "download.remote.deviceId"
+        const val KEY_REMOTE_DEVICE_NAME = "download.remote.deviceName"
         const val KEY_OFFLINE_PACKS = "download.offlinePacks"
         const val KEY_UPLOAD_TASKS = "upload.tasks"
         /** 1.1.0 全机一份明文存解压密码的位置，只在迁移时读。之后按账号存在 DesktopSessionStore。 */

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
@@ -68,6 +69,14 @@ internal object DriveActions {
         group = ActionGroup.Open,
         onPrepare = onPrepare,
         shortLabel = tr("指定画质", "Choose quality", "画質を指定", "화질 선택", "指定畫質"),
+    )
+
+    fun downloadToDevice(onClick: () -> Unit) = SheetAction(
+        Icons.Outlined.DevicesOther,
+        tr("下载到设备…", "Download to device…", "端末にダウンロード…", "기기로 다운로드…", "下載至裝置…"),
+        onClick,
+        group = ActionGroup.Open,
+        shortLabel = tr("远程下载", "Remote", "リモート", "원격", "遠端"),
     )
 
     fun copyDownloadLink(onClick: () -> Unit) = SheetAction(

@@ -91,6 +91,7 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.LocalShowExtensions
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PanelAnchor
+import dev.piko.ui.components.RemoteDownloadDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.pageFocusTarget
 import dev.piko.ui.components.previewImageCoverUrl
@@ -715,6 +716,7 @@ private fun DriveScreenContent(
     var keyboardFocusTarget by remember { mutableStateOf<String?>(null) }
     var searchFocusRequests by remember { mutableIntStateOf(0) }
     var addressEditRequests by remember { mutableIntStateOf(0) }
+    var remoteDownloadTargets by remember { mutableStateOf<List<FileStat>?>(null) }
 
     fun goHome() = navigation.updateFolderStack(listOf(PikoDriveRepository.ROOT_BREADCRUMB))
     fun backInBrowser(): Boolean {
@@ -905,6 +907,7 @@ private fun DriveScreenContent(
         fullyVaultedFolders = snapshot.fullyVaultedFolders,
         pinnedFolders = snapshot.pinnedFolders,
         onDownload = events.onRequestDownload,
+        onRemoteDownload = { targets -> remoteDownloadTargets = targets.filterNot { it.isFolder || it.isUploading } },
         onExtractArchives = events.onExtractArchives,
         onExtractFromArchive = events.onExtractFromArchive,
         onShare = events.onRequestShare,
@@ -949,6 +952,9 @@ private fun DriveScreenContent(
         onRevealLocalInFileManager = events.onRevealLocalInFileManager,
         onUnmountLocal = events.onUnmountLocalFolder,
     )
+    remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
+        RemoteDownloadDialog(files = targets, onDismiss = { remoteDownloadTargets = null })
+    }
     val latestIntents by rememberUpdatedState(actionIntents)
     val latestEvents by rememberUpdatedState(events)
     val latestSnapshot by rememberUpdatedState(snapshot)

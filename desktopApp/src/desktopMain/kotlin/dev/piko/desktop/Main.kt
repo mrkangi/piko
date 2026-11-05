@@ -269,6 +269,7 @@ fun main(args: Array<String>) {
             .collectAsState(initial = services.hasBackgroundWork())
         val keepSessionAlive by remember(services) { services.desktopSessionChanges() }
             .collectAsState(initial = services.hasBackgroundWork() || services.hasDesktopResumeContext())
+        val remoteReceiverEnabled by services.preferences.remoteDownloadEnabledFlow.collectAsState(initial = false)
         // 执行结束但仍有待输入、报告或未知结果时保留托盘，避免自动退出丢失恢复入口。
         var isInBackground by remember { mutableStateOf(false) }
         var manualTraySession by remember { mutableStateOf(false) }
@@ -295,8 +296,10 @@ fun main(args: Array<String>) {
         LaunchedEffect(isInBackground) {
             if (!isInBackground) manualTraySession = false
         }
-        LaunchedEffect(isInBackground, manualTraySession, keepSessionAlive, closeToTray, hasDetachedWindows) {
-            if (isInBackground && !manualTraySession && !(closeToTray && isTraySupported) && !keepSessionAlive && !hasDetachedWindows && !services.hasBackgroundWork() && !services.hasDesktopResumeContext()) quitNow()
+        LaunchedEffect(isInBackground, manualTraySession, keepSessionAlive, closeToTray, hasDetachedWindows, remoteReceiverEnabled) {
+            if (isInBackground && !manualTraySession && !(closeToTray && isTraySupported) && !keepSessionAlive && !hasDetachedWindows &&
+                !services.hasBackgroundWork() && !services.hasDesktopResumeContext() && !remoteReceiverEnabled
+            ) quitNow()
         }
         // 更新脚本等本进程退出后才替换文件。下载会被中断，更新对话框已先征得用户同意
         LaunchedEffect(Unit) {
@@ -371,7 +374,7 @@ fun main(args: Array<String>) {
         }
 
         val closeMainWindow = {
-            if (services.hasBackgroundWork() || services.hasDesktopResumeContext() || hasDetachedWindows || (closeToTray && isTraySupported)) {
+            if (services.hasBackgroundWork() || services.hasDesktopResumeContext() || hasDetachedWindows || remoteReceiverEnabled || (closeToTray && isTraySupported)) {
                 hideToTray(closeToTray && isTraySupported)
             } else if (isTraySupported && platform.closeToTray != null && settings.get(CLOSE_BEHAVIOR_ASKED_KEY) != "true") {
                 askCloseBehavior = true
@@ -688,6 +691,8 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
                 }
             }
         },
+            deviceName = System.getProperty("os.name").orEmpty() + " · Piko",
+            platformName = System.getProperty("os.name").orEmpty(),
     )
 }
 

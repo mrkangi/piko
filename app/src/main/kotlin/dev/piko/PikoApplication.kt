@@ -13,6 +13,7 @@ import dev.piko.data.auth.SessionManager
 import dev.piko.data.repository.DriveRepository
 import dev.piko.download.AndroidPikoDownloadStorage
 import dev.piko.download.AndroidPikoSegmentDownloader
+import dev.piko.download.RemoteDownloadService
 import dev.piko.download.WorkResultNotifier
 import dev.piko.platform.AndroidPikoPlatform
 import dev.piko.platform.followSystemAnimatorScale
@@ -50,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -183,7 +185,14 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     }
                 }
             },
+            deviceName = "${Build.MODEL} · Android",
+            platformName = "android",
         )
+        appScope.launch {
+            sessionManager.remoteDownloadEnabledFlow.distinctUntilChanged().collect { enabled ->
+                if (enabled) RemoteDownloadService.start(this@PikoApplication) else RemoteDownloadService.stop(this@PikoApplication)
+            }
+        }
         appScope.launch {
             PikoMemoryGovernor.Shared.policy.collect(::applyMemoryPolicy)
         }

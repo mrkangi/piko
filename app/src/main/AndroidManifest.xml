@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 后台持续下载与上传：引导用户将 Piko 加入系统电池优化白名单，避免定制系统在切后台几分钟后冻结网络连接 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 应用内更新：经 PackageInstaller 安装从 GitHub Releases 下载的新版本 -->
@@ -127,6 +128,15 @@
             android:name=".download.PikoDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".download.RemoteDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="remote_download_receiver" />
+        </service>
 
         <receiver
             android:name=".update.UpdateInstallReceiver"

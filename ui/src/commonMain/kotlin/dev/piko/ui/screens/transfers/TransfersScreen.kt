@@ -101,6 +101,7 @@ import dev.piko.ui.components.PikoEmptyState
 import dev.piko.ui.components.PikoItemGrid
 import dev.piko.ui.components.PikoScaffold
 import dev.piko.ui.components.RefreshBox
+import dev.piko.ui.components.RemoteDownloadDialog
 import dev.piko.ui.components.fullLineItem
 import dev.piko.ui.components.itemPanelAnchorArea
 import dev.piko.ui.components.marqueeSelection
@@ -217,6 +218,8 @@ fun TransfersScreen(
 
     var confirmingDeleteKeys by remember { mutableStateOf<Set<String>?>(null) }
     var confirmingClearCompleted by remember { mutableStateOf(false) }
+    var showRemoteDownloads by remember { mutableStateOf(false) }
+    val remoteDownloads by services.remoteDownloads.remoteDownloads.collectAsStateWithLifecycle()
 
     val density = LocalDensity.current
     var taskContentWidth by remember { mutableIntStateOf(0) }
@@ -375,6 +378,7 @@ fun TransfersScreen(
         pauseCount = bulkSelected.count(state::isPausable),
         resumeCount = bulkSelected.count(state::isResumable),
         onRequestClearCompleted = { confirmingClearCompleted = true },
+        onOpenRemoteDownloads = if (remoteDownloads.any { it.outgoing }) ({ showRemoteDownloads = true }) else null,
     )
 
     val inlineIslandFilter = with(density) { taskContentWidth.toDp() } >= 820.dp
@@ -481,6 +485,10 @@ fun TransfersScreen(
                 }
             }
         }
+    }
+
+    if (showRemoteDownloads) {
+        RemoteDownloadDialog(files = emptyList(), onDismiss = { showRemoteDownloads = false })
     }
 
     if (confirmingClearCompleted) {
