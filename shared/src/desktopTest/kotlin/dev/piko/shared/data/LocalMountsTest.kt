@@ -62,7 +62,7 @@ class LocalMountsTest {
 
     @Test fun historyDropsWholeInvalidFramesAndCollapsesAdjacentDuplicates() = smoke { scope ->
         val mounts = LocalMounts(preferences(), { "account-a" }, {}, scope)
-        val mount = mounts.mount("host", "/local", "Local")
+        val mount = mounts.mount("/local", "Local")
         val cloud = listOf(PikoDriveRepository.ROOT_BREADCRUMB, PikoPathBreadcrumb("host", "Cloud"))
         val other = listOf(PikoDriveRepository.ROOT_BREADCRUMB, PikoPathBreadcrumb("other", "Other"))
         val local = cloud + PikoPathBreadcrumb(mount.location.id, "Local")
@@ -86,7 +86,7 @@ class LocalMountsTest {
         val host = server.addFolder("host")
         val other = server.addFolder("other")
         val repo = PikoDriveRepository(server.provider(), preferences())
-        val mount = repo.localMounts.mount(host.id, "/local", "Local")
+        val mount = repo.localMounts.mount("/local", "Local")
         val store = MemoryCacheStore()
         val workspace = DriveWorkspace(repo, store, scope)
         val cloud = listOf(PikoDriveRepository.ROOT_BREADCRUMB, PikoPathBreadcrumb(host.id, "host"))
@@ -131,7 +131,7 @@ class LocalMountsTest {
 
     @Test fun immediateBackAfterUnmountCannotRaceTheMountCollector() = smoke { scope ->
         val repo = PikoDriveRepository(FakePikPakServer().provider(), preferences())
-        val mount = repo.localMounts.mount("", "/local", "Local")
+        val mount = repo.localMounts.mount("/local", "Local")
         val workspace = DriveWorkspace(repo, backgroundScope = scope)
         val root = listOf(PikoDriveRepository.ROOT_BREADCRUMB)
         workspace.updateFolderStack(root + PikoPathBreadcrumb(mount.location.id, "Local"))
@@ -149,7 +149,7 @@ class LocalMountsTest {
     @Test fun initialRestorePrunesUnmountedTabsAndAsynchronouslyLoadedRecentFolders() = smoke { scope ->
         val server = FakePikPakServer()
         val repo = PikoDriveRepository(server.provider(), preferences())
-        val mount = repo.localMounts.mount("", "/local", "Local")
+        val mount = repo.localMounts.mount("/local", "Local")
         repo.localMounts.unmount(mount.location.id)
         val accountKey = assertNotNull(repo.currentAccount).replace(Regex("[^A-Za-z0-9._@-]"), "_")
         val store = MemoryCacheStore()
@@ -184,10 +184,13 @@ class LocalMountsTest {
         var owner = "account-a"
         val refreshed = mutableListOf<Set<String>>()
         val mounts = LocalMounts(prefs, { owner }, { refreshed += it }, scope)
-        val entry = mounts.mount("host", "/private/root", "Local")
+        val entry = mounts.mount("/private/root", "Local")
         val nested = entry.location.child("season", true)
         val stack = listOf(PikoDriveRepository.ROOT_BREADCRUMB, PikoPathBreadcrumb("host", "Cloud"), PikoPathBreadcrumb(entry.location.id, "Local"), PikoPathBreadcrumb(nested.id, "season"))
-        assertEquals(stack, mounts.restoredStack(stack))
+        assertEquals(
+            listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()) + stack.drop(2),
+            mounts.restoredStack(stack),
+        )
         mounts.pin(entry.location.id, true)
         val reloaded = LocalMounts(prefs, { owner }, {}, scope)
         assertTrue(reloaded.all().single().pinned)
@@ -197,18 +200,18 @@ class LocalMountsTest {
         assertTrue(mounts.all().isEmpty())
         owner = "account-a"
         assertTrue(mounts.isMountedCached(nested.id))
-        assertEquals(listOf(entry.location.id), mounts.roots("host").map { it.id })
+        assertEquals(listOf(entry.location.id), mounts.roots().map { it.id })
         mounts.unmount(entry.location.id)
         assertTrue(mounts.all().isEmpty())
         assertEquals(stack.take(2), mounts.restoredStack(stack))
-        assertTrue(refreshed.any { "host" in it })
+        assertTrue(refreshed.any { DeviceLocation.SELF_ID in it })
     }
 
     @Test fun browsableMergeTraversalAndUnavailableRootsStayVisibleWithoutCloudLocalIds() = smoke { _ ->
         val server = FakePikPakServer()
         val host = server.addFolder("host")
         val repo = PikoDriveRepository(server.provider(), preferences())
-        val mount = repo.localMounts.mount(host.id, "/local", "Local")
+        val mount = repo.localMounts.mount("/local", "Local")
         var unavailable = false
         val video = FileStat(id = mount.location.child("movie.mkv", false).id, name = "movie.mkv", parentId = mount.location.id, params = mapOf("duration" to "120.5"))
         repo.localMounts.access = object : LocalFileAccess {
@@ -219,12 +222,12 @@ class LocalMountsTest {
             override suspend fun playbackPath(mount: LocalMount, location: LocalLocation) = "/local/movie.mkv"
             override suspend fun probe(mount: LocalMount, location: LocalLocation) = video
         }
-        val listing = repo.listBrowsable(host.id, PikoFileSortOrder.NAME_ASC).getOrThrow()
+        val listing = repo.listBrowsable(DeviceLocation.SELF_ID, PikoFileSortOrder.NAME_ASC).getOrThrow()
         assertEquals(listOf(mount.location.id), listing.map { it.id })
         val before = server.count("GET /drive/v1/files")
         assertEquals(video, repo.listBrowsable(mount.location.id, PikoFileSortOrder.NAME_ASC).getOrThrow().single())
         assertEquals(before, server.count("GET /drive/v1/files"))
-        val discovery = VideoDiscovery(repo, assertNotNull(repo.currentAccount), host.id)
+        val discovery = VideoDiscovery(repo, assertNotNull(repo.currentAccount), DeviceLocation.SELF_ID)
         assertEquals(mount.location.id, discovery.next()?.files?.single()?.id)
         assertEquals(video.id, discovery.next()?.candidates?.single()?.id)
         val media = PikoMediaRepository(server.provider()).apply { localMounts = repo.localMounts }
@@ -241,27 +244,54 @@ class LocalMountsTest {
         media.reportPlay(video.id, 20_000, 120_500)
         assertNull(media.cloudPlaybackPosition(video.id))
         val index = FolderIndex()
-        index.listed(host.id, listOf(mount.toFileStat()))
-        index.seed(mapOf(mount.location.id to "Local"), mapOf(mount.location.id to host.id))
+        index.listed(DeviceLocation.SELF_ID, listOf(mount.toFileStat()))
+        index.seed(mapOf(mount.location.id to "Local"), mapOf(mount.location.id to DeviceLocation.SELF_ID))
         assertTrue(index.flow.value.nodes.isEmpty())
         assertTrue(repo.getFileDetail(video.id).isFailure)
         assertTrue(repo.rename(video.id, "new.mkv").isFailure)
         unavailable = true
         assertTrue(repo.listBrowsable(mount.location.id, PikoFileSortOrder.NAME_ASC).isFailure)
-        assertTrue(repo.listBrowsable(host.id, PikoFileSortOrder.NAME_ASC).getOrThrow().any { it.id == mount.location.id })
+        assertTrue(repo.listBrowsable(host.id, PikoFileSortOrder.NAME_ASC).getOrThrow().none { it.id == mount.location.id })
+    }
+
+    @Test fun deviceNamespaceListsSelfAndMountsAndResolvesPath() = smoke { _ ->
+        val server = FakePikPakServer()
+        val repo = PikoDriveRepository(server.provider(), preferences())
+        val mount = repo.localMounts.mount("/local", "Local")
+
+        assertTrue(repo.listBrowsable("", PikoFileSortOrder.NAME_ASC).getOrThrow().any { it.id == DeviceLocation.ROOT_ID })
+        assertEquals(
+            listOf(DeviceLocation.SELF_ID),
+            repo.listBrowsable(DeviceLocation.ROOT_ID, PikoFileSortOrder.NAME_ASC).getOrThrow().map { it.id },
+        )
+        assertEquals(
+            listOf(mount.location.id),
+            repo.listBrowsable(DeviceLocation.SELF_ID, PikoFileSortOrder.NAME_ASC).getOrThrow().map { it.id },
+        )
+        assertEquals(
+            listOf(
+                PikoDriveRepository.ROOT_BREADCRUMB,
+                DeviceLocation.rootCrumb(),
+                DeviceLocation.selfCrumb(),
+                PikoPathBreadcrumb(mount.location.id, "Local"),
+            ),
+            repo.knownLocalPath(mount.location.id),
+        )
+        assertTrue(repo.getFileDetail(DeviceLocation.ROOT_ID).isFailure)
+        assertFalse(repo.isFolderGone(DeviceLocation.SELF_ID))
     }
 
     @Test fun duplicateMountReusesExistingEntryAndFormatsDisplayPaths() = smoke { scope ->
         val prefs = preferences()
         val mounts = LocalMounts(prefs, { "account-a" }, {}, scope)
-        val first = mounts.mountOrExisting("host", "/data/media", "Media")
+        val first = mounts.mountOrExisting("/data/media", "Media")
         assertFalse(first.alreadyMounted)
-        val second = mounts.mountOrExisting("host", "/data/media", "MediaDup")
+        val second = mounts.mountOrExisting("/data/media", "MediaDup")
         assertTrue(second.alreadyMounted)
         assertEquals(first.mount.mountId, second.mount.mountId)
-        assertEquals(1, mounts.roots("host").size)
+        assertEquals(1, mounts.roots().size)
 
-        val otherFolder = mounts.mountOrExisting("other-host", "/data/media", "Media")
+        val otherFolder = mounts.mountOrExisting("/other/media", "Media")
         assertFalse(otherFolder.alreadyMounted)
         assertNotEquals(first.mount.mountId, otherFolder.mount.mountId)
 
@@ -280,7 +310,7 @@ class LocalMountsTest {
         val server = FakePikPakServer()
         val host = server.addFolder("gallery-host")
         val repo = PikoDriveRepository(server.provider(), preferences())
-        val mount = repo.localMounts.mount(host.id, "/local-gallery", "LocalGallery")
+        val mount = repo.localMounts.mount("/local-gallery", "LocalGallery")
         val localVideo = FileStat(
             id = mount.location.child("clip.mp4", false).id,
             name = "clip.mp4",
@@ -302,7 +332,7 @@ class LocalMountsTest {
 
         val gallery = GallerySession(repo, scope)
         assertTrue(gallery.includeImages)
-        gallery.open(listOf(PikoDriveRepository.ROOT_BREADCRUMB, PikoPathBreadcrumb(host.id, "gallery-host")))
+        gallery.open(listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()))
         kotlinx.coroutines.withTimeout(5_000) {
             while (!gallery.isComplete) kotlinx.coroutines.delay(20)
         }

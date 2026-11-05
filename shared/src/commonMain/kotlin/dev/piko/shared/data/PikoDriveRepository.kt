@@ -471,16 +471,24 @@ open class PikoDriveRepository(
     /** 固定到快速访问的文件夹，按固定的先后排，见 [PinnedFolders]。名字经文件夹索引换成眼下的。 */
     val pinnedFoldersFlow: Flow<List<PikoPathBreadcrumb>>
         get() = combine(pinnedFolders.flow, folderIndex.flow, localMounts.flow, accountChanges) { pins, _, mounts, _ ->
-            pins.filterNot { LocalLocation.isLocal(it.id) }.map(folderIndex::withCurrentName) +
+            pins.filterNot { VirtualLocation.isVirtual(it.id) }.map(folderIndex::withCurrentName) +
                 mounts.filter { it.account == currentAccount && it.pinned }.map { PikoPathBreadcrumb(it.location.id, it.fallbackName) }
         }
 
     fun pinFolder(folder: PikoPathBreadcrumb) {
-        if (LocalLocation.isLocal(folder.id)) backgroundScope.launch { localMounts.pin(folder.id, true) } else pinnedFolders.pin(folder)
+        when {
+            LocalLocation.isLocal(folder.id) -> backgroundScope.launch { localMounts.pin(folder.id, true) }
+            DeviceLocation.isDevice(folder.id) -> Unit
+            else -> pinnedFolders.pin(folder)
+        }
     }
 
     fun unpinFolder(folderId: String) {
-        if (LocalLocation.isLocal(folderId)) backgroundScope.launch { localMounts.pin(folderId, false) } else pinnedFolders.unpin(folderId)
+        when {
+            LocalLocation.isLocal(folderId) -> backgroundScope.launch { localMounts.pin(folderId, false) }
+            DeviceLocation.isDevice(folderId) -> Unit
+            else -> pinnedFolders.unpin(folderId)
+        }
     }
 
     /** 做过的改动，能撤销的记在这里，见 [DriveChangeJournal]。 */
@@ -523,7 +531,7 @@ open class PikoDriveRepository(
     fun applyChange(change: DriveChange) = applyChange(change, notifyChange = true)
 
     private fun applyChange(change: DriveChange, notifyChange: Boolean) {
-        if (change is DriveChange.ContentsChanged && change.folders?.all(LocalLocation::isLocal) == true) {
+        if (change is DriveChange.ContentsChanged && change.folders?.all(VirtualLocation::isVirtual) == true) {
             if (notifyChange) _folderChanges.tryEmit(change)
             return
         }
@@ -609,16 +617,15 @@ open class PikoDriveRepository(
     suspend fun locateFolder(fileId: String): Result<List<PikoPathBreadcrumb>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
             val asked = client
+            devicePathTo(fileId)?.let { return@runSuspendCatching it }
             LocalLocation.of(fileId)?.let { local ->
-                val mount = localMounts.find(fileId) ?: error("本地文件夹已取消挂载")
-                val host = if (mount.parentFolderId.isEmpty()) listOf(ROOT_BREADCRUMB) else {
-                    locateFolder(mount.parentFolderId).getOrThrow() + PikoPathBreadcrumb(mount.parentFolderId,
-                        folderIndex.node(mount.parentFolderId)?.name ?: fetchDetail(mount.parentFolderId, asked).name)
-                }
-                val localParent = local.parent ?: return@runSuspendCatching host
-                return@runSuspendCatching host + localMounts.pathTo(localParent.id).orEmpty()
+                localMounts.find(fileId) ?: error("本地文件夹已取消挂载")
+                val localParent = local.parent
+                    ?: return@runSuspendCatching devicePathTo(DeviceLocation.SELF_ID).orEmpty()
+                return@runSuspendCatching devicePathTo(DeviceLocation.SELF_ID).orEmpty() +
+                    localMounts.pathTo(localParent.id).orEmpty()
             }
-            require(!LocalLocation.isLocal(fileId)) { "本地位置无效" }
+            require(!VirtualLocation.isVirtual(fileId)) { "虚拟位置无效" }
             val vaultEntryId = VaultEntry.entryIdOf(fileId)
             if (vaultEntryId != null) {
                 val store = vault
@@ -695,12 +702,17 @@ open class PikoDriveRepository(
 
     /** 本地目录从挂载宿主的真实路径拼接，不写入云端文件夹索引。 */
     fun knownLocalPath(folderId: String): List<PikoPathBreadcrumb>? {
-        val local = LocalLocation.of(folderId) ?: return null
-        val mount = localMounts.findCached(folderId) ?: return null
-        val host = folderIndex.pathTo(mount.parentFolderId, provisional = true) ?: return null
-        return host + PikoPathBreadcrumb(mount.location.id, mount.fallbackName) + local.segments.mapIndexed { index, name ->
-            PikoPathBreadcrumb(LocalLocation(local.mountId, local.segments.take(index + 1)).id, name)
-        }
+        devicePathTo(folderId)?.let { return it }
+        LocalLocation.of(folderId) ?: return null
+        localMounts.findCached(folderId) ?: return null
+        return devicePathTo(DeviceLocation.SELF_ID).orEmpty() + localMounts.cachedPathTo(folderId).orEmpty()
+    }
+
+    /** 设备命名空间里的路径：设备根、此设备，以及以后接入的局域网主机。 */
+    private fun devicePathTo(folderId: String): List<PikoPathBreadcrumb>? = when (folderId) {
+        DeviceLocation.ROOT_ID -> listOf(ROOT_BREADCRUMB, DeviceLocation.rootCrumb())
+        DeviceLocation.SELF_ID -> listOf(ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb())
+        else -> null
     }
 
     /** 信息流存盘的目录名与上级，只补索引的空缺，不用来改正路径栈，见 FolderIndex.seed。 */
@@ -773,7 +785,7 @@ open class PikoDriveRepository(
      */
     suspend fun subfolders(folderId: String, fresh: Boolean = false): Result<List<PikoPathBreadcrumb>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
-            if (!isDriveFolderId(folderId) && !LocalLocation.isLocal(folderId)) return@runSuspendCatching emptyList()
+            if (!isDriveFolderId(folderId) && !VirtualLocation.isVirtual(folderId)) return@runSuspendCatching emptyList()
             val files = listBrowsable(folderId, PikoFileSortOrder.NAME_ASC).getOrThrow()
             files.asSequence()
                 .filter { it.isFolder && !it.trashed && !isPikoInternalFolder(it, folderId) }
@@ -954,7 +966,7 @@ open class PikoDriveRepository(
      * 先来的调用方被取消（网盘页换了目录），等着同一个结果的其余调用方不受连累。
      */
     private suspend fun fetchListing(parentId: String, asked: PikPakClient = client): List<FileStat> {
-        require(!LocalLocation.isLocal(parentId)) { "本地目录不支持云端操作" }
+        require(!VirtualLocation.isVirtual(parentId)) { "虚拟目录不支持云端操作" }
         val driveTreeIndex = synchronized(treeStateLock) {
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
             this.driveTreeIndex
@@ -1098,10 +1110,20 @@ open class PikoDriveRepository(
      * 只少了归档的那几行，不让整个目录打不开。
      */
     suspend fun listBrowsable(parentId: String, sortOrder: PikoFileSortOrder): Result<List<FileStat>> {
-        if (LocalLocation.isLocal(parentId)) return runSuspendCatching { sortFiles(localMounts.list(parentId), sortOrder, parentId) }
-        localMounts.all() // Ensure device preferences have been loaded before merging roots.
+        if (VirtualLocation.isVirtual(parentId)) {
+            return runSuspendCatching { virtualBrowsable(parentId, sortOrder) ?: emptyList() }
+        }
+        localMounts.all() // 先载入挂载表，根目录据此决定是否显示「设备」入口
         val asked = clientManager.currentClient.value ?: return Result.failure(IllegalStateException(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入")))
         return listBrowsable(parentId, sortOrder, asked, vault)
+    }
+
+    /** 设备节点与本机挂载的列表。返回 null 表示这是真实网盘目录，交给云端列表处理。 */
+    private suspend fun virtualBrowsable(parentId: String, sortOrder: PikoFileSortOrder): List<FileStat>? = when {
+        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat())
+        parentId == DeviceLocation.SELF_ID -> sortFiles(localMounts.roots(), sortOrder, parentId)
+        LocalLocation.isLocal(parentId) -> sortFiles(localMounts.list(parentId), sortOrder, parentId)
+        else -> null
     }
 
     /** 遍历在打开时固定 client 和归档仓库；换号后不能继续拿新账号列旧目录。 */
@@ -1118,7 +1140,12 @@ open class PikoDriveRepository(
         requireActiveClient: Boolean = false,
     ): suspend (String) -> Result<List<FileStat>> = reader@{ folderId ->
         if (clientManager.currentClient.value !== asked && requireActiveClient) throw CancellationException("Account changed")
-        if (LocalLocation.isLocal(folderId)) return@reader runSuspendCatching { localMounts.list(folderId) }
+        if (folderId.isEmpty()) localMounts.all()
+        if (VirtualLocation.isVirtual(folderId)) {
+            return@reader runSuspendCatching {
+                virtualBrowsable(folderId, PikoFileSortOrder.TIME_DESC) ?: emptyList()
+            }
+        }
         if (clientManager.currentClient.value === asked) {
             val state = driveTreeIndex.flow.value
             if (state.complete && folderId !in state.dirtyFolders && (folderId.isEmpty() || folderId in state.entries)) {
@@ -1193,6 +1220,10 @@ open class PikoDriveRepository(
     ): Result<List<FileStat>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
+            if (parentId.isEmpty()) localMounts.all()
+            if (VirtualLocation.isVirtual(parentId)) {
+                return@runSuspendCatching virtualBrowsable(parentId, sortOrder) ?: emptyList()
+            }
             val listing = fetchListing(parentId, asked)
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
             val entries = readAndRecordVaultEntries(parentId, listing, store, asked, logFailure = true)
@@ -1203,6 +1234,11 @@ open class PikoDriveRepository(
 
     /** [cachedFiles] 的 [listBrowsable] 版本。优先读会话目录缓存，未命中时从已就绪的本地文件树直出。 */
     fun cachedBrowsable(folderId: String, sortOrder: PikoFileSortOrder): List<FileStat>? {
+        when (folderId) {
+            DeviceLocation.ROOT_ID -> return listOf(DeviceLocation.selfStat())
+            DeviceLocation.SELF_ID -> return sortFiles(localMounts.cachedRoots(), sortOrder, folderId)
+        }
+        if (LocalLocation.isLocal(folderId)) return null
         cachedListing(folderId)?.let { listing ->
             return withVaulted(folderId, listing, vault.cached(folderId, listing).orEmpty(), sortOrder)
         }
@@ -1223,7 +1259,8 @@ open class PikoDriveRepository(
         entries: List<VaultEntry>,
         sortOrder: PikoFileSortOrder,
     ): List<FileStat> {
-        val visible = withVaultCovers(listing.filterNot { isPikoInternalFolder(it, folderId) || VaultStore.isRecoveryFile(it) }) + localMounts.cachedRoots(folderId)
+        val visible = withVaultCovers(listing.filterNot { isPikoInternalFolder(it, folderId) || VaultStore.isRecoveryFile(it) }) +
+            if (folderId.isEmpty() && localMounts.cachedRoots().isNotEmpty()) listOf(DeviceLocation.rootStat()) else emptyList()
         if (entries.isEmpty() && visible.none(VaultStore::looksLikeManifest)) return sortFiles(visible, sortOrder, folderId)
         val real = visible.filterNot(VaultStore::looksLikeManifest)
         val restoredMetadata = entries.filterNot { it.isArchived }
@@ -1784,7 +1821,10 @@ open class PikoDriveRepository(
         sortOrder: PikoFileSortOrder = PikoFileSortOrder.TIME_DESC,
     ): Result<Pair<List<FileStat>, String>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
-            if (LocalLocation.isLocal(parentId)) return@runSuspendCatching sortFiles(localMounts.list(parentId), sortOrder, parentId) to ""
+            if (parentId.isEmpty()) localMounts.all()
+            if (VirtualLocation.isVirtual(parentId)) {
+                return@runSuspendCatching (virtualBrowsable(parentId, sortOrder) ?: emptyList()) to ""
+            }
             val page = client.listFilesPaged(parentId = parentId, pageToken = pageToken, pageSize = 100)
             sortFiles(page.files, sortOrder, parentId) to page.nextPageToken
         }
@@ -1800,7 +1840,13 @@ open class PikoDriveRepository(
         parentId: String = "",
         sortOrder: PikoFileSortOrder = PikoFileSortOrder.TIME_DESC,
     ): Result<List<FileStat>> = withContext(Dispatchers.Default) {
-        runSuspendCatching { sortFiles(if (LocalLocation.isLocal(parentId)) localMounts.list(parentId) else fetchListing(parentId), sortOrder, parentId) }
+        runSuspendCatching {
+            if (parentId.isEmpty()) localMounts.all()
+            if (VirtualLocation.isVirtual(parentId)) {
+                return@runSuspendCatching virtualBrowsable(parentId, sortOrder) ?: emptyList()
+            }
+            sortFiles(fetchListing(parentId), sortOrder, parentId)
+        }
     }
 
     /**
@@ -1856,7 +1902,7 @@ open class PikoDriveRepository(
 
     /** 查详情，是文件夹就记进索引（仅当请求归属的 client 仍为当前活跃 client 时）。 */
     private suspend fun fetchDetail(fileId: String, asked: PikPakClient = client): FileDetail {
-        require(!LocalLocation.isLocal(fileId)) { "本地文件不支持云端操作" }
+        require(!VirtualLocation.isVirtual(fileId)) { "虚拟位置不支持云端操作" }
         val observer = metadataSink.capture(asked)
         return asked.getFile(fileId).also { detail ->
             observer?.observe(fileId, detail)
@@ -1872,13 +1918,15 @@ open class PikoDriveRepository(
      * 只能另查详情：彻底删除的查不到，回收站里的回 file_in_recycle_bin，也可能查到但带着 trashed。
      * 只认服务端明确的拒绝，网络失败说不准，按还在处理，免得断一下网就把人退出目录。
      */
-    suspend fun isFolderGone(folderId: String): Boolean =
-        getFileDetail(folderId).fold(onSuccess = { it.trashed }, onFailure = { it is PikPakException }).also { gone ->
+    suspend fun isFolderGone(folderId: String): Boolean {
+        if (VirtualLocation.isVirtual(folderId)) return false
+        return getFileDetail(folderId).fold(onSuccess = { it.trashed }, onFailure = { it is PikPakException }).also { gone ->
             if (gone) {
                 driveTreeIndex.applyChange(DriveChange.Trashed(listOf(folderId), null))
                 if (driveTreeIndex.isComplete) requestTreeRebuild()
             }
         }
+    }
 
     suspend fun getQuota(): Result<QuotaResponse> = withContext(Dispatchers.Default) {
         runSuspendCatching {
@@ -2049,7 +2097,7 @@ open class PikoDriveRepository(
 
     /** [fileId] 的取样 CID，读 60 KB。归档时记下，日后只读体检用，见 [VaultEntry.cid]。 */
     private fun requireCloudIds(ids: List<String>) {
-        require(ids.none(LocalLocation::isLocal)) { "本地文件夹为只读" }
+        require(ids.none(VirtualLocation::isVirtual)) { "虚拟位置为只读" }
     }
 
     suspend fun sampleCid(fileId: String): Result<String> = withContext(Dispatchers.Default) {
@@ -3338,7 +3386,7 @@ open class PikoDriveRepository(
         starred: Boolean,
         knownStats: Map<String, FileStat> = emptyMap(),
     ): Result<Unit> = withContext(Dispatchers.Default) {
-        val (vaultedIds, realIds) = ids.distinct().filterNot(LocalLocation::isLocal).partition(VaultEntry::isVaulted)
+        val (vaultedIds, realIds) = ids.distinct().filterNot(VirtualLocation::isVirtual).partition(VaultEntry::isVaulted)
         if (vaultedIds.isNotEmpty()) {
             val stats = vaultedIds.mapNotNull { resolveVaultedStat(it, knownStats) }
             setVaultStarred(stats, starred)

@@ -50,7 +50,7 @@ class DesktopLocalFileAccess(private val scope: CoroutineScope, private val chan
     }
     private fun stat(mount: LocalMount, location: LocalLocation, path: Path, attributes: BasicFileAttributes): FileStat {
         val directory = attributes.isDirectory
-        val parent = location.parent?.id ?: mount.parentFolderId
+        val parent = location.parent?.id ?: DeviceLocation.SELF_ID
         val base = FileStat(
             id = location.copy(directory = directory).id, parentId = parent, name = path.fileName.toString(),
             kind = if (directory) FileKind.FOLDER else FileKind.FILE,
@@ -81,7 +81,7 @@ class DesktopLocalFileAccess(private val scope: CoroutineScope, private val chan
                         if (generation.get() == gen) {
                             if (folderCovers.size >= 2048) folderCovers.clear()
                             folderCovers[coverKey] = cover.ifEmpty { NO_COVER }
-                            if (cover.isNotEmpty()) notifyParent = location.parent?.id ?: mount.parentFolderId
+                            if (cover.isNotEmpty()) notifyParent = location.parent?.id ?: DeviceLocation.SELF_ID
                         }
                     }
                     notifyParent?.let(changed)

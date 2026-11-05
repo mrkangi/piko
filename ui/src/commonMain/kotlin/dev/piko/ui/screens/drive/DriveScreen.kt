@@ -56,6 +56,7 @@ import dev.piko.shared.data.ScrollAnchor
 import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.data.isLocal
+import dev.piko.shared.data.isVirtual
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.download.DriveDownloadFolderSource
 import dev.piko.shared.i18n.enCount
@@ -1004,7 +1005,7 @@ private fun DriveScreenContent(
                 }
             },
             onRename = { file ->
-                if (!file.isLocal && !file.isUploading && !file.isImportPreview && state.libraryView != DriveLibrary.TRASH) {
+                if (!file.isVirtual && !file.isUploading && !file.isImportPreview && state.libraryView != DriveLibrary.TRASH) {
                     latestEvents.onRequestRename(file)
                 }
             },
@@ -1052,7 +1053,7 @@ private fun DriveScreenContent(
                     latestIntents.displayedFiles.filter { it.id in state.selectedFileIds }
                 } else {
                     listOf(file)
-                }.filterNot { it.isLocal || it.isUploading || it.isVaulted || it.isImportPreview }
+                }.filterNot { it.isVirtual || it.isUploading || it.isVaulted || it.isImportPreview }
                 if (batch.isEmpty()) null else FileDragPayload(
                     ids = batch.map { it.id },
                     parentIds = batch.mapTo(HashSet()) { it.parentId },

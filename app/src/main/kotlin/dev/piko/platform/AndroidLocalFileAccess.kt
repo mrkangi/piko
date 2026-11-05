@@ -55,7 +55,7 @@ class AndroidLocalFileAccess(private val context: Context, scope: CoroutineScope
     }
     private fun stat(mount: LocalMount, location: LocalLocation, entry: Entry, uri: Uri): FileStat {
         val folder = entry.mime == DocumentsContract.Document.MIME_TYPE_DIR
-        val base = FileStat(id = location.copy(directory = folder).id, parentId = location.parent?.id ?: mount.parentFolderId,
+        val base = FileStat(id = location.copy(directory = folder).id, parentId = location.parent?.id ?: DeviceLocation.SELF_ID,
             name = entry.name, kind = if (folder) FileKind.FOLDER else FileKind.FILE,
             size = entry.size.toString(), mimeType = entry.mime, phase = TaskPhase.COMPLETE,
             fileExtension = entry.name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" },

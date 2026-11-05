@@ -23,7 +23,7 @@ interface DownloadFolderSource {
 class DriveDownloadFolderSource(private val driveRepo: PikoDriveRepository) : DownloadFolderSource {
     override suspend fun list(folderId: String): List<FileStat> =
         driveRepo.listBrowsable(folderId, PikoFileSortOrder.NAME_ASC).getOrThrow()
-            .filterNot { dev.piko.shared.data.LocalLocation.isLocal(it.id) }
+            .filterNot { dev.piko.shared.data.VirtualLocation.isVirtual(it.id) }
 
     // 会员的 downloadDaily 上限是 0，见 TransferAllowances
     override suspend fun remainingDailyDownload(): Long? =
@@ -65,7 +65,7 @@ internal suspend fun planFolderDownload(
     rootName: String = FileNameSanitizer.sanitizeFolderName(folder.name),
     onProgress: (files: Int, bytes: Long) -> Unit,
 ): List<PlannedFile> {
-    require(!dev.piko.shared.data.LocalLocation.isLocal(folder.id)) { "本地文件夹不支持云端下载" }
+    require(!dev.piko.shared.data.VirtualLocation.isVirtual(folder.id)) { "虚拟文件夹不支持云端下载" }
     val planned = mutableListOf<PlannedFile>()
     var bytes = 0L
     var level = listOf(folder.id to rootName)
@@ -78,7 +78,7 @@ internal suspend fun planFolderDownload(
                 val (_, path) = dir
                 val taken = HashSet<String>()
                 for (entry in entries.sortedBy { it.isFolder }) {
-                    if (entry.trashed || dev.piko.shared.data.LocalLocation.isLocal(entry.id)) continue
+                    if (entry.trashed || dev.piko.shared.data.VirtualLocation.isVirtual(entry.id)) continue
                     if (entry.isFolder) {
                         val name = unique(FileNameSanitizer.sanitizeFolderName(entry.name), taken, keepExtension = false)
                         if (visited.add(entry.id)) next += entry.id to "$path/$name"

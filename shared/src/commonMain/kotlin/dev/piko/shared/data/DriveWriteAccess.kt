@@ -34,16 +34,16 @@ class DriveWriteAccess internal constructor(
     private val isCurrentClient: Boolean get() = repository.isCurrentClient(client)
     private suspend fun <T> request(ids: List<String> = emptyList(), block: suspend () -> T): Result<T> = withContext(Dispatchers.Default) {
         runSuspendCatching {
-            require(ids.none(LocalLocation::isLocal)) { "本地文件夹为只读" }
+            require(ids.none(VirtualLocation::isVirtual)) { "虚拟位置为只读" }
             block()
         }
     }
     suspend fun detail(id: String) = request(listOf(id)) { client.getFile(id) }
     suspend fun listFolder(id: String) = request(listOf(id)) { client.listFiles(id) }
     suspend fun browsableList(folderId: String): Result<List<FileStat>> {
-        if (LocalLocation.isLocal(folderId)) return Result.failure(IllegalArgumentException("本地文件夹为只读"))
+        if (VirtualLocation.isVirtual(folderId)) return Result.failure(IllegalArgumentException("虚拟位置为只读"))
         return repository.browsableReaderForClient(client, vault, requireActiveClient = false).invoke(folderId)
-            .map { files -> files.filterNot { LocalLocation.isLocal(it.id) } }
+            .map { files -> files.filterNot { VirtualLocation.isVirtual(it.id) } }
     }
     /** 恢复归档前必须用绑定 client 现查服务端确认真实文件仍在目标目录且未进回收站，禁止用可能滞后的本地缓存充当存在证据。 */
     suspend fun presentRealChildren(folderId: String): Result<List<FileStat>> =

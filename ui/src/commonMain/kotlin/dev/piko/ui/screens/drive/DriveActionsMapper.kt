@@ -32,13 +32,13 @@ import dev.piko.data.repository.PathBreadcrumb
 import dev.piko.data.repository.isPlayableVideo
 import dev.piko.data.repository.isPreviewableImage
 import dev.piko.shared.data.DriveLibrary
-import dev.piko.shared.data.LocalLocation
 import dev.piko.shared.data.formatLocalPathForDisplay
 import dev.piko.shared.data.isArchiveVolume
 import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.data.isLocal
 import dev.piko.shared.data.isLocalMountRoot
+import dev.piko.shared.data.isVirtual
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.naming.av.hasAvCode
@@ -59,7 +59,7 @@ internal val DriveViewMode.paletteLabel: String
     }
 
 internal fun commandPlaceOf(state: DriveScreenState, stackDepth: Int): CommandPlace = when {
-    state.isLocalPlace -> CommandPlace.LOCAL
+    state.isLocalPlace || state.isDevicePlace -> CommandPlace.LOCAL
     state.importPreviewView != null -> CommandPlace.IMPORT_PREVIEW
     state.archiveView != null -> CommandPlace.ARCHIVE
     state.libraryView == DriveLibrary.TRASH -> CommandPlace.TRASH
@@ -308,7 +308,7 @@ internal fun buildDriveOperations(
     if (library == DriveLibrary.DUPLICATES && file.isFolder) {
         return listOf(DriveActions.revealInDrive { intents.onRevealFromGalleryOrLibrary(file) })
     }
-    if (targets.any { it.isLocal }) return buildList {
+    if (targets.any { it.isVirtual }) return buildList {
         if (targets.size == 1 && intents.galleryActive && file.parentId != intents.activeFolderId) {
             add(
                 SheetAction(
@@ -343,7 +343,7 @@ internal fun buildDriveOperations(
                     ),
                 )
             }
-        } else if (file.isLocal) {
+        } else if (file.isVirtual) {
             if (file.isPlayableVideo()) {
                 add(
                     SheetAction(
@@ -396,7 +396,7 @@ internal fun buildDriveOperations(
                 }
             }
             val rawLocalPath = file.params["local_path"].orEmpty()
-            if (!rawLocalPath.startsWith("content://")) {
+            if (file.isLocal && !rawLocalPath.startsWith("content://")) {
                 add(
                     SheetAction(
                         Icons.Outlined.FolderOpen,
@@ -406,7 +406,7 @@ internal fun buildDriveOperations(
                     ),
                 )
             }
-            if (!file.isFolder && intents.isSpoilerBlurEnabled && file.previewImageCoverUrl().isNotEmpty()) {
+            if (file.isLocal && !file.isFolder && intents.isSpoilerBlurEnabled && file.previewImageCoverUrl().isNotEmpty()) {
                 add(DriveActions.previewVisibility(hidden = file.id !in state.revealedFileIds, onClick = { state.toggleSpoiler(file.id) }))
             }
             if (file.isLocalMountRoot) {
@@ -563,10 +563,12 @@ internal fun buildDriveBackgroundActions(
     if (!state.isVirtualPlace) {
         if (hasClipboard) add(SheetAction(Icons.Outlined.ContentPaste, tr("粘贴", "Paste", "貼り付け", "붙여넣기", "貼上"), state::paste, group = ActionGroup.Refresh))
         add(SheetAction(Icons.Outlined.CreateNewFolder, tr("新建文件夹", "New folder", "新規フォルダー", "새 폴더", "新增資料夾"), onNewFolder, group = ActionGroup.Create))
-        mountAction?.let(::add)
         add(SheetAction(Icons.Outlined.UploadFile, tr("上传文件", "Upload files", "ファイルをアップロード", "파일 업로드", "上傳檔案"), onPickFiles, group = ActionGroup.Create))
         add(SheetAction(Icons.Outlined.DriveFolderUpload, tr("上传文件夹", "Upload folder", "フォルダーをアップロード", "폴더 업로드", "上傳資料夾"), onPickFolder, group = ActionGroup.Create))
         add(SheetAction(Icons.Outlined.Bolt, tr("添加链接", "Add link", "リンクを追加", "링크 추가", "新增連結"), onOpenAddLink, group = ActionGroup.Create))
+    }
+    if (!state.isLocalPlace && state.archiveView == null && state.importPreviewView == null && state.libraryView == null) {
+        mountAction?.let(::add)
     }
     add(SheetAction(Icons.Outlined.SelectAll, tr("全选", "Select all", "すべて選択", "모두 선택", "全選"), onSelectAll, group = ActionGroup.Select))
     addAll(libraryPageActions(state.libraryView, state.files.isEmpty(), onLibraryConfirm) { state.files.map { it.id } })
@@ -637,11 +639,11 @@ internal fun handleDriveKeyShortcut(
     }
     if (focusedFile != null && !state.isSelectionMode) {
         when {
-            (event.key == Key.Delete || (primary && event.key == Key.Backspace)) && !focusedFile.isLocal -> {
+            (event.key == Key.Delete || (primary && event.key == Key.Backspace)) && !focusedFile.isVirtual -> {
                 delete(listOf(focusedFile.id))
                 return true
             }
-            event.key == Key.F2 && !focusedFile.isLocal && !focusedFile.isUploading && !focusedFile.isImportPreview && !inTrash -> {
+            event.key == Key.F2 && !focusedFile.isVirtual && !focusedFile.isUploading && !focusedFile.isImportPreview && !inTrash -> {
                 onStartRename(focusedFile)
                 return true
             }
@@ -676,10 +678,10 @@ internal fun handleDriveKeyShortcut(
         event.key == Key.F5 || (primary && event.key == Key.R) -> onRefresh()
         primary && event.key == Key.A -> onSelectAll()
         primary && event.key == Key.Z && !event.isShiftPressed -> if (!onUndoLast()) return false
-        trashKey && state.isSelectionMode && state.selectedFileIds.any { !LocalLocation.isLocal(it) } ->
-            delete(state.selectedFileIds.filterNot(LocalLocation::isLocal))
+        trashKey && state.isSelectionMode && state.selectedFileIds.any { !dev.piko.shared.data.VirtualLocation.isVirtual(it) } ->
+            delete(state.selectedFileIds.filterNot(dev.piko.shared.data.VirtualLocation::isVirtual))
         event.key == Key.F2 && state.isSelectionMode && state.selectedFileIds.isNotEmpty() && !inTrash -> {
-            val targets = displayedFiles.filter { it.id in state.selectedFileIds && !it.isLocal && !it.isUploading && !it.isImportPreview }
+            val targets = displayedFiles.filter { it.id in state.selectedFileIds && !it.isVirtual && !it.isUploading && !it.isImportPreview }
             when {
                 targets.size == 1 -> onStartRename(targets.single())
                 targets.size > 1 -> {

@@ -123,29 +123,29 @@ internal fun itemCommands(place: CommandPlace, targets: List<FileStat>, fullyVau
     val eventLog = place == CommandPlace.RECENT || place == CommandPlace.HISTORY
     val hasTargets = targets.isNotEmpty()
     // 上传中的文件改名、移动、分享都会失败，作用对象里有它就不给这几样；归档条目与压缩包里的条目在网盘里没有文件，同理
-    val local = place == CommandPlace.LOCAL || targets.any { dev.piko.shared.data.LocalLocation.isLocal(it.id) }
-    val settled = hasTargets && !local && !inArchive && targets.none { it.isUploading || it.isVaulted || it.isImportPreview }
+    val virtual = place == CommandPlace.LOCAL || targets.any { dev.piko.shared.data.VirtualLocation.isVirtual(it.id) }
+    val settled = hasTargets && !virtual && !inArchive && targets.none { it.isUploading || it.isVaulted || it.isImportPreview }
     val vaultContext = settled && (place == CommandPlace.ROOT || place == CommandPlace.FOLDER || place == CommandPlace.SEARCH)
     return ItemCommands(
         cutCopy = settled && !inTrash,
         rename = settled && !inTrash,
         share = settled && !inTrash,
-        moveToTrash = hasTargets && !local && !inTrash && !inArchive,
-        restoreOrDelete = hasTargets && !local && inTrash,
+        moveToTrash = hasTargets && !virtual && !inTrash && !inArchive,
+        restoreOrDelete = hasTargets && !virtual && inTrash,
         moveCopyTo = settled && !inTrash,
         // 文件夹整个下载，见 PikoDownloadCoordinator.enqueueFolders；压缩包里的文件夹不在网盘里，列不出内容，只下文件
-        download = hasTargets && !local && !inTrash && targets.any { !it.isUploading && !(inArchive && it.isFolder) && (!it.isImportPreview || it.isFolder || it.hash.isNotBlank()) },
-        downloadAtQuality = hasTargets && !local && !inTrash && !inArchive && targets.any {
+        download = hasTargets && !virtual && !inTrash && targets.any { !it.isUploading && !(inArchive && it.isFolder) && (!it.isImportPreview || it.isFolder || it.hash.isNotBlank()) },
+        downloadAtQuality = hasTargets && !virtual && !inTrash && !inArchive && targets.any {
             !it.isUploading && !it.isVaulted && !it.isImportPreview && (it.isFolder || it.isPlayableVideo())
         },
         // 压缩包里解压的是选中的几项本身，不是选中项里的压缩包
-        extract = hasTargets && !local && !inTrash && (inArchive || targets.any { !it.isVaulted && !it.isImportPreview && (it.isExtractableArchive || it.isArchiveVolume) }),
-        removeRecord = hasTargets && !local && eventLog,
+        extract = hasTargets && !virtual && !inTrash && (inArchive || targets.any { !it.isVaulted && !it.isImportPreview && (it.isExtractableArchive || it.isArchiveVolume) }),
+        removeRecord = hasTargets && !virtual && eventLog,
         // 回收站与压缩包里的不在网盘里。库（星标、最近添加、播放历史、查重的结果）里要做的是回到原处、下载、移走或删除，
         // 不给：移动端面板在最近添加里已满 8 行，见 MobilePanelSizeTest。搜索结果的条目仍在各自的文件夹里，清单按所在文件夹写，照常给
         vault = vaultContext && targets.any { !it.isFolder || it.id !in fullyVaultedFolders },
         unvault = vaultContext,
-        viewSpaceMap = targets.size == 1 && !local && !inTrash && !inArchive &&
+        viewSpaceMap = targets.size == 1 && !virtual && !inTrash && !inArchive &&
             place != CommandPlace.IMPORT_PREVIEW &&
             targets.single().let {
                 it.isFolder && !it.trashed && !it.isUploading && !it.isVaulted && !it.isImportPreview &&

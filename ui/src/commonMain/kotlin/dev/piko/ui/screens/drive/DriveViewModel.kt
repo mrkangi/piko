@@ -12,11 +12,11 @@ import dev.piko.data.repository.isPlayableVideo
 import dev.piko.data.repository.isPreviewableImage
 import dev.piko.shared.data.ArchiveEntryId
 import dev.piko.shared.data.ArchiveLocation
+import dev.piko.shared.data.DeviceLocation
 import dev.piko.shared.data.DriveLibrary
 import dev.piko.shared.data.ImportPreviewEntryId
 import dev.piko.shared.data.ImportPreviewLocation
 import dev.piko.shared.data.PikoDriveRepository
-import dev.piko.shared.data.isDriveFolderId
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.download.PikoDownloadCoordinator
 import dev.piko.shared.i18n.tr
@@ -153,7 +153,7 @@ internal class DriveViewModel(
     var activeSheet by mutableStateOf<DriveSheet?>(null)
         private set
 
-    private var pendingMountDestination: Pair<String, String>? = null
+    private var pendingMountAccount: String? = null
 
     private val _effects = MutableSharedFlow<DriveUiEffect>(
         extraBufferCapacity = 16,
@@ -506,23 +506,25 @@ internal class DriveViewModel(
     }
 
     fun beginLocalMount(activeFolderId: String): Boolean {
-        if (!isDriveFolderId(activeFolderId)) return false
         val account = driveRepo.currentAccount ?: return false
-        pendingMountDestination = account to activeFolderId
+        pendingMountAccount = account
         return true
     }
 
     fun completeLocalMount(path: String, name: String) {
-        val destination = pendingMountDestination ?: return
-        pendingMountDestination = null
+        val account = pendingMountAccount ?: return
+        pendingMountAccount = null
         launchLocalAction {
-            if (destination.first == driveRepo.currentAccount) {
-                val outcome = driveRepo.localMounts.mountOrExisting(destination.second, path, name)
+            if (account == driveRepo.currentAccount) {
+                val outcome = driveRepo.localMounts.mountOrExisting(path, name)
+                state.restoreFolderStack(
+                    listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()),
+                )
                 state.highlight(setOf(outcome.mount.location.id))
                 if (outcome.alreadyMounted) {
                     _effects.emit(
                         DriveUiEffect.ShowSnackbar(
-                            tr("此文件夹已挂载在当前目录", "This folder is already mounted here", "このフォルダーは既にここにマウントされています", "이 폴더는 이미 현재 위치에 마운트되어 있습니다", "此資料夾已掛載於目前目錄"),
+                            tr("此文件夹已挂载", "This folder is already mounted", "このフォルダーは既にマウントされています", "이 폴더는 이미 마운트되어 있습니다", "此資料夾已掛載"),
                         ),
                     )
                 }

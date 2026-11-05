@@ -17,14 +17,13 @@ import kotlin.uuid.Uuid
 data class LocalMount(
     val mountId: String,
     val account: String,
-    val parentFolderId: String,
     val localRootUriOrPath: String,
     val fallbackName: String,
     val createdAtMs: Long,
     val pinned: Boolean = false,
 ) {
     val location: LocalLocation get() = LocalLocation(mountId)
-    fun toFileStat(thumbnailLink: String = "") = FileStat(id = location.id, name = fallbackName, parentId = parentFolderId,
+    fun toFileStat(thumbnailLink: String = "") = FileStat(id = location.id, name = fallbackName, parentId = DeviceLocation.SELF_ID,
         kind = io.github.nihildigit.pikpak.FileKind.FOLDER, thumbnailLink = thumbnailLink,
         params = mapOf("local_path" to localRootUriOrPath),
         createdTime = kotlin.time.Instant.fromEpochMilliseconds(createdAtMs).toString())
@@ -102,15 +101,15 @@ class LocalMounts(
                 val next = runCatching { json.decodeFromString<List<LocalMount>>(raw.ifBlank { "[]" }) }.getOrDefault(emptyList())
                 val old = cached
                 cached = next
-                changed((old + next).filter { it.account == account() }.mapTo(mutableSetOf()) { it.parentFolderId })
+                if ((old + next).any { it.account == account() }) changed(setOf(DeviceLocation.SELF_ID))
             }
         }
     }
     private fun toRootStat(mount: LocalMount): FileStat =
         mount.toFileStat(thumbnailLink = runCatching { access?.folderCover(mount, mount.location).orEmpty() }.getOrDefault(""))
 
-    fun cachedRoots(parentId: String): List<FileStat> =
-        cached.filter { it.account == account() && it.parentFolderId == parentId }.map(::toRootStat)
+    fun cachedRoots(): List<FileStat> =
+        cached.filter { it.account == account() }.map(::toRootStat)
     private suspend fun read(): List<LocalMount> = runCatching {
         json.decodeFromString<List<LocalMount>>(preferences?.localMountsFlow?.first().orEmpty().ifBlank { "[]" })
     }.getOrDefault(emptyList())
@@ -124,27 +123,27 @@ class LocalMounts(
 
     fun findCached(id: String): LocalMount? = LocalLocation.of(id)?.let { location -> cached.firstOrNull { it.account == account() && it.mountId == location.mountId } }
     suspend fun find(id: String): LocalMount? = LocalLocation.of(id)?.let { location -> all().firstOrNull { it.mountId == location.mountId } }
-    suspend fun roots(parentId: String): List<FileStat> = all().filter { it.parentFolderId == parentId }.map(::toRootStat)
-    suspend fun mount(parentId: String, path: String, name: String): LocalMount =
-        mountOrExisting(parentId, path, name).mount
+    suspend fun roots(): List<FileStat> = all().map(::toRootStat)
+    suspend fun mount(path: String, name: String): LocalMount =
+        mountOrExisting(path, name).mount
 
-    suspend fun mountOrExisting(parentId: String, path: String, name: String): LocalMountOutcome = lock.withLock {
-        require(isDriveFolderId(parentId))
+    suspend fun mountOrExisting(path: String, name: String): LocalMountOutcome = lock.withLock {
+        require(path.isNotBlank())
         val owner = requireNotNull(account())
         val currentEntries = read()
         val existing = currentEntries.firstOrNull {
-            it.account == owner && it.parentFolderId == parentId && it.localRootUriOrPath == path
+            it.account == owner && it.localRootUriOrPath == path
         }
         if (existing != null) {
             cached = currentEntries
             return@withLock LocalMountOutcome(existing, alreadyMounted = true)
         }
-        val entry = LocalMount(Uuid.random().toString(), owner, parentId, path, name, Clock.System.now().toEpochMilliseconds())
+        val entry = LocalMount(Uuid.random().toString(), owner, path, name, Clock.System.now().toEpochMilliseconds())
         val entries = currentEntries + entry
         check(owner == account())
         requireNotNull(preferences).saveLocalMounts(json.encodeToString(entries))
         cached = entries
-        changed(setOf(parentId))
+        changed(setOf(DeviceLocation.SELF_ID))
         LocalMountOutcome(entry, alreadyMounted = false)
     }
     suspend fun pin(id: String, pinned: Boolean) = lock.withLock {
@@ -155,8 +154,15 @@ class LocalMounts(
         cached = entries
     }
     fun restoredStack(stack: List<PikoPathBreadcrumb>): List<PikoPathBreadcrumb> {
-        val invalid = stack.indexOfFirst { !isMountedCached(it.id) }
-        return if (invalid < 0) stack else stack.take(invalid)
+        val firstLocal = stack.indexOfFirst { LocalLocation.isLocal(it.id) }
+        if (firstLocal < 0) return stack
+        val local = stack.drop(firstLocal).takeWhile { isMountedCached(it.id) }
+        if (local.isEmpty()) return stack.take(firstLocal)
+        return listOf(
+            PikoDriveRepository.ROOT_BREADCRUMB,
+            DeviceLocation.rootCrumb(),
+            DeviceLocation.selfCrumb(),
+        ) + local
     }
     suspend fun unmount(id: String) = lock.withLock {
         val entry = find(id) ?: return@withLock
@@ -164,7 +170,7 @@ class LocalMounts(
         if (entry.account != account()) return@withLock
         preferences?.saveLocalMounts(json.encodeToString(entries))
         cached = entries
-        changed(setOf(entry.parentFolderId, entry.location.id))
+        changed(setOf(DeviceLocation.SELF_ID, entry.location.id))
     }
     suspend fun list(id: String): List<FileStat> {
         val location = requireNotNull(LocalLocation.of(id))
@@ -193,6 +199,14 @@ class LocalMounts(
     suspend fun pathTo(id: String): List<PikoPathBreadcrumb>? {
         val location = LocalLocation.of(id) ?: return null
         val mount = find(id) ?: return null
+        return listOf(PikoPathBreadcrumb(mount.location.id, mount.fallbackName)) + location.segments.mapIndexed { i, name ->
+            PikoPathBreadcrumb(LocalLocation(location.mountId, location.segments.take(i + 1)).id, name)
+        }
+    }
+    /** [pathTo] 的同步版本，只读当前已载入的挂载表，供路径展示等非挂起调用使用。 */
+    fun cachedPathTo(id: String): List<PikoPathBreadcrumb>? {
+        val location = LocalLocation.of(id) ?: return null
+        val mount = findCached(id) ?: return null
         return listOf(PikoPathBreadcrumb(mount.location.id, mount.fallbackName)) + location.segments.mapIndexed { i, name ->
             PikoPathBreadcrumb(LocalLocation(location.mountId, location.segments.take(i + 1)).id, name)
         }

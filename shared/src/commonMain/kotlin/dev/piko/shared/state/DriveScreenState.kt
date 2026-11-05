@@ -311,7 +311,10 @@ class DriveScreenState(
      * 眼前不是网盘里的文件夹：库、压缩包或添加链接的虚拟子目录。这里不能新建、上传、粘贴或接住拖放。
      */
     val isLocalPlace: Boolean by derivedStateOf { dev.piko.shared.data.LocalLocation.isLocal(activeFolderId) }
-    val isVirtualPlace: Boolean by derivedStateOf { isLocalPlace || libraryView != null || archiveView != null || importPreviewView != null }
+    val isDevicePlace: Boolean by derivedStateOf { dev.piko.shared.data.DeviceLocation.isDevice(activeFolderId) }
+    val isVirtualPlace: Boolean by derivedStateOf {
+        isLocalPlace || isDevicePlace || libraryView != null || archiveView != null || importPreviewView != null
+    }
 
     /**
      * 最近添加与播放历史里每个文件对应的那条记录，按文件 ID。列表的副文本（何时添加、看到哪里）
@@ -332,7 +335,9 @@ class DriveScreenState(
             it.source === files || (it.folderId != null && it.folderId == loadedFolderId && it.folderId == activeFolderId)
         }?.structure
     }
-    val isDisplayStructureReady: Boolean by derivedStateOf { isSearching || (isVirtualPlace && !isLocalPlace && !usesFolderStructure) || currentAnalysis != null }
+    val isDisplayStructureReady: Boolean by derivedStateOf {
+        isSearching || (isVirtualPlace && !isLocalPlace && !isDevicePlace && !usesFolderStructure) || currentAnalysis != null
+    }
 
     /** 列过的文件夹空不空，见 PikoDriveRepository.folderEmptiness。 */
     val folderEmptiness get() = driveRepo.folderEmptiness
@@ -350,7 +355,7 @@ class DriveScreenState(
     // 整层都是次要项时不折叠（原盘的 CLIPINF/ 全是结构文件）：折光了列表为空，连折叠横幅也没处放
     private val isFoldingActive: Boolean by derivedStateOf {
         val folded = currentAnalysis?.foldedIds ?: return@derivedStateOf false
-        isHeuristicFilterEnabled && isNameParsing && (!isVirtualPlace || isLocalPlace) && folded.size < files.size && isFoldingScope(files)
+        isHeuristicFilterEnabled && isNameParsing && (!isVirtualPlace || isLocalPlace || isDevicePlace) && folded.size < files.size && isFoldingScope(files)
     }
 
     val potentialHiddenCount: Int by derivedStateOf {
@@ -415,7 +420,7 @@ class DriveScreenState(
             libraryView?.isSession == true -> sessionItems { blockId -> isSessionGroupExpanded(blockId) }
             // 库里的条目散在全盘各处，按作品与分区归拢的是一个目录里的东西，这里照原来的先后平铺；
             // 压缩包里的也平铺、不折叠：在包里多半是挑要解压的几项，折起来的次要文件正是要挑的一部分
-            structure == null || (isVirtualPlace && !isLocalPlace && importPreviewView == null) -> files.map { DriveListItem.File(it, null) }
+            structure == null || (isVirtualPlace && !isLocalPlace && !isDevicePlace && importPreviewView == null) -> files.map { DriveListItem.File(it, null) }
             !isNameParsing || !foldersFirst || structure.blocks.isEmpty() || sortOrder == PikoFileSortOrder.DURATION_DESC || sortOrder == PikoFileSortOrder.DURATION_ASC ->
                 filterDriveFiles(files, structure.foldedIds, enabled = hideFolded, revealAll = false).map { file ->
                     val view = if (isNameParsing) structure.views[file.id]?.let { view ->
@@ -430,7 +435,7 @@ class DriveScreenState(
     /** 眼前按作品与分区排：不在搜索、不在库或压缩包里、解析开着、未按时长排序且认出了作品。 */
     private val isStructured: Boolean by derivedStateOf {
         val structure = currentAnalysis
-        !isSearching && (!isVirtualPlace || isLocalPlace || importPreviewView != null) && isNameParsing && foldersFirst &&
+        !isSearching && (!isVirtualPlace || isLocalPlace || isDevicePlace || importPreviewView != null) && isNameParsing && foldersFirst &&
             sortOrder != PikoFileSortOrder.DURATION_DESC && sortOrder != PikoFileSortOrder.DURATION_ASC &&
             structure != null && structure.blocks.isNotEmpty()
     }
@@ -2179,8 +2184,8 @@ class DriveScreenState(
      * 在这里拦而不是在各个按钮上：键盘、拖放与命令栏都走到这几个入口。
      */
     private fun withoutVaulted(ids: List<String>): List<String> {
-        if (ids.any(dev.piko.shared.data.LocalLocation::isLocal)) {
-            _messages.tryEmit(tr("本地文件夹为只读", "Local folders are read-only", "ローカルフォルダーは読み取り専用です", "로컬 폴더는 읽기 전용입니다", "本機資料夾為唯讀"))
+        if (ids.any(dev.piko.shared.data.VirtualLocation::isVirtual)) {
+            _messages.tryEmit(tr("设备与本机文件夹为只读", "Device and local folders are read-only", "デバイスとローカルフォルダーは読み取り専用です", "기기 및 로컬 폴더는 읽기 전용입니다", "裝置與本機資料夾為唯讀"))
             return emptyList()
         }
         if (refusedInArchive(ids)) return emptyList()
