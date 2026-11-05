@@ -100,6 +100,13 @@ class DesktopPikoPreferences(
         localMounts.value = serialized
     }
 
+    private val lanShareSettings = MutableStateFlow(settings.get("lan.share.settings"))
+    override val lanShareSettingsFlow: Flow<String> = lanShareSettings.asStateFlow()
+    override suspend fun saveLanShareSettings(serialized: String) {
+        settings.set("lan.share.settings", serialized)
+        lanShareSettings.value = serialized
+    }
+
     private val galleryShowImages = MutableStateFlow(settings.get("drive.galleryShowImages", "true").toBoolean())
     override val galleryShowImagesFlow: Flow<Boolean> = galleryShowImages.asStateFlow()
     override suspend fun setGalleryShowImages(show: Boolean) {

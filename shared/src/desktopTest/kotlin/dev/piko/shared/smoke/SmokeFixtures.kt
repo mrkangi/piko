@@ -105,6 +105,9 @@ class MemoryPreferences : PikoUserPreferences {
     private val remoteEnabled = MutableStateFlow(false)
     override val remoteDownloadEnabledFlow: Flow<Boolean> = remoteEnabled
     override suspend fun setRemoteDownloadEnabled(enabled: Boolean) { remoteEnabled.value = enabled }
+    private val lanShareSettings = MutableStateFlow("")
+    override val lanShareSettingsFlow: Flow<String> = lanShareSettings
+    override suspend fun saveLanShareSettings(serialized: String) { lanShareSettings.value = serialized }
     private var remoteDeviceId: String = ""
     private var remoteDeviceName: String = ""
     override suspend fun loadOrCreateRemoteDeviceId(): String {

@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -63,20 +65,24 @@ suspend fun analyzeVideoFolder(folderId: String, files: List<FileStat>): VideoFo
  * 仍使用 listBrowsable 的清单投影、内部目录过滤和共享缓存。
  */
 class VideoDiscovery internal constructor(
-    rootId: String,
+    private val rootId: String,
     private var readFolder: suspend (String) -> Result<List<FileStat>>,
     private val random: Random = Random,
+    private val prefetchIndex: suspend (String) -> Unit = {},
 ) {
     constructor(driveRepo: PikoDriveRepository, account: String, rootId: String, random: Random = Random) : this(
         rootId,
         driveRepo.browsableReader(account) ?: { throw CancellationException("Account changed") },
         random,
+        driveRepo::prefetchLanIndex,
     )
 
     private val level = ArrayDeque<String>().apply { add(rootId) }
     private val nextLevel = mutableListOf<String>()
     private val enqueued = hashSetOf(rootId)
     private val failures = linkedMapOf<String, Throwable>()
+    private val indexGate = Mutex()
+    private var indexPrefetched = false
 
     val hasPending: Boolean get() = level.isNotEmpty() || nextLevel.isNotEmpty()
     internal val folderIds: Set<String> get() = enqueued.toSet()
@@ -85,6 +91,7 @@ class VideoDiscovery internal constructor(
 
     suspend fun next(): VideoFolderBatch? {
         currentCoroutineContext().ensureActive()
+        prefetchIndexOnce()
         if (level.isEmpty()) {
             level.addAll(nextLevel.shuffled(random))
             nextLevel.clear()
@@ -102,6 +109,7 @@ class VideoDiscovery internal constructor(
     suspend fun nextBatch(maxFolders: Int, concurrency: Int = 8): List<VideoFolderBatch> {
         if (maxFolders <= 0) return emptyList()
         currentCoroutineContext().ensureActive()
+        prefetchIndexOnce()
         if (level.isEmpty()) {
             level.addAll(nextLevel.shuffled(random))
             nextLevel.clear()
@@ -164,6 +172,15 @@ class VideoDiscovery internal constructor(
             if (enqueued.add(folder.id)) nextLevel += folder.id
         }
         return batch
+    }
+
+    private suspend fun prefetchIndexOnce() {
+        if (indexPrefetched) return
+        indexGate.withLock {
+            if (indexPrefetched) return@withLock
+            runCatching { prefetchIndex(rootId) }
+            indexPrefetched = true
+        }
     }
 
     fun forgetFolders(ids: Set<String>) {

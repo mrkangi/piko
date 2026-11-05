@@ -81,6 +81,10 @@ interface PikoUserPreferences {
     val localMountsFlow: Flow<String> get() = flowOf("")
     suspend fun saveLocalMounts(serialized: String) {}
 
+    /** 本设备的局域网共享设置：开关、端口、配对主机与 host 令牌，不参与云端同步。 */
+    val lanShareSettingsFlow: Flow<String> get() = flowOf("")
+    suspend fun saveLanShareSettings(serialized: String) {}
+
     /** 瀑布流是否一并展示图片，默认开启。 */
     val galleryShowImagesFlow: Flow<Boolean> get() = flowOf(true)
     suspend fun setGalleryShowImages(show: Boolean) {}

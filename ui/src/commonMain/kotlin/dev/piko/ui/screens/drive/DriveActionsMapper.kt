@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.SwipeVertical
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.input.key.Key
@@ -59,7 +60,7 @@ internal val DriveViewMode.paletteLabel: String
     }
 
 internal fun commandPlaceOf(state: DriveScreenState, stackDepth: Int): CommandPlace = when {
-    state.isLocalPlace || state.isDevicePlace -> CommandPlace.LOCAL
+    state.isLocalPlace || state.isDevicePlace || state.isLanPlace -> CommandPlace.LOCAL
     state.importPreviewView != null -> CommandPlace.IMPORT_PREVIEW
     state.archiveView != null -> CommandPlace.ARCHIVE
     state.libraryView == DriveLibrary.TRASH -> CommandPlace.TRASH
@@ -512,6 +513,7 @@ internal fun buildDriveBackgroundActions(
     onPickFiles: () -> Unit,
     onPickFolder: () -> Unit,
     onOpenAddLink: () -> Unit,
+    onOpenLanShare: () -> Unit,
     onSelectAll: () -> Unit,
     onLibraryConfirm: (LibraryConfirm) -> Unit,
     onShowFolderProperties: () -> Unit,
@@ -569,6 +571,14 @@ internal fun buildDriveBackgroundActions(
     }
     if (!state.isLocalPlace && state.archiveView == null && state.importPreviewView == null && state.libraryView == null) {
         mountAction?.let(::add)
+        add(
+            SheetAction(
+                Icons.Outlined.Wifi,
+                tr("局域网共享", "LAN sharing", "LAN 共有", "LAN 공유", "區域網路共享"),
+                onOpenLanShare,
+                group = ActionGroup.Create,
+            ),
+        )
     }
     add(SheetAction(Icons.Outlined.SelectAll, tr("全选", "Select all", "すべて選択", "모두 선택", "全選"), onSelectAll, group = ActionGroup.Select))
     addAll(libraryPageActions(state.libraryView, state.files.isEmpty(), onLibraryConfirm) { state.files.map { it.id } })

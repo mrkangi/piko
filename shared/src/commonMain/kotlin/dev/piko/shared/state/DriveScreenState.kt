@@ -312,8 +312,9 @@ class DriveScreenState(
      */
     val isLocalPlace: Boolean by derivedStateOf { dev.piko.shared.data.LocalLocation.isLocal(activeFolderId) }
     val isDevicePlace: Boolean by derivedStateOf { dev.piko.shared.data.DeviceLocation.isDevice(activeFolderId) }
+    val isLanPlace: Boolean by derivedStateOf { dev.piko.shared.data.LanLocation.isLan(activeFolderId) }
     val isVirtualPlace: Boolean by derivedStateOf {
-        isLocalPlace || isDevicePlace || libraryView != null || archiveView != null || importPreviewView != null
+        isLocalPlace || isDevicePlace || isLanPlace || libraryView != null || archiveView != null || importPreviewView != null
     }
 
     /**
@@ -336,7 +337,7 @@ class DriveScreenState(
         }?.structure
     }
     val isDisplayStructureReady: Boolean by derivedStateOf {
-        isSearching || (isVirtualPlace && !isLocalPlace && !isDevicePlace && !usesFolderStructure) || currentAnalysis != null
+        isSearching || (isVirtualPlace && !isLocalPlace && !isDevicePlace && !isLanPlace && !usesFolderStructure) || currentAnalysis != null
     }
 
     /** 列过的文件夹空不空，见 PikoDriveRepository.folderEmptiness。 */
@@ -355,7 +356,7 @@ class DriveScreenState(
     // 整层都是次要项时不折叠（原盘的 CLIPINF/ 全是结构文件）：折光了列表为空，连折叠横幅也没处放
     private val isFoldingActive: Boolean by derivedStateOf {
         val folded = currentAnalysis?.foldedIds ?: return@derivedStateOf false
-        isHeuristicFilterEnabled && isNameParsing && (!isVirtualPlace || isLocalPlace || isDevicePlace) && folded.size < files.size && isFoldingScope(files)
+        isHeuristicFilterEnabled && isNameParsing && (!isVirtualPlace || isLocalPlace || isDevicePlace || isLanPlace) && folded.size < files.size && isFoldingScope(files)
     }
 
     val potentialHiddenCount: Int by derivedStateOf {
@@ -420,7 +421,7 @@ class DriveScreenState(
             libraryView?.isSession == true -> sessionItems { blockId -> isSessionGroupExpanded(blockId) }
             // 库里的条目散在全盘各处，按作品与分区归拢的是一个目录里的东西，这里照原来的先后平铺；
             // 压缩包里的也平铺、不折叠：在包里多半是挑要解压的几项，折起来的次要文件正是要挑的一部分
-            structure == null || (isVirtualPlace && !isLocalPlace && !isDevicePlace && importPreviewView == null) -> files.map { DriveListItem.File(it, null) }
+            structure == null || (isVirtualPlace && !isLocalPlace && !isDevicePlace && !isLanPlace && importPreviewView == null) -> files.map { DriveListItem.File(it, null) }
             !isNameParsing || !foldersFirst || structure.blocks.isEmpty() || sortOrder == PikoFileSortOrder.DURATION_DESC || sortOrder == PikoFileSortOrder.DURATION_ASC ->
                 filterDriveFiles(files, structure.foldedIds, enabled = hideFolded, revealAll = false).map { file ->
                     val view = if (isNameParsing) structure.views[file.id]?.let { view ->
@@ -435,7 +436,7 @@ class DriveScreenState(
     /** 眼前按作品与分区排：不在搜索、不在库或压缩包里、解析开着、未按时长排序且认出了作品。 */
     private val isStructured: Boolean by derivedStateOf {
         val structure = currentAnalysis
-        !isSearching && (!isVirtualPlace || isLocalPlace || isDevicePlace || importPreviewView != null) && isNameParsing && foldersFirst &&
+        !isSearching && (!isVirtualPlace || isLocalPlace || isDevicePlace || isLanPlace || importPreviewView != null) && isNameParsing && foldersFirst &&
             sortOrder != PikoFileSortOrder.DURATION_DESC && sortOrder != PikoFileSortOrder.DURATION_ASC &&
             structure != null && structure.blocks.isNotEmpty()
     }

@@ -9,6 +9,8 @@ import dev.piko.shared.i18n.tr
 
 import java.util.Locale
 import dev.piko.shared.i18n.PikoLocale
+import dev.piko.shared.lan.LanShareRepository
+import dev.piko.shared.lan.DesktopLanShareHost
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -661,6 +663,8 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         PikoHome.root.resolve("cache").toString(),
         jsonCodec = Json { ignoreUnknownKeys = true }.streamingCodec(),
     )
+    val lanDeviceName = System.getProperty("os.name").orEmpty() + " · Piko"
+    val lanPlatform = System.getProperty("os.name").orEmpty()
     return PikoServices(
         platformPreferences = preferences,
         clientManager = clientManager,
@@ -691,8 +695,21 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
                 }
             }
         },
-            deviceName = System.getProperty("os.name").orEmpty() + " · Piko",
-            platformName = System.getProperty("os.name").orEmpty(),
+        deviceName = lanDeviceName,
+        platformName = lanPlatform,
+        lanSharesFactory = { settings, scope ->
+            LanShareRepository(
+                http = HttpClient(OkHttp),
+                settings = settings,
+                scope = scope,
+                clientDeviceId = { preferences.loadOrCreateRemoteDeviceId() },
+                clientName = { lanDeviceName },
+                clientPlatform = lanPlatform,
+            )
+        },
+        lanShareHostFactory = { repository, hostPreferences, settings, name ->
+            DesktopLanShareHost(repository, hostPreferences, settings, name, lanPlatform, appScope)
+        },
     )
 }
 

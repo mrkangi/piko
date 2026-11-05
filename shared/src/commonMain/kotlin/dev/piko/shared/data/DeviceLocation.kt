@@ -14,10 +14,18 @@ import io.github.nihildigit.pikpak.TaskPhase
 object DeviceLocation {
     const val ROOT_ID = "piko-device-root"
     const val SELF_ID = "piko-device:self"
+    private const val PEER_PREFIX = "piko-device:peer-"
 
     fun isDevice(id: String): Boolean = id == ROOT_ID || id.startsWith("piko-device:")
 
     fun isSelf(id: String): Boolean = id == SELF_ID
+
+    fun peerId(deviceId: String): String = PEER_PREFIX + deviceId
+
+    fun peerDeviceId(id: String): String? = id.removePrefix(PEER_PREFIX)
+        .takeIf { id.startsWith(PEER_PREFIX) && it.isNotEmpty() }
+
+    fun isPeer(id: String): Boolean = peerDeviceId(id) != null
 
     fun rootName(): String = tr("设备", "Devices", "デバイス", "기기", "裝置")
 
@@ -27,9 +35,13 @@ object DeviceLocation {
 
     fun selfCrumb(): PikoPathBreadcrumb = PikoPathBreadcrumb(SELF_ID, selfName())
 
+    fun peerCrumb(deviceId: String, name: String): PikoPathBreadcrumb = PikoPathBreadcrumb(peerId(deviceId), name)
+
     fun rootStat(): FileStat = stat(ROOT_ID, "", rootName())
 
     fun selfStat(): FileStat = stat(SELF_ID, ROOT_ID, selfName())
+
+    fun peerStat(deviceId: String, name: String): FileStat = stat(peerId(deviceId), ROOT_ID, name)
 
     private fun stat(id: String, parentId: String, name: String): FileStat = FileStat(
         id = id,
@@ -43,7 +55,8 @@ object DeviceLocation {
 
 /** 不是网盘真实条目的位置：本机挂载与设备节点。这些位置只读，也不能拿去请求服务端。 */
 object VirtualLocation {
-    fun isVirtual(id: String): Boolean = LocalLocation.isLocal(id) || DeviceLocation.isDevice(id)
+    fun isVirtual(id: String): Boolean =
+        LocalLocation.isLocal(id) || DeviceLocation.isDevice(id) || LanLocation.isLan(id)
 }
 
 val FileStat.isVirtual: Boolean get() = VirtualLocation.isVirtual(id)

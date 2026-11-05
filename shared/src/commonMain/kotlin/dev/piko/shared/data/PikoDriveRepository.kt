@@ -100,6 +100,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
@@ -108,6 +109,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.log.logFailure
+import dev.piko.shared.lan.LanShareRepository
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.emitAll
@@ -145,6 +147,7 @@ open class PikoDriveRepository(
     private val preferences: PikoUserPreferences? = null,
     private val cacheStore: PikoCacheStore? = null,
     private val treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
+    internal val lanShares: LanShareRepository? = null,
 ) {
     private val client get() = clientManager.currentClient.value ?: error("Not logged in")
 
@@ -501,6 +504,16 @@ open class PikoDriveRepository(
     /** 网盘里的改动，见 [DriveChange]。网盘页与目录图据此刷新受影响的那几层。 */
     val folderChanges: SharedFlow<DriveChange> = _folderChanges.asSharedFlow()
 
+    init {
+        lanShares?.let { shares ->
+            backgroundScope.launch {
+                shares.peers.collect {
+                    _folderChanges.tryEmit(DriveChange.ContentsChanged(setOf("", DeviceLocation.ROOT_ID)))
+                }
+            }
+        }
+    }
+
     /**
      * 仅将内存中的列表缓存标为过期并触发轻量哨兵探针对账，绝不抹除已持久化的完整 SQLite 本地文件树索引。
      * 供托盘唤醒窗口、同账号重连/令牌刷新等无需作废整棵本地树的场景调用。
@@ -618,6 +631,7 @@ open class PikoDriveRepository(
         runSuspendCatching {
             val asked = client
             devicePathTo(fileId)?.let { return@runSuspendCatching it }
+            lanPathTo(fileId, containing = true)?.let { return@runSuspendCatching it }
             LocalLocation.of(fileId)?.let { local ->
                 localMounts.find(fileId) ?: error("本地文件夹已取消挂载")
                 val localParent = local.parent
@@ -703,6 +717,7 @@ open class PikoDriveRepository(
     /** 本地目录从挂载宿主的真实路径拼接，不写入云端文件夹索引。 */
     fun knownLocalPath(folderId: String): List<PikoPathBreadcrumb>? {
         devicePathTo(folderId)?.let { return it }
+        lanPathTo(folderId, containing = false)?.let { return it }
         LocalLocation.of(folderId) ?: return null
         localMounts.findCached(folderId) ?: return null
         return devicePathTo(DeviceLocation.SELF_ID).orEmpty() + localMounts.cachedPathTo(folderId).orEmpty()
@@ -712,7 +727,49 @@ open class PikoDriveRepository(
     private fun devicePathTo(folderId: String): List<PikoPathBreadcrumb>? = when (folderId) {
         DeviceLocation.ROOT_ID -> listOf(ROOT_BREADCRUMB, DeviceLocation.rootCrumb())
         DeviceLocation.SELF_ID -> listOf(ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb())
+        else -> DeviceLocation.peerDeviceId(folderId)?.let { peerId ->
+            listOf(
+                ROOT_BREADCRUMB,
+                DeviceLocation.rootCrumb(),
+                DeviceLocation.peerCrumb(peerId, lanShares?.peerName(peerId) ?: peerId),
+            )
+        }
+    }
+
+    private fun lanPathTo(fileId: String, containing: Boolean): List<PikoPathBreadcrumb>? {
+        val location = LanLocation.of(fileId) ?: return null
+        if (containing) {
+            val parent = location.parent ?: return listOf(
+                ROOT_BREADCRUMB,
+                DeviceLocation.rootCrumb(),
+                DeviceLocation.peerCrumb(location.peerId, lanShares?.peerName(location.peerId) ?: location.peerId),
+            )
+            return lanShares?.cachedPathTo(parent)
+        }
+        return lanShares?.cachedPathTo(location)
+    }
+
+    private fun hasDeviceNodes(): Boolean =
+        localMounts.cachedRoots().isNotEmpty() || lanShares?.hasPeers() == true
+
+    private suspend fun virtualBrowsable(parentId: String, sortOrder: PikoFileSortOrder): List<FileStat>? = when {
+        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat()) + lanShares?.deviceNodes().orEmpty()
+        parentId == DeviceLocation.SELF_ID -> sortFiles(localMounts.roots(), sortOrder, parentId)
+        LocalLocation.isLocal(parentId) -> sortFiles(localMounts.list(parentId), sortOrder, parentId)
+        DeviceLocation.peerDeviceId(parentId) != null -> {
+            val peerId = DeviceLocation.peerDeviceId(parentId)!!
+            sortFiles(lanShares?.shareNodes(peerId).orEmpty(), sortOrder, parentId)
+        }
+        LanLocation.of(parentId) != null -> {
+            val location = LanLocation.of(parentId)!!
+            sortFiles(lanShares?.list(location).orEmpty(), sortOrder, parentId)
+        }
         else -> null
+    }
+
+    /** 信息流/瀑布流从局域网共享起步时，先让 host 建好整棵索引，后续逐层列目录不再逐目录发请求。 */
+    suspend fun prefetchLanIndex(folderId: String) {
+        lanShares?.prefetchIndexFor(folderId)
     }
 
     /** 信息流存盘的目录名与上级，只补索引的空缺，不用来改正路径栈，见 FolderIndex.seed。 */
@@ -1114,16 +1171,9 @@ open class PikoDriveRepository(
             return runSuspendCatching { virtualBrowsable(parentId, sortOrder) ?: emptyList() }
         }
         localMounts.all() // 先载入挂载表，根目录据此决定是否显示「设备」入口
+        lanShares?.ensureLoaded()
         val asked = clientManager.currentClient.value ?: return Result.failure(IllegalStateException(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入")))
         return listBrowsable(parentId, sortOrder, asked, vault)
-    }
-
-    /** 设备节点与本机挂载的列表。返回 null 表示这是真实网盘目录，交给云端列表处理。 */
-    private suspend fun virtualBrowsable(parentId: String, sortOrder: PikoFileSortOrder): List<FileStat>? = when {
-        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat())
-        parentId == DeviceLocation.SELF_ID -> sortFiles(localMounts.roots(), sortOrder, parentId)
-        LocalLocation.isLocal(parentId) -> sortFiles(localMounts.list(parentId), sortOrder, parentId)
-        else -> null
     }
 
     /** 遍历在打开时固定 client 和归档仓库；换号后不能继续拿新账号列旧目录。 */
@@ -1140,7 +1190,10 @@ open class PikoDriveRepository(
         requireActiveClient: Boolean = false,
     ): suspend (String) -> Result<List<FileStat>> = reader@{ folderId ->
         if (clientManager.currentClient.value !== asked && requireActiveClient) throw CancellationException("Account changed")
-        if (folderId.isEmpty()) localMounts.all()
+        if (folderId.isEmpty()) {
+            localMounts.all()
+            lanShares?.ensureLoaded()
+        }
         if (VirtualLocation.isVirtual(folderId)) {
             return@reader runSuspendCatching {
                 virtualBrowsable(folderId, PikoFileSortOrder.TIME_DESC) ?: emptyList()
@@ -1220,7 +1273,10 @@ open class PikoDriveRepository(
     ): Result<List<FileStat>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
-            if (parentId.isEmpty()) localMounts.all()
+            if (parentId.isEmpty()) {
+                localMounts.all()
+                lanShares?.ensureLoaded()
+            }
             if (VirtualLocation.isVirtual(parentId)) {
                 return@runSuspendCatching virtualBrowsable(parentId, sortOrder) ?: emptyList()
             }
@@ -1260,7 +1316,7 @@ open class PikoDriveRepository(
         sortOrder: PikoFileSortOrder,
     ): List<FileStat> {
         val visible = withVaultCovers(listing.filterNot { isPikoInternalFolder(it, folderId) || VaultStore.isRecoveryFile(it) }) +
-            if (folderId.isEmpty() && localMounts.cachedRoots().isNotEmpty()) listOf(DeviceLocation.rootStat()) else emptyList()
+            if (folderId.isEmpty() && hasDeviceNodes()) listOf(DeviceLocation.rootStat()) else emptyList()
         if (entries.isEmpty() && visible.none(VaultStore::looksLikeManifest)) return sortFiles(visible, sortOrder, folderId)
         val real = visible.filterNot(VaultStore::looksLikeManifest)
         val restoredMetadata = entries.filterNot { it.isArchived }
@@ -1821,7 +1877,10 @@ open class PikoDriveRepository(
         sortOrder: PikoFileSortOrder = PikoFileSortOrder.TIME_DESC,
     ): Result<Pair<List<FileStat>, String>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
-            if (parentId.isEmpty()) localMounts.all()
+            if (parentId.isEmpty()) {
+                localMounts.all()
+                lanShares?.ensureLoaded()
+            }
             if (VirtualLocation.isVirtual(parentId)) {
                 return@runSuspendCatching (virtualBrowsable(parentId, sortOrder) ?: emptyList()) to ""
             }
@@ -1841,7 +1900,10 @@ open class PikoDriveRepository(
         sortOrder: PikoFileSortOrder = PikoFileSortOrder.TIME_DESC,
     ): Result<List<FileStat>> = withContext(Dispatchers.Default) {
         runSuspendCatching {
-            if (parentId.isEmpty()) localMounts.all()
+            if (parentId.isEmpty()) {
+                localMounts.all()
+                lanShares?.ensureLoaded()
+            }
             if (VirtualLocation.isVirtual(parentId)) {
                 return@runSuspendCatching virtualBrowsable(parentId, sortOrder) ?: emptyList()
             }

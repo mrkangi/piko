@@ -21,6 +21,7 @@ data class LocalMount(
     val fallbackName: String,
     val createdAtMs: Long,
     val pinned: Boolean = false,
+    val lanShared: Boolean = false,
 ) {
     val location: LocalLocation get() = LocalLocation(mountId)
     fun toFileStat(thumbnailLink: String = "") = FileStat(id = location.id, name = fallbackName, parentId = DeviceLocation.SELF_ID,
@@ -152,6 +153,16 @@ class LocalMounts(
         if (entry.account != account()) return@withLock
         preferences?.saveLocalMounts(json.encodeToString(entries))
         cached = entries
+    }
+    suspend fun setLanShared(id: String, shared: Boolean) = lock.withLock {
+        val entry = find(id) ?: return@withLock
+        val entries = read().map {
+            if (it.account == entry.account && it.mountId == entry.mountId) it.copy(lanShared = shared) else it
+        }
+        if (entry.account != account()) return@withLock
+        preferences?.saveLocalMounts(json.encodeToString(entries))
+        cached = entries
+        changed(setOf(DeviceLocation.SELF_ID))
     }
     fun restoredStack(stack: List<PikoPathBreadcrumb>): List<PikoPathBreadcrumb> {
         val firstLocal = stack.indexOfFirst { LocalLocation.isLocal(it.id) }

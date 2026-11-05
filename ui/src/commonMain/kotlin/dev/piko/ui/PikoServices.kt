@@ -25,6 +25,10 @@ import dev.piko.shared.data.PreviewTempFolder
 import dev.piko.shared.data.TaskRepository
 import dev.piko.shared.download.PikoDownloadCoordinator
 import dev.piko.shared.download.RemoteDownloadCoordinator
+import dev.piko.shared.data.PikoDriveRepository
+import dev.piko.shared.lan.LanShareHost
+import dev.piko.shared.lan.LanShareRepository
+import dev.piko.shared.lan.LanShareSettings
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.state.ArchiveBrowser
 import dev.piko.shared.state.ArchiveExtractSession
@@ -74,6 +78,8 @@ class PikoServices(
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     deviceName: String = "Piko",
     platformName: String = "unknown",
+    lanSharesFactory: ((LanShareSettings, CoroutineScope) -> LanShareRepository?)? = null,
+    lanShareHostFactory: ((PikoDriveRepository, PikoUserPreferences, LanShareSettings, String) -> LanShareHost)? = null,
 ) {
     val memoryGovernor = dev.piko.shared.memory.PikoMemoryGovernor.Shared
 
@@ -90,14 +96,26 @@ class PikoServices(
     val preferences: PikoUserPreferences =
         cacheStore?.let { AccountScopedPreferences(platformPreferences, clientManager, it) } ?: platformPreferences
 
-    val driveRepository: DriveRepository = DriveRepository(clientManager, preferences, cacheStore, treeDatabaseFactory = treeDatabaseFactory).also {
+    val lanShareSettings = LanShareSettings(preferences, backgroundScope)
+    val lanShares: LanShareRepository? = lanSharesFactory?.invoke(lanShareSettings, backgroundScope)
+
+    val driveRepository: DriveRepository = DriveRepository(
+        clientManager,
+        preferences,
+        cacheStore,
+        treeDatabaseFactory = treeDatabaseFactory,
+        lanShares = lanShares,
+    ).also {
         val repository = it
         it.localMounts.access = localFileAccess?.invoke { folder ->
             repository.applyChange(dev.piko.shared.data.DriveChange.ContentsChanged(setOf(folder)))
         }
         mediaRepository.localMounts = it.localMounts
+        mediaRepository.lanShares = lanShares
         mediaRepository.metadataSink = it.metadataSink
     }
+    val lanShareHost: LanShareHost? = lanShareHostFactory?.invoke(driveRepository, preferences, lanShareSettings, deviceName)
+        ?.also { it.start() }
     val remoteDownloads: RemoteDownloadCoordinator = RemoteDownloadCoordinator(
         clients = clientManager,
         driveRepo = driveRepository,

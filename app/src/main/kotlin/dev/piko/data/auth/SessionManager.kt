@@ -144,6 +144,7 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val PER_FOLDER_SORT_ENABLED = booleanPreferencesKey("per_folder_sort_enabled")
         val FOLDER_SORT_ORDERS = stringPreferencesKey("folder_sort_orders")
         val LOCAL_MOUNTS = stringPreferencesKey("local_mounts")
+        val LAN_SHARE_SETTINGS = stringPreferencesKey("lan_share_settings")
         val GALLERY_SHOW_IMAGES = booleanPreferencesKey("gallery_show_images")
         val BATCH_RENAME = stringPreferencesKey("batch_rename")
         val VAULT_ARCHIVE_OPTIONS = stringPreferencesKey("vault_archive_options")
@@ -607,6 +608,11 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     override val localMountsFlow: Flow<String> = preference { it[PreferencesKeys.LOCAL_MOUNTS].orEmpty() }
     override suspend fun saveLocalMounts(serialized: String) {
         context.dataStore.edit { it[PreferencesKeys.LOCAL_MOUNTS] = serialized }
+    }
+
+    override val lanShareSettingsFlow: Flow<String> = preference { it[PreferencesKeys.LAN_SHARE_SETTINGS].orEmpty() }
+    override suspend fun saveLanShareSettings(serialized: String) {
+        context.dataStore.edit { it[PreferencesKeys.LAN_SHARE_SETTINGS] = serialized }
     }
 
     override val batchRenameFlow: Flow<String> = preference { it[PreferencesKeys.BATCH_RENAME].orEmpty() }

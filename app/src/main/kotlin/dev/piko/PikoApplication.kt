@@ -31,6 +31,7 @@ import dev.piko.shared.download.PikoDownloadCoordinator
 import dev.piko.shared.i18n.PikoLocale
 import dev.piko.shared.log.LogLevel
 import dev.piko.shared.log.PikoLog
+import dev.piko.shared.lan.LanShareRepository
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.memory.MemoryPolicy
@@ -187,6 +188,16 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             },
             deviceName = "${Build.MODEL} · Android",
             platformName = "android",
+            lanSharesFactory = { settings, scope ->
+                LanShareRepository(
+                    http = HttpClient(OkHttp),
+                    settings = settings,
+                    scope = scope,
+                    clientDeviceId = { sessionManager.loadOrCreateRemoteDeviceId() },
+                    clientName = { "${Build.MODEL} · Android" },
+                    clientPlatform = "android",
+                )
+            },
         )
         appScope.launch {
             sessionManager.remoteDownloadEnabledFlow.distinctUntilChanged().collect { enabled ->

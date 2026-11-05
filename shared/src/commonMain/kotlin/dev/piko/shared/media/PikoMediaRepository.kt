@@ -180,8 +180,14 @@ class PikoMediaRepository(
      */
     var leaseFolder: (suspend (PikPakClient) -> String)? = null
     var localMounts: dev.piko.shared.data.LocalMounts? = null
+    var lanShares: dev.piko.shared.lan.LanShareRepository? = null
     var metadataSink: dev.piko.shared.data.DriveMetadataSink? = null
-    suspend fun localPath(fileId: String, subtitle: Boolean = false): String? = localMounts?.resolve(fileId, subtitle)
+    suspend fun localPath(fileId: String, subtitle: Boolean = false): String? {
+        if (dev.piko.shared.data.LanLocation.isLan(fileId)) {
+            return if (subtitle) lanShares?.streamUrl(fileId) else null
+        }
+        return localMounts?.resolve(fileId, subtitle)
+    }
 
     /** 下载调度器提供；原画播放与完整下载共用缓存，转码片段仍用 ClipCache。 */
     var fileCachePool: PikoFileCachePool? = null
@@ -215,11 +221,44 @@ class PikoMediaRepository(
     suspend fun prepareMedia(fileId: String, preferredResolution: String? = null): Result<PlayableMediaInfo> =
         withContext(Dispatchers.Default) {
             runSuspendCatching {
+                lanShares?.let { shares ->
+                    dev.piko.shared.data.LanLocation.of(fileId)?.let { location ->
+                        return@runSuspendCatching lanPlayableInfo(shares, location)
+                    }
+                }
                 val detail = detailOf(client, fileId)
                 val resolved = detail.resolveVariant(preferenceFor(preferredResolution))
                 playableMediaInfo(detail, resolved, fileId)
             }
         }
+
+    private suspend fun lanPlayableInfo(
+        shares: dev.piko.shared.lan.LanShareRepository,
+        location: dev.piko.shared.data.LanLocation,
+    ): PlayableMediaInfo {
+        val file = shares.probe(location)
+            ?: throw dev.piko.shared.lan.LanShareException(
+                tr("局域网主机未返回文件信息", "The LAN host did not return file information", "LAN ホストがファイル情報を返しませんでした", "LAN 호스트가 파일 정보를 반환하지 않았습니다", "區域網路主機未傳回檔案資訊"),
+            )
+        val url = shares.streamUrl(location)
+            ?: throw dev.piko.shared.lan.LanShareException(
+                tr("局域网主机已离线", "The LAN host is offline", "LAN ホストがオフラインです", "LAN 호스트가 오프라인입니다", "區域網路主機已離線"),
+            )
+        return PlayableMediaInfo(
+            fileId = file.id,
+            name = file.name,
+            gcid = "",
+            currentUrl = url,
+            durationSeconds = file.params["duration"]?.toDoubleOrNull()?.toLong() ?: 0L,
+            currentResolution = "",
+            availableVariants = emptyList(),
+            sizeBytes = file.sizeBytes,
+            kind = mediaKindOf(file.name),
+            width = file.params["width"]?.toIntOrNull() ?: 0,
+            height = file.params["height"]?.toIntOrNull() ?: 0,
+            isOrigin = true,
+        )
+    }
 
     /**
      * 获取文件的下载直链（含归档条目或压缩包内条目的按需借出直链）。
@@ -227,6 +266,7 @@ class PikoMediaRepository(
     suspend fun fetchDownloadUrl(fileId: String): Result<String> =
         withContext(Dispatchers.Default) {
             runSuspendCatching {
+                lanShares?.streamUrl(fileId)?.let { return@runSuspendCatching it }
                 val detail = detailOf(client, fileId)
                 detail.downloadUrl?.takeIf { it.isNotBlank() } ?: error(tr("未获取到下载链接", "Download link unavailable", "ダウンロードリンクを取得できません", "다운로드 링크를 가져올 수 없습니다", "無法取得下載連結"))
             }
@@ -250,6 +290,12 @@ class PikoMediaRepository(
         withContext(Dispatchers.Default) {
             runSuspendCatching {
                 val client = client
+                lanShares?.let { shares ->
+                    dev.piko.shared.data.LanLocation.of(fileId)?.let { location ->
+                        val info = lanPlayableInfo(shares, location)
+                        return@runSuspendCatching PreparedPlayback(info, null)
+                    }
+                }
                 // 本机下了一部分的原画不费流量，照样先用，画质上限是为了省流量
                 if (preferredResolution.isNullOrBlank() || preferredResolution == ORIGINAL_QUALITY) {
                     partialSource(client, fileId)?.let { (task, source) ->
@@ -298,6 +344,21 @@ class PikoMediaRepository(
         withContext(Dispatchers.Default) {
             runSuspendCatching {
                 val client = client
+                lanShares?.let { shares ->
+                    dev.piko.shared.data.LanLocation.of(fileId)?.let { location ->
+                        val file = shares.probe(location)
+                        val durationMs = file?.params?.get("duration")?.toDoubleOrNull()?.let { (it * 1000).toLong() }
+                        val size = file?.sizeBytes ?: 0L
+                        val bytesPerMs = if (durationMs != null && durationMs > 0) size.toDouble() / durationMs else 0.0
+                        return@runSuspendCatching PreparedClip(
+                            null,
+                            fallbackUrl = shares.streamUrl(location),
+                            sliced = false,
+                            clipStartMs = startMs,
+                            bytesPerMs = bytesPerMs,
+                        )
+                    }
+                }
                 if (dev.piko.shared.data.LocalLocation.isLocal(fileId)) {
                     val path = requireNotNull(localPath(fileId)) { "本机文件夹不可访问" }
                     return@runSuspendCatching PreparedClip(null, path, false, startMs, 0.0,
@@ -396,6 +457,15 @@ class PikoMediaRepository(
     suspend fun clipProbe(fileId: String): ClipProbe =
         withContext(Dispatchers.Default) {
             runSuspendCatching {
+                lanShares?.let { shares ->
+                    dev.piko.shared.data.LanLocation.of(fileId)?.let { location ->
+                        val file = shares.probe(location)
+                        return@runSuspendCatching ClipProbe(
+                            hasTranscode = false,
+                            durationMs = file?.params?.get("duration")?.toDoubleOrNull()?.let { (it * 1000).toLong() },
+                        )
+                    }
+                }
                 if (dev.piko.shared.data.LocalLocation.isLocal(fileId)) {
                     val file = localMounts?.probe(fileId)
                     return@runSuspendCatching ClipProbe(false, file?.params?.get("duration")?.toDoubleOrNull()?.let { (it * 1000).toLong() })
@@ -622,7 +692,7 @@ class PikoMediaRepository(
      */
     suspend fun reportPlay(fileId: String, positionMillis: Long, durationMillis: Long) {
         // 归档条目与压缩包里的文件在网盘里没有常驻的文件，播放历史记不上；续播位置照样记在本机
-        if (dev.piko.shared.data.LocalLocation.isLocal(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId) || positionMillis <= 0L || durationMillis <= 0L) return
+        if (dev.piko.shared.data.VirtualLocation.isVirtual(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId) || positionMillis <= 0L || durationMillis <= 0L) return
         withContext(Dispatchers.Default) {
             runSuspendCatching {
                 if (isPlayHistorySynced()) client.reportPlay(fileId, positionMillis / 1000, durationMillis / 1000)
@@ -635,7 +705,7 @@ class PikoMediaRepository(
      * 服务端不能按文件查，只看第一页（最近播放的 100 条）：从历史里点进来的一定在里面，更早的就算了。
      */
     suspend fun cloudPlaybackPosition(fileId: String): Long? {
-        if (dev.piko.shared.data.LocalLocation.isLocal(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId)) return null
+        if (dev.piko.shared.data.VirtualLocation.isVirtual(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId)) return null
         // 读偏好也包在里面：这只是续播的参考，任何一步失败都不该挡住开播
         return withContext(Dispatchers.Default) {
             runSuspendCatching {
