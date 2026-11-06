@@ -13,6 +13,7 @@
     <!-- 应用内更新：经 PackageInstaller 安装从 GitHub Releases 下载的新版本 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- 局域网共享与 SMB 回环流都是明文 HTTP（127.0.0.1 / 私有网段），系统默认策略会拦掉图片加载与部分播放器请求。 -->
     <application
         android:name=".PikoApplication"
         android:allowBackup="false"
@@ -24,6 +25,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Piko">
 
         <activity

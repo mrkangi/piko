@@ -64,6 +64,15 @@ class DesktopSessionStore(
     override suspend fun saveArchivePasswords(account: String, serialized: String) =
         update(account) { it.copy(archivePasswords = serialized.ifEmpty { null }) }
 
+    override suspend fun loadLocalMountPassword(account: String, mountId: String): String? =
+        secrets(account).localMountPasswords[mountId]
+
+    override suspend fun saveLocalMountPassword(account: String, mountId: String, password: String) =
+        update(account) { it.copy(localMountPasswords = it.localMountPasswords + (mountId to password)) }
+
+    override suspend fun clearLocalMountPassword(account: String, mountId: String) =
+        update(account) { it.copy(localMountPasswords = it.localMountPasswords - mountId) }
+
     override suspend fun loadAccounts(): SavedAccounts = locked { readAccountsFile() ?: legacyAccounts ?: SavedAccounts() }
 
     override suspend fun saveAccounts(accounts: SavedAccounts) = locked {
@@ -198,14 +207,15 @@ class DesktopSessionStore(
     }
 }
 
-/** 退出登录只清 [session] 与 [password]，[archivePasswords] 留着，这一份随之不为空、不删。 */
+/** 退出登录只清 [session] 与 [password]，[archivePasswords] 与 [localMountPasswords] 留着，这一份随之不为空、不删。 */
 @Serializable
 internal data class AccountSecrets(
     val session: Session? = null,
     val password: String? = null,
     val archivePasswords: String? = null,
+    val localMountPasswords: Map<String, String> = emptyMap(),
 ) {
-    val isEmpty: Boolean get() = session == null && password == null && archivePasswords == null
+    val isEmpty: Boolean get() = session == null && password == null && archivePasswords == null && localMountPasswords.isEmpty()
 }
 
 /** 账号名可能是邮箱或手机号，不直接进文件名与钥匙串属性，取其摘要。 */

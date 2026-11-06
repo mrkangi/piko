@@ -226,6 +226,7 @@ class PikoMediaRepository(
                         return@runSuspendCatching lanPlayableInfo(shares, location)
                     }
                 }
+                smbPlayableInfo(fileId)?.let { return@runSuspendCatching it }
                 val detail = detailOf(client, fileId)
                 val resolved = detail.resolveVariant(preferenceFor(preferredResolution))
                 playableMediaInfo(detail, resolved, fileId)
@@ -260,12 +261,34 @@ class PikoMediaRepository(
         )
     }
 
+    private suspend fun smbPlayableInfo(fileId: String): PlayableMediaInfo? {
+        val mounts = localMounts ?: return null
+        val url = mounts.streamUrl(fileId) ?: return null
+        val file = mounts.probe(fileId)
+        val name = file?.name ?: fileId.substringAfterLast('/').ifBlank { "SMB" }
+        return PlayableMediaInfo(
+            fileId = fileId,
+            name = name,
+            gcid = "",
+            currentUrl = url,
+            durationSeconds = file?.params?.get("duration")?.toDoubleOrNull()?.toLong() ?: 0L,
+            currentResolution = "",
+            availableVariants = emptyList(),
+            sizeBytes = file?.sizeBytes ?: 0L,
+            kind = mediaKindOf(name),
+            width = file?.params?.get("width")?.toIntOrNull() ?: 0,
+            height = file?.params?.get("height")?.toIntOrNull() ?: 0,
+            isOrigin = true,
+        )
+    }
+
     /**
      * 获取文件的下载直链（含归档条目或压缩包内条目的按需借出直链）。
      */
     suspend fun fetchDownloadUrl(fileId: String): Result<String> =
         withContext(Dispatchers.Default) {
             runSuspendCatching {
+                localMounts?.streamUrl(fileId)?.let { return@runSuspendCatching it }
                 lanShares?.streamUrl(fileId)?.let { return@runSuspendCatching it }
                 val detail = detailOf(client, fileId)
                 detail.downloadUrl?.takeIf { it.isNotBlank() } ?: error(tr("未获取到下载链接", "Download link unavailable", "ダウンロードリンクを取得できません", "다운로드 링크를 가져올 수 없습니다", "無法取得下載連結"))
@@ -295,6 +318,9 @@ class PikoMediaRepository(
                         val info = lanPlayableInfo(shares, location)
                         return@runSuspendCatching PreparedPlayback(info, null)
                     }
+                }
+                smbPlayableInfo(fileId)?.let { info ->
+                    return@runSuspendCatching PreparedPlayback(info, null)
                 }
                 // 本机下了一部分的原画不费流量，照样先用，画质上限是为了省流量
                 if (preferredResolution.isNullOrBlank() || preferredResolution == ORIGINAL_QUALITY) {
@@ -358,6 +384,23 @@ class PikoMediaRepository(
                             bytesPerMs = bytesPerMs,
                         )
                     }
+                }
+                val mounts = localMounts
+                mounts?.streamUrl(fileId)?.let { url ->
+                    val file = mounts.probe(fileId)
+                    val durationMs = file?.params?.get("duration")?.toDoubleOrNull()?.let { (it * 1000).toLong() }
+                    val bytesPerMs = if (durationMs != null && durationMs > 0) {
+                        file.sizeBytes.toDouble() / durationMs
+                    } else {
+                        0.0
+                    }
+                    return@runSuspendCatching PreparedClip(
+                        stream = null,
+                        fallbackUrl = url,
+                        sliced = false,
+                        clipStartMs = startMs,
+                        bytesPerMs = bytesPerMs,
+                    )
                 }
                 if (dev.piko.shared.data.LocalLocation.isLocal(fileId)) {
                     val path = requireNotNull(localPath(fileId)) { "本机文件夹不可访问" }

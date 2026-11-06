@@ -81,6 +81,7 @@ import dev.piko.shared.log.LogLevel
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
+import dev.piko.shared.smb.SmbFileAccess
 import dev.piko.shared.memory.PikoMemoryGovernor
 import dev.piko.shared.memory.cacheBudget
 import dev.piko.shared.net.PikoProxySelector
@@ -638,8 +639,9 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
     // 进程级作用域，与 Android 的 appScope 对应：下载与会话刷新不随某个窗口的组合结束
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val desktopTransportBudget = (Runtime.getRuntime().maxMemory() / 8L).coerceAtMost(512L * 1024 * 1024)
+    val sessionStore = desktopSessionStore()
     val clientManager = PikoClientManager(
-        sessionStore = desktopSessionStore(),
+        sessionStore = sessionStore,
         scope = appScope,
         transportMemoryBudgetBytes = PikoMemoryGovernor.Shared.policy.value.cacheBudget(desktopTransportBudget),
     )
@@ -681,6 +683,10 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         ),
         uploadSources = DesktopPikoUploadSources(),
         localFileAccess = { changed -> DesktopLocalFileAccess(appScope, changed) },
+        smbFileAccess = SmbFileAccess { mount ->
+            sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
+        },
+        localMountSecrets = sessionStore,
         cacheStore = cacheStore,
         treeDatabaseFactory = dev.piko.shared.data.DesktopPikoTreeDatabaseFactory(),
         syncCipher = JvmSyncCipher(),

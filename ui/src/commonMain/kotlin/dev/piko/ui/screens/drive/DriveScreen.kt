@@ -1,6 +1,8 @@
 package dev.piko.ui.screens.drive
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
@@ -14,6 +16,8 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +32,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.focus.FocusRequester
@@ -92,9 +97,12 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.LocalShowExtensions
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PanelAnchor
+import dev.piko.ui.components.PikoDialog
+import dev.piko.ui.components.PikoDialogConfirm
 import dev.piko.ui.components.RemoteDownloadDialog
 import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
+import dev.piko.ui.components.SmbMountDialog
 import dev.piko.ui.components.pageFocusTarget
 import dev.piko.ui.components.previewImageCoverUrl
 import dev.piko.ui.components.rememberDownloadLauncher
@@ -433,10 +441,52 @@ fun DriveScreen(
     val pickFiles = platform.uploadPicker.rememberFilesLauncher { viewModel.upload(UploadSelection(files = it), latestActiveFolder) }
     val pickFolder = platform.uploadPicker.rememberFolderLauncher { viewModel.upload(UploadSelection(folders = listOf(it)), latestActiveFolder) }
     val pickLocalFolder = platform.rememberLocalFolderLauncher { path, name -> viewModel.completeLocalMount(path, name) }
-    val mountAction = pickLocalFolder?.let { launch ->
-        SheetAction(Icons.Outlined.Storage, tr("挂载本地文件夹", "Mount local folder", "ローカルフォルダーをマウント", "로컬 폴더 마운트", "掛載本機資料夾"), {
-            if (viewModel.beginLocalMount(latestActiveFolder.id)) launch()
-        }, group = ActionGroup.Create)
+    var showMountChooser by remember { mutableStateOf(false) }
+    var showSmbMount by remember { mutableStateOf(false) }
+    val mountAction = SheetAction(
+        Icons.Outlined.Storage,
+        tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄"),
+        { showMountChooser = true },
+        group = ActionGroup.Create,
+    )
+    if (showMountChooser) {
+        PikoDialog(
+            onDismissRequest = { showMountChooser = false },
+            confirmButton = {
+                TextButton(onClick = { showMountChooser = false }) {
+                    Text(tr("取消", "Cancel", "キャンセル", "취소", "取消"))
+                }
+            },
+            title = { Text(tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PikoDialogConfirm(
+                        label = tr("本地文件夹", "Local folder", "ローカルフォルダー", "로컬 폴더", "本機資料夾"),
+                        enabled = pickLocalFolder != null,
+                        onClick = {
+                            showMountChooser = false
+                            if (pickLocalFolder != null && viewModel.beginLocalMount(latestActiveFolder.id)) pickLocalFolder()
+                        },
+                    )
+                    PikoDialogConfirm(
+                        label = tr("SMB 共享", "SMB share", "SMB 共有", "SMB 공유", "SMB 共用"),
+                        onClick = {
+                            showMountChooser = false
+                            showSmbMount = true
+                        },
+                    )
+                }
+            },
+        )
+    }
+    if (showSmbMount) {
+        SmbMountDialog(
+            onDismiss = { showSmbMount = false },
+            onTest = viewModel::testSmb,
+            onMount = { info, name, password ->
+                viewModel.mountSmb(info, name, password)
+            },
+        )
     }
 
     val desktopWorkspace = workspace as? DriveWorkspace
@@ -695,6 +745,7 @@ private fun DriveScreenContent(
     val snackbarHostState = runtime.snackbarHostState
 
     val platform = LocalPikoPlatform.current
+    val services = LocalPikoServices.current
     val scope = rememberCoroutineScope()
     val desktop = isDesktopLayout()
     val pathInTopBar = desktop
@@ -987,6 +1038,9 @@ private fun DriveScreenContent(
             }
             file.isPlayableVideo() -> latestEvents.onNavigateToPlayer(file, currentFiles.filter { it.isPlayableVideo() && (!it.isImportPreview || it.hash.isNotBlank()) })
             file.isPreviewableImage() && file.previewImageCoverUrl().isNotBlank() -> latestEvents.onRequestImagePreview(file)
+            file.isLocal && file.params["local_kind"] == "smb" -> scope.launch {
+                services.driveRepository.localMounts.streamUrl(file.id)?.let(platform::openUrl)
+            }
             file.isLocal -> platform.localFiles.openExternally(file.params["local_path"].orEmpty(), false)
             else -> latestEvents.onRequestDownload(listOf(file), false)
         }

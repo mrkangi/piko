@@ -48,6 +48,12 @@ kotlin {
                 implementation(libs.sqlite.jdbc)
             }
         }
+        val jvmSharedMain by getting {
+            dependencies {
+                implementation(libs.smbj)
+                runtimeOnly(libs.slf4j.nop)
+            }
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
         }

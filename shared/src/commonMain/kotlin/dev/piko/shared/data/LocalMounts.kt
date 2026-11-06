@@ -14,6 +14,54 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 @Serializable
+enum class LocalMountKind { LOCAL, SMB }
+
+/** SMB2/3 共享的只读位置。密码不在这里，按设备与挂载 ID 存进平台机密存储。 */
+@Serializable
+data class SmbMountInfo(
+    val host: String,
+    val port: Int = 445,
+    val share: String,
+    val path: String = "",
+    val domain: String = "",
+    val username: String = "",
+) {
+    init {
+        require(host.isNotBlank() && host.none { it == '/' || it == '\\' })
+        require(port in 1..65535)
+        require(share.isNotBlank() && share.none { it == '/' || it == '\\' })
+        require(path.replace('\\', '/').split('/').none { it == "." || it == ".." })
+    }
+
+    val normalizedPath: String get() = path.replace('\\', '/').trim('/')
+    val authority: String get() = if (port == 445) host else "$host:$port"
+    val displayPath: String get() = "smb://$authority/$share" + normalizedPath.takeIf { it.isNotEmpty() }?.let { "/$it" }.orEmpty()
+    val defaultName: String get() = normalizedPath.substringAfterLast('/', share).ifBlank { share }
+
+    companion object {
+        /** 输入框允许粘贴 `smb://host/share/path` 或 `\\\\host\\share`，拆成 host/share/path 三部分。 */
+        fun parse(raw: String): SmbMountInfo? {
+            val text = raw.trim()
+            if (text.isEmpty()) return null
+            var rest = text.removePrefix("smb://").removePrefix("\\\\")
+            if (rest.isEmpty()) return null
+            val hostEnd = rest.indexOfFirst { it == '/' || it == '\\' }
+            val hostPart = if (hostEnd < 0) rest else rest.take(hostEnd)
+            rest = if (hostEnd < 0) "" else rest.drop(hostEnd + 1)
+            val host = hostPart.substringBefore(':').trim()
+            val port = hostPart.substringAfter(':', "445").toIntOrNull() ?: 445
+            if (host.isBlank()) return null
+            val parts = rest.split('/', '\\').filter { it.isNotEmpty() }
+            val share = parts.firstOrNull()?.trim().orEmpty()
+            if (share.isEmpty()) return null
+            return runCatching {
+                SmbMountInfo(host = host, port = port, share = share, path = parts.drop(1).joinToString("/"))
+            }.getOrNull()
+        }
+    }
+}
+
+@Serializable
 data class LocalMount(
     val mountId: String,
     val account: String,
@@ -22,15 +70,28 @@ data class LocalMount(
     val createdAtMs: Long,
     val pinned: Boolean = false,
     val lanShared: Boolean = false,
+    val kind: LocalMountKind = LocalMountKind.LOCAL,
+    val smb: SmbMountInfo? = null,
 ) {
+    val isSmb: Boolean get() = kind == LocalMountKind.SMB
     val location: LocalLocation get() = LocalLocation(mountId)
     fun toFileStat(thumbnailLink: String = "") = FileStat(id = location.id, name = fallbackName, parentId = DeviceLocation.SELF_ID,
         kind = io.github.nihildigit.pikpak.FileKind.FOLDER, thumbnailLink = thumbnailLink,
-        params = mapOf("local_path" to localRootUriOrPath),
+        params = buildMap {
+            put("local_path", localRootUriOrPath)
+            if (isSmb) put("local_kind", "smb")
+        },
         createdTime = kotlin.time.Instant.fromEpochMilliseconds(createdAtMs).toString())
 }
 
 data class LocalMountOutcome(val mount: LocalMount, val alreadyMounted: Boolean)
+
+/** 挂载密码的设备级保管处，不进入网盘同步。实现按账号与挂载 ID 存取。 */
+interface LocalMountSecrets {
+    suspend fun loadLocalMountPassword(account: String, mountId: String): String? = null
+    suspend fun saveLocalMountPassword(account: String, mountId: String, password: String) {}
+    suspend fun clearLocalMountPassword(account: String, mountId: String) {}
+}
 
 /** 将存储的本机路径或 Android SAF URI 转换为适合在属性面板展示的人类可读路径。 */
 fun formatLocalPathForDisplay(raw: String): String {
@@ -73,10 +134,16 @@ private fun decodePercentUtf8(encoded: String): String {
 }
 /** 平台文件访问只提供读取，不暴露任何磁盘写操作。媒体缓存写入由实现封装在应用缓存目录中。 */
 interface LocalFileAccess {
+    fun attachMounts(mounts: LocalMounts) {}
     suspend fun list(mount: LocalMount, location: LocalLocation): List<FileStat>
     suspend fun playbackPath(mount: LocalMount, location: LocalLocation): String
     suspend fun subtitlePath(mount: LocalMount, location: LocalLocation): String = playbackPath(mount, location)
     suspend fun probe(mount: LocalMount, location: LocalLocation): FileStat?
+    /** 只能经本机回环 HTTP 读取的来源（SMB）给出 URL；本地路径来源返回 null。 */
+    suspend fun streamUrl(mount: LocalMount, location: LocalLocation): String? = null
+    /** 给挂载对话框做连接测试；不支持网络挂载的来源抛异常或返回。 */
+    suspend fun testSmb(info: SmbMountInfo, password: String) {}
+    fun closeMount(mountId: String) {}
     fun folderCover(mount: LocalMount, location: LocalLocation = mount.location): String = ""
     fun cancelPending() {}
 }
@@ -91,6 +158,7 @@ class LocalMounts(
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     var access: LocalFileAccess? = null
+    var secrets: LocalMountSecrets? = null
     private val state = kotlinx.coroutines.flow.MutableStateFlow<List<LocalMount>>(emptyList())
     val flow: kotlinx.coroutines.flow.StateFlow<List<LocalMount>> = state
     private var cached: List<LocalMount>
@@ -127,6 +195,57 @@ class LocalMounts(
     suspend fun roots(): List<FileStat> = all().map(::toRootStat)
     suspend fun mount(path: String, name: String): LocalMount =
         mountOrExisting(path, name).mount
+
+    suspend fun mountSmb(info: SmbMountInfo, name: String, password: String): LocalMountOutcome = lock.withLock {
+        require(info.host.isNotBlank() && info.share.isNotBlank())
+        val owner = requireNotNull(account())
+        val currentEntries = read()
+        val remotePath = info.displayPath
+        val existing = currentEntries.firstOrNull {
+            it.account == owner && it.localRootUriOrPath == remotePath
+        }
+        if (existing != null) {
+            if (existing.isSmb && password.isNotEmpty()) {
+                requireNotNull(secrets) { dev.piko.shared.i18n.tr("挂载密码保管处不可用", "Mount password storage is unavailable", "マウントパスワードを保存できません", "마운트 비밀번호를 저장할 수 없습니다", "無法儲存掛載密碼") }
+                    .saveLocalMountPassword(owner, existing.mountId, password)
+                runCatching { access?.closeMount(existing.mountId) }
+            }
+            cached = currentEntries
+            return@withLock LocalMountOutcome(existing, alreadyMounted = true)
+        }
+        val entry = LocalMount(
+            mountId = Uuid.random().toString(),
+            account = owner,
+            localRootUriOrPath = remotePath,
+            fallbackName = name.ifBlank { info.defaultName },
+            createdAtMs = Clock.System.now().toEpochMilliseconds(),
+            kind = LocalMountKind.SMB,
+            smb = info.copy(path = info.normalizedPath),
+        )
+        val entries = currentEntries + entry
+        check(owner == account())
+        requireNotNull(preferences).saveLocalMounts(json.encodeToString(entries))
+        try {
+            if (password.isNotEmpty()) {
+                requireNotNull(secrets) { dev.piko.shared.i18n.tr("挂载密码保管处不可用", "Mount password storage is unavailable", "マウントパスワードを保存できません", "마운트 비밀번호를 저장할 수 없습니다", "無法儲存掛載密碼") }
+                    .saveLocalMountPassword(owner, entry.mountId, password)
+            }
+        } catch (error: Throwable) {
+            val rolledBack = currentEntries
+            runCatching { requireNotNull(preferences).saveLocalMounts(json.encodeToString(rolledBack)) }
+            cached = rolledBack
+            throw error
+        }
+        cached = entries
+        changed(setOf(DeviceLocation.SELF_ID))
+        LocalMountOutcome(entry, alreadyMounted = false)
+    }
+
+    suspend fun testSmb(info: SmbMountInfo, password: String) {
+        requireNotNull(access) {
+            dev.piko.shared.i18n.tr("网络挂载不可用", "Network mounts are unavailable", "ネットワークマウントを利用できません", "네트워크 마운트를 사용할 수 없습니다", "網路掛載無法使用")
+        }.testSmb(info, password)
+    }
 
     suspend fun mountOrExisting(path: String, name: String): LocalMountOutcome = lock.withLock {
         require(path.isNotBlank())
@@ -180,6 +299,8 @@ class LocalMounts(
         val entries = read().filterNot { it.mountId == entry.mountId && it.account == entry.account }
         if (entry.account != account()) return@withLock
         preferences?.saveLocalMounts(json.encodeToString(entries))
+        runCatching { access?.closeMount(entry.mountId) }
+        runCatching { secrets?.clearLocalMountPassword(entry.account, entry.mountId) }
         cached = entries
         changed(setOf(DeviceLocation.SELF_ID, entry.location.id))
     }
@@ -192,7 +313,18 @@ class LocalMounts(
         val location = LocalLocation.of(id) ?: return null
         val mount = find(id) ?: error("本地文件夹已取消挂载")
         val reader = requireNotNull(access) { "本机文件夹不可访问" }
+        if (mount.isSmb) {
+            if (!subtitle) return null
+            return safeRead { reader.streamUrl(mount, location) }
+        }
         return safeRead { if (subtitle) reader.subtitlePath(mount, location) else reader.playbackPath(mount, location) }
+    }
+
+    suspend fun streamUrl(id: String): String? {
+        val location = LocalLocation.of(id) ?: return null
+        val mount = find(id) ?: return null
+        if (!mount.isSmb) return null
+        return safeRead { access?.streamUrl(mount, location) }
     }
     suspend fun probe(id: String): FileStat? {
         val location = LocalLocation.of(id) ?: return null
@@ -205,7 +337,7 @@ class LocalMounts(
     } catch (cancel: kotlinx.coroutines.CancellationException) {
         throw cancel
     } catch (_: Exception) {
-        throw IllegalStateException(dev.piko.shared.i18n.tr("本机文件夹不可访问", "Local folder is unavailable", "ローカルフォルダーにアクセスできません", "로컬 폴더에 액세스할 수 없습니다", "本機資料夾無法存取"))
+        throw IllegalStateException(dev.piko.shared.i18n.tr("文件夹不可访问", "Folder is unavailable", "フォルダーにアクセスできません", "폴더에 접근할 수 없습니다", "資料夾無法存取"))
     }
     suspend fun pathTo(id: String): List<PikoPathBreadcrumb>? {
         val location = LocalLocation.of(id) ?: return null

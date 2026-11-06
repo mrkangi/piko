@@ -24,10 +24,40 @@ import kotlin.io.encoding.Base64
 import kotlin.test.*
 
 class LocalMountsTest {
-    private fun preferences(): PikoUserPreferences = object : PikoUserPreferences by MemoryPreferences() {
+    private class TestPreferences : PikoUserPreferences by MemoryPreferences() {
         val mounts = MutableStateFlow("")
         override val localMountsFlow = mounts
         override suspend fun saveLocalMounts(serialized: String) { mounts.value = serialized }
+    }
+
+    private fun preferences(): TestPreferences = TestPreferences()
+
+    private class TestSecrets : LocalMountSecrets {
+        val passwords = mutableMapOf<Pair<String, String>, String>()
+        override suspend fun loadLocalMountPassword(account: String, mountId: String) = passwords[account to mountId]
+        override suspend fun saveLocalMountPassword(account: String, mountId: String, password: String) {
+            passwords[account to mountId] = password
+        }
+        override suspend fun clearLocalMountPassword(account: String, mountId: String) {
+            passwords.remove(account to mountId)
+        }
+    }
+
+    @Test fun smbPasswordStaysOutOfTheMountTableAndIsClearedOnUnmount() = smoke { scope ->
+        val preferences = preferences()
+        val secrets = TestSecrets()
+        val mounts = LocalMounts(preferences, { "account-a" }, {}, scope).apply { this.secrets = secrets }
+        val outcome = mounts.mountSmb(
+            SmbMountInfo(host = "nas", share = "media", path = "Movies"),
+            name = "NAS",
+            password = "hunter2",
+        )
+        assertTrue(outcome.mount.isSmb)
+        assertEquals("smb://nas/media/Movies", outcome.mount.localRootUriOrPath)
+        assertFalse(preferences.mounts.value.contains("hunter2"))
+        assertEquals("hunter2", secrets.passwords["account-a" to outcome.mount.mountId])
+        mounts.unmount(outcome.mount.location.id)
+        assertNull(secrets.passwords["account-a" to outcome.mount.mountId])
     }
 
     @Test fun locationsRoundTripAndRejectTraversal() {

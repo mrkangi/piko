@@ -317,12 +317,12 @@ class AndroidLanShareHost(
 
     private fun publishedShares(): List<LanShareDescriptor> = runBlocking {
         repository.localMounts.all()
-            .filter { it.lanShared }
+            .filter { it.lanShared && !it.isSmb }
             .map { LanShareDescriptor(shareId = it.mountId, name = it.fallbackName) }
     }
 
     private suspend fun mountFor(shareId: String): LocalMount? =
-        repository.localMounts.all().firstOrNull { it.mountId == shareId && it.lanShared }
+        repository.localMounts.all().firstOrNull { it.mountId == shareId && it.lanShared && !it.isSmb }
 
     private suspend fun listShare(shareId: String, relativePath: String): List<FileStat> {
         val mount = mountFor(shareId) ?: throw LanShareException("share_not_found")

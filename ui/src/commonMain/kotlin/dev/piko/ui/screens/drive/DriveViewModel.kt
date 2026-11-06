@@ -16,7 +16,9 @@ import dev.piko.shared.data.DeviceLocation
 import dev.piko.shared.data.DriveLibrary
 import dev.piko.shared.data.ImportPreviewEntryId
 import dev.piko.shared.data.ImportPreviewLocation
+import dev.piko.shared.data.LocalMountOutcome
 import dev.piko.shared.data.PikoDriveRepository
+import dev.piko.shared.data.SmbMountInfo
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.download.PikoDownloadCoordinator
 import dev.piko.shared.i18n.tr
@@ -530,6 +532,22 @@ internal class DriveViewModel(
                 }
             }
         }
+    }
+
+    suspend fun testSmb(info: SmbMountInfo, password: String) {
+        driveRepo.localMounts.testSmb(info, password)
+    }
+
+    suspend fun mountSmb(info: SmbMountInfo, name: String, password: String): LocalMountOutcome {
+        val account = driveRepo.currentAccount ?: error(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入"))
+        val outcome = driveRepo.localMounts.mountSmb(info, name, password)
+        if (account == driveRepo.currentAccount) {
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()),
+            )
+            state.highlight(setOf(outcome.mount.location.id))
+        }
+        return outcome
     }
 
     fun revealLocalInFileManager(fileId: String) {

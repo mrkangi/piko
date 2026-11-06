@@ -244,7 +244,7 @@ class DesktopLanShareHost(
 
     private fun publishedShares(): List<LanShareDescriptor> = runBlocking {
         repository.localMounts.all()
-            .filter { it.lanShared }
+            .filter { it.lanShared && !it.isSmb }
             .map { LanShareDescriptor(shareId = it.mountId, name = it.fallbackName) }
     }
 

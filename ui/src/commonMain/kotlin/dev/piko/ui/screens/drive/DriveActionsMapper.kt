@@ -397,7 +397,7 @@ internal fun buildDriveOperations(
                 }
             }
             val rawLocalPath = file.params["local_path"].orEmpty()
-            if (file.isLocal && !rawLocalPath.startsWith("content://")) {
+            if (file.isLocal && !rawLocalPath.startsWith("content://") && !rawLocalPath.startsWith("smb://")) {
                 add(
                     SheetAction(
                         Icons.Outlined.FolderOpen,

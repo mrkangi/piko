@@ -76,6 +76,10 @@ class PikoServices(
     /** 用户自己部署的 MetaTube，两端传入；为 null 时设置里没有刮削一组（截图环境）。 */
     val metaTube: MetaTubeService? = null,
     localFileAccess: (((String) -> Unit) -> dev.piko.shared.data.LocalFileAccess)? = null,
+    /** SMB 等网络挂载来源；与本机路径来源一起组成挂载访问分派。 */
+    smbFileAccess: dev.piko.shared.data.LocalFileAccess? = null,
+    /** 网络挂载密码的设备级保管处，不进入网盘同步。 */
+    localMountSecrets: dev.piko.shared.data.LocalMountSecrets? = null,
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     deviceName: String = "Piko",
     platformName: String = "unknown",
@@ -109,9 +113,12 @@ class PikoServices(
         lanShares = lanShares,
     ).also {
         val repository = it
-        it.localMounts.access = localFileAccess?.invoke { folder ->
+        it.localMounts.secrets = localMountSecrets
+        val localAccess = localFileAccess?.invoke { folder ->
             repository.applyChange(dev.piko.shared.data.DriveChange.ContentsChanged(setOf(folder)))
         }
+        it.localMounts.access = dev.piko.shared.data.CompositeLocalFileAccess(localAccess, smbFileAccess)
+        smbFileAccess?.attachMounts(it.localMounts)
         mediaRepository.localMounts = it.localMounts
         mediaRepository.lanShares = lanShares
         mediaRepository.metadataSink = it.metadataSink

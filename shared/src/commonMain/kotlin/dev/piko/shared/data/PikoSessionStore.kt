@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
  * 登录态的持久化，两端各有实现。会话（SDK 的 [SessionStore]）、密码与压缩包密码是机密，按账号分开存、落盘前加密；
  * 账号列表（[SavedAccounts]）只有账号名与资料，不含机密。
  */
-interface PikoSessionStore : SessionStore, ArchivePasswordStore {
+interface PikoSessionStore : SessionStore, ArchivePasswordStore, LocalMountSecrets {
     suspend fun loadAccounts(): SavedAccounts
     suspend fun saveAccounts(accounts: SavedAccounts)
     suspend fun loadCredentials(account: String): PikoCredentials?

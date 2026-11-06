@@ -25,6 +25,8 @@ class AndroidPikoSessionStore(private val context: Context) : PikoSessionStore {
     private fun sessionKey(account: String) = stringPreferencesKey("pikpak_session_$account")
     private fun passwordKey(account: String) = stringPreferencesKey("pikpak_password_$account")
     private fun archivePasswordsKey(account: String) = stringPreferencesKey("pikpak_archive_passwords_$account")
+    private fun localMountPasswordKey(account: String, mountId: String) =
+        stringPreferencesKey("piko_local_mount_password_${account}_$mountId")
 
     override suspend fun load(account: String): Session? {
         val stored = context.dataStore.data.first()[sessionKey(account)] ?: return null
@@ -117,6 +119,20 @@ class AndroidPikoSessionStore(private val context: Context) : PikoSessionStore {
     override suspend fun saveArchivePasswords(account: String, serialized: String) {
         val sealed = CredentialCipher.encrypt(serialized)
         context.dataStore.edit { it[archivePasswordsKey(account)] = sealed }
+    }
+
+    override suspend fun loadLocalMountPassword(account: String, mountId: String): String? {
+        val stored = context.dataStore.data.first()[localMountPasswordKey(account, mountId)] ?: return null
+        return CredentialCipher.decrypt(stored)
+    }
+
+    override suspend fun saveLocalMountPassword(account: String, mountId: String, password: String) {
+        val sealed = CredentialCipher.encrypt(password)
+        context.dataStore.edit { it[localMountPasswordKey(account, mountId)] = sealed }
+    }
+
+    override suspend fun clearLocalMountPassword(account: String, mountId: String) {
+        context.dataStore.edit { it.remove(localMountPasswordKey(account, mountId)) }
     }
 
     private fun MutablePreferences.dropLegacyMirror() {

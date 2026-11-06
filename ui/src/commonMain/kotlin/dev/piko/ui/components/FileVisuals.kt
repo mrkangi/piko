@@ -105,7 +105,15 @@ fun FileStat.metaParts(includeDate: Boolean = true): List<String> = buildList {
     if (isImportPreview) add(tr("待保存", "Unsaved", "未保存", "저장 대기", "待儲存"))
     // 网盘里没有它的文件，打开时才临时造出来；与「上传中」同处，一眼能分出哪些不占空间
     if (isVaulted) add(tr("已归档", "Archived", "アーカイブ済み", "보관됨", "已歸檔"))
-    if (isLocalMountRoot) add(tr("本机挂载", "Local mount", "ローカルマウント", "로컬 마운트", "本機掛載"))
+    if (isLocalMountRoot) {
+        add(
+            if (params["local_kind"] == "smb") {
+                tr("网络挂载", "Network mount", "ネットワークマウント", "네트워크 마운트", "網路掛載")
+            } else {
+                tr("本机挂载", "Local mount", "ローカルマウント", "로컬 마운트", "本機掛載")
+            },
+        )
+    }
     if (isFolder) {
         add(tr("文件夹", "Folder", "フォルダー", "폴더", "資料夾"))
     } else {

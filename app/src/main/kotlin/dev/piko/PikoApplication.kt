@@ -37,6 +37,7 @@ import dev.piko.shared.lan.LanShareRepository
 import dev.piko.shared.lan.UdpLanDiscovery
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
+import dev.piko.shared.smb.SmbFileAccess
 import dev.piko.shared.memory.MemoryPolicy
 import dev.piko.shared.memory.MemoryTrim
 import dev.piko.shared.memory.PikoMemoryGovernor
@@ -146,8 +147,9 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
         PikoLocale.bindSystemLocale(systemLocale.toLanguageTag())
         PikoLocale.apply(runBlocking { sessionManager.appLanguageFlow.first() })
         installProxy()
+        val sessionStore = AndroidPikoSessionStore(this)
         val clientManager = PikoClientManager(
-            sessionStore = AndroidPikoSessionStore(this),
+            sessionStore = sessionStore,
             scope = appScope,
             transportMemoryBudgetBytes = baseTransportBudgetBytes,
         )
@@ -175,6 +177,10 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             ),
             uploadSources = AndroidPikoUploadSources(this),
             localFileAccess = { changed -> dev.piko.platform.AndroidLocalFileAccess(this, appScope, changed) },
+            smbFileAccess = SmbFileAccess { mount ->
+                sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
+            },
+            localMountSecrets = sessionStore,
             cacheStore = cacheStore,
             treeDatabaseFactory = dev.piko.shared.data.AndroidPikoTreeDatabaseFactory(File(cacheDir, "piko/trees")),
             syncCipher = JvmSyncCipher(),
