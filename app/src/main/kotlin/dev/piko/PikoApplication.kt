@@ -15,6 +15,8 @@ import dev.piko.download.AndroidPikoDownloadStorage
 import dev.piko.download.AndroidPikoSegmentDownloader
 import dev.piko.download.RemoteDownloadService
 import dev.piko.download.WorkResultNotifier
+import dev.piko.platform.AndroidLanShareHost
+import dev.piko.platform.AndroidLanShareService
 import dev.piko.platform.AndroidPikoPlatform
 import dev.piko.platform.followSystemAnimatorScale
 import dev.piko.shared.data.FilePikoCacheStore
@@ -54,6 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -199,11 +202,19 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     clientPlatform = "android",
                 )
             },
+            lanShareHostFactory = { repository, hostPreferences, settings, name ->
+                AndroidLanShareHost(this, repository, hostPreferences, settings, name, "android", appScope)
+            },
             lanDiscovery = UdpLanDiscovery(),
         )
         appScope.launch {
             sessionManager.remoteDownloadEnabledFlow.distinctUntilChanged().collect { enabled ->
                 if (enabled) RemoteDownloadService.start(this@PikoApplication) else RemoteDownloadService.stop(this@PikoApplication)
+            }
+        }
+        appScope.launch {
+            services.lanShareSettings.flow.map { it.enabled }.distinctUntilChanged().collect { enabled ->
+                if (enabled) AndroidLanShareService.start(this@PikoApplication) else AndroidLanShareService.stop(this@PikoApplication)
             }
         }
         appScope.launch {

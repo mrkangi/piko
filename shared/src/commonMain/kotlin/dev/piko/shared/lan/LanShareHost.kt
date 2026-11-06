@@ -12,7 +12,7 @@ data class LanHostStatus(
 )
 
 /**
- * 局域网共享 host。桌面端用 JDK 的 HttpServer 实现；Android host 以后接同一个接口。
+ * 局域网共享 host。桌面端用 JDK 的 HttpServer 实现，Android 端用 ServerSocket 实现同一个接口。
  * 实现自己观察 [LanShareSettings.enabled]，开关变化时起停监听。
  */
 interface LanShareHost {

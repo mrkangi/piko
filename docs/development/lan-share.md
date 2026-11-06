@@ -15,6 +15,8 @@
 - `shared/.../data/LanLocation.kt`：客户端共享路径的 ID，按 `peerId + shareId + 相对路径` 编码；共享内路径不进入网盘索引。
 - `shared/.../lan/LanShareRepository.kt`：配对、共享列表、目录、host 索引与取流地址；目录结果转成普通 `FileStat`，复用网盘页、播放器、瀑布流与信息流。
 - `shared/.../lan/DesktopLanShareHost.kt`：桌面 host，JDK `HttpServer`，只读 HTTP + 令牌配对。
+- `app/.../platform/AndroidLanShareHost.kt`：Android host，`ServerSocket` 实现 HTTP/1.1 子集；SAF `content://` 经 `openFileDescriptor` 随机读，图片缩略图用 `BitmapFactory` 生成并缓存。
+- `app/.../platform/AndroidLanShareService.kt`：Android host 前台服务，使用 `specialUse` 在应用退到后台后保持监听。
 - `PikoDriveRepository`：把设备节点与 `LanLocation` 接入统一虚拟列表；`isDriveFolderId` 与写操作保护都排除这些位置。
 - `PikoMediaRepository`：局域网文件走 `PlayableMediaInfo.currentUrl`，视频与字幕都由 host 的 `/v1/content` 提供。
 
@@ -30,7 +32,7 @@
 | GET | `/v1/list?share=&path=` | Bearer | 一层目录 |
 | GET | `/v1/stat?share=&path=` | Bearer | 单个条目元数据 |
 | GET | `/v1/index?share=` | Bearer | host 预建的整棵共享索引（上限 50,000 项，可能标记 truncated） |
-| GET | `/v1/thumb?share=&path=&w=` | Bearer 或 token 查询 | 图片缩略图，host 端用 ImageIO 缩放并缓存 |
+| GET | `/v1/thumb?share=&path=&w=` | Bearer 或 token 查询 | 图片缩略图，host 端缩放并缓存（桌面 ImageIO、Android BitmapFactory） |
 | GET/HEAD | `/v1/content?share=&path=&token=` | Bearer 或 token 查询 | 文件内容，支持 `Range`、`ETag`、`Accept-Ranges` |
 
 `/v1/content` 同时接受查询参数里的令牌，因为 mpv / ExoPlayer 加载外挂字幕时未必转发自定义请求头。令牌只在本机可信局域网内使用。
@@ -50,11 +52,11 @@ host 启动后每 2 秒向 UDP `47822` 广播 `LanDiscoveryPacket`（同时发�
 - host 端把相对路径交给 `LocalLocation`，拒绝 `.`、`..`、绝对路径、反斜杠与冒号；符号链接策略由 `LocalFileAccess` 负责。
 - 令牌与配对设置存在设备本地偏好，不进入网盘设置同步。
 - v1 是明文 HTTP + 配对令牌，只应在可信局域网使用；TLS 在后续阶段接入。发现使用 UDP 广播，不参与鉴权。
-- Android 作为 host 需要 SAF 随机读与前台服务，v1 只支持桌面 host；Android/桌面都可作为客户端。
+- Android 与桌面都可作为 host 或客户端。Android host 只读取用户已授权的 SAF 目录，前台服务关闭后停止监听。
 
 ## 已知限制
 
 - 不支持写操作与双向同步。
 - LAN 文件没有 GCID，不能参与网盘去重。
 - 普通浏览按需请求；媒体扫描使用 host 索引。索引上限目前为 50,000 项。
-- Android host 尚未接入；桌面 host 关闭应用后共享停止。
+- 桌面 host 关闭应用后共享停止；Android host 在应用进程存活或前台服务运行期间持续监听。
