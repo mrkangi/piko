@@ -39,6 +39,7 @@ import dev.piko.shared.state.FolderVaultSession
 import dev.piko.ui.LocalPikoServices
 import dev.piko.ui.components.CopyTargetDialog
 import dev.piko.ui.components.FileNameField
+import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.MoveTargetDialog
 import dev.piko.ui.components.PikoDialog
 import dev.piko.ui.components.PikoDialogConfirm
@@ -51,6 +52,7 @@ import dev.piko.ui.components.driveNameHint
 import dev.piko.ui.components.isUnfixableDriveName
 import dev.piko.ui.components.previewImageCoverUrl
 import dev.piko.ui.components.submitDriveName
+import dev.piko.ui.components.withSelectAction
 import dev.piko.ui.i18n.stringResource
 import dev.piko.ui.resources.Res
 import dev.piko.ui.resources.common_cancel
@@ -232,6 +234,7 @@ internal fun DriveSheetHost(
     addressBar: @Composable () -> Unit,
     itemActionsOf: (FileStat) -> List<SheetAction>,
     selectionActionsOf: (List<FileStat>) -> List<SheetAction>,
+    onEnterSelection: (FileStat) -> Unit,
     onCopySource: (FileStat) -> Unit,
     onUpdateFolderStack: (List<PathBreadcrumb>) -> Unit,
     onOpenFromMap: (List<PathBreadcrumb>, FileStat) -> Unit,
@@ -259,13 +262,21 @@ internal fun DriveSheetHost(
         }
         is DriveSheet.SingleItemActions -> {
             val target = sheet.file
+            val select = if (LocalPointerSource.current.isTouchLike && !state.isSelectionMode) {
+                {
+                    onDismissSheet()
+                    onEnterSelection(target)
+                }
+            } else {
+                null
+            }
             FileActionsSheet(
                 name = state.itemName(target),
                 locationLabel = rowNotes[target.id],
                 folderUsage = remember(target.id, inTrash) {
                     if (target.isFolder && !inTrash && isDriveFolderId(target.id)) driveRepo.folderUsage(target.id) else null
                 },
-                actions = itemActionsOf(target),
+                actions = withSelectAction(itemActionsOf(target), select),
                 onDismiss = onDismissSheet,
                 onCopySource = {
                     onDismissSheet()

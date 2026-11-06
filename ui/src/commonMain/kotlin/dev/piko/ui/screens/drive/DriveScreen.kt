@@ -1015,6 +1015,7 @@ private fun DriveScreenContent(
     val latestIntents by rememberUpdatedState(actionIntents)
     val latestEvents by rememberUpdatedState(events)
     val latestSnapshot by rememberUpdatedState(snapshot)
+    val latestDesktop by rememberUpdatedState(desktop)
     val latestShowProperties by rememberUpdatedState<(List<FileStat>, PanelAnchor) -> Unit>(::showProperties)
 
     fun targetsOf(file: FileStat): List<FileStat> =
@@ -1075,6 +1076,7 @@ private fun DriveScreenContent(
             onLongClick = { file ->
                 if (state.libraryView == DriveLibrary.DUPLICATES && file.isFolder) latestEvents.onOpenSingleItemSheet(file)
                 else if (state.isSelectionMode) state.setSelected(file.id, file.id !in state.selectedFileIds)
+                else if (!latestDesktop) latestEvents.onOpenSingleItemSheet(file)
                 else state.enterSelection(file.id)
             },
             onSelect = { file, selected -> state.setSelected(file.id, selected) },
@@ -1521,7 +1523,8 @@ private fun DriveScreenContent(
                         galleryActive = snapshot.galleryActive,
                         galleryShowImages = snapshot.galleryShowImages,
                         isSpoilerBlurEnabled = snapshot.isSpoilerBlurEnabled,
-                        itemMoreButton = pointerSource.isTouchLike,
+                        // 窄布局的触屏长按直接打开操作面板；宽窗口触屏仍保留行尾入口。
+                        itemMoreButton = pointerSource.isTouchLike && desktop,
                         inDuplicates = inDuplicates,
                         duplicateState = duplicateState,
                         duplicateReport = duplicateReport,
@@ -1591,6 +1594,7 @@ private fun DriveScreenContent(
                 showProperties(files, PanelAnchor.Centered)
             }
         },
+        onEnterSelection = { state.enterSelection(it.id) },
         onCopySource = events.onCopySource,
         onUpdateFolderStack = navigation::updateFolderStack,
         onOpenFromMap = ::openFromMap,

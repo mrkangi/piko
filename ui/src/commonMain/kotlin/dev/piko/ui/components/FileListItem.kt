@@ -211,8 +211,8 @@ fun FileListItem(
 }
 
 /**
- * 行尾的更多按钮，打开该项的详情面板。只在移动端画：桌面的同一组操作在右键菜单里，
- * 每一行挂一个按钮只是满屏一样的图标，见 FormFactor。
+ * 行尾的更多按钮，打开该项的详情面板。只为宽窗口触屏保留：窄布局长按打开同一面板，
+ * 鼠标有右键菜单，每一行再挂一个按钮只是满屏一样的图标。
  */
 @Composable
 fun ListMoreButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
