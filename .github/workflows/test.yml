@@ -378,7 +378,8 @@ jobs:
   # （-PpikoUpdateBases），1.0.0 的只作核对（-PpikoUpdateRetired）。1.1.0 走补丁，另用 delta-updates.sh 出一份
   # -from-1.1.0.zip 验 1.1.0 的差分；1.0.0 的 MSI 版走 msiexec，便携版只给下载页
   windows-package-legacy:
-    if: inputs.desktop == true && !cancelled()
+    # 旧版升级冒烟依赖上游仓库已发布的历史 Release；fork 上没有这些附件。
+    if: inputs.desktop == true && !cancelled() && github.repository == 'NihilDigit/piko'
     needs: windows-package
     runs-on: windows-2022
     timeout-minutes: 90
