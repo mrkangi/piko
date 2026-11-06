@@ -27,6 +27,11 @@ class DriveCommandsTest {
     }
 
     @Test
+    fun `compact poster defaults to three columns without losing size choices`() {
+        assertEquals(listOf(4, 3, 2), TileSize.entries.map { tileColumns(DriveViewMode.POSTER, it, WidthClass.Compact) })
+    }
+
+    @Test
     fun `all view modes retain three checked size choices in overflow`() {
         assertEquals(listOf("小", "中", "大"), TileSize.entries.map { it.label })
         for (mode in DriveViewMode.entries) {

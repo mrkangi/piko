@@ -106,20 +106,25 @@ fun SkeletonText(style: TextStyle, widthFraction: Float, modifier: Modifier = Mo
 }
 
 /**
- * [FileListItem] 那一行的骨架：56dp 前导图像、一行标题、一行元信息，外边距与最小行高照抄那一行。
+ * [FileListItem] 那一行的骨架：前导图像、一行标题、一行元信息，外边距与最小行高照抄那一行。
  * 网盘列表、传输、星标、播放历史、回收站的行都是它的变体，共用这一份。
  */
 @Composable
-fun FileRowSkeleton(modifier: Modifier = Modifier, titleFraction: Float = 0.6f) {
+fun FileRowSkeleton(
+    modifier: Modifier = Modifier,
+    titleFraction: Float = 0.6f,
+    compact: Boolean = false,
+) {
+    val leadingSize = if (compact) CompactListLeadingSize else ListLeadingSize
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp)
-            .heightIn(min = 72.dp)
-            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 16.dp),
+            .heightIn(min = if (compact) 64.dp else 72.dp)
+            .padding(start = 12.dp, top = if (compact) 6.dp else 8.dp, bottom = if (compact) 6.dp else 8.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SkeletonBlock(Modifier.size(ListLeadingSize), MaterialTheme.shapes.small)
+        SkeletonBlock(Modifier.size(leadingSize), MaterialTheme.shapes.small)
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SkeletonTextLine(titleFraction, height = 14.dp)

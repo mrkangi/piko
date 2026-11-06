@@ -261,8 +261,10 @@ internal fun DriveFileGrid(
     val latestItems by rememberUpdatedState(items)
     val latestStructureReady by rememberUpdatedState(structureReady)
     val latestLeadingItemCount by rememberUpdatedState(leadingItemCount)
-    val horizontalPadding = gridHorizontalPadding(viewMode)
-    val itemSpacing = gridItemSpacing(viewMode)
+    val widthClass = currentWidthClass()
+    val compact = widthClass == WidthClass.Compact
+    val horizontalPadding = gridHorizontalPadding(viewMode, widthClass)
+    val itemSpacing = gridItemSpacing(viewMode, widthClass)
     // 整行项在网格视图里已有页边距，列表视图里自己缩进
     val rowInset = if (viewMode.isGrid) 0.dp else 16.dp
 
@@ -294,7 +296,7 @@ internal fun DriveFileGrid(
         LazyVerticalGrid(
             state = gridState,
             // 网格的可用宽度扣掉了两侧边距，参照宽度也扣掉，侧栏关着时两者相等
-            columns = gridCells(viewMode, tileSize, columnReferenceWidth?.minus(horizontalPadding * 2)),
+            columns = gridCells(viewMode, tileSize, widthClass, columnReferenceWidth?.minus(horizontalPadding * 2)),
             modifier = modifier
                 .fillMaxSize()
                 .fileDragAutoScroll(gridState)
@@ -369,6 +371,7 @@ internal fun DriveFileGrid(
                             locationLabel = hitLocations[file.id],
                             callbacks = callbacks,
                             moreButton = moreButton,
+                            compact = compact,
                             isEmptyFolder = file.isFolder && emptyFolders[file.id] == true,
                             folderHasVault = file.isFolder && file.id in vaultedFolders,
                             requestFocus = item.key == keyboardFocusTarget,
@@ -385,8 +388,13 @@ internal fun DriveFileGrid(
 }
 
 @Composable
-private fun gridCells(viewMode: DriveViewMode, tileSize: TileSize, referenceWidth: Dp? = null): GridCells {
-    return TileColumns(tileColumns(viewMode, tileSize, currentWidthClass()), tileMaxWidth(viewMode, tileSize), referenceWidth)
+private fun gridCells(
+    viewMode: DriveViewMode,
+    tileSize: TileSize,
+    widthClass: WidthClass,
+    referenceWidth: Dp? = null,
+): GridCells {
+    return TileColumns(tileColumns(viewMode, tileSize, widthClass), tileMaxWidth(viewMode, tileSize), referenceWidth)
 }
 
 /**
@@ -443,11 +451,13 @@ private class StableColumns(private val minSize: Dp, private val referenceWidth:
     }
 }
 
-private fun gridHorizontalPadding(viewMode: DriveViewMode): Dp = if (viewMode.isGrid) 16.dp else 0.dp
+private fun gridHorizontalPadding(viewMode: DriveViewMode, widthClass: WidthClass): Dp =
+    if (!viewMode.isGrid) 0.dp else if (widthClass == WidthClass.Compact) 12.dp else 16.dp
 
-private fun gridItemSpacing(viewMode: DriveViewMode): Dp = when (viewMode) {
-    DriveViewMode.LIST -> 0.dp
-    DriveViewMode.POSTER -> 8.dp
+private fun gridItemSpacing(viewMode: DriveViewMode, widthClass: WidthClass): Dp = when {
+    viewMode == DriveViewMode.LIST -> 0.dp
+    widthClass == WidthClass.Compact -> 6.dp
+    else -> 8.dp
 }
 
 /**
@@ -457,12 +467,15 @@ private fun gridItemSpacing(viewMode: DriveViewMode): Dp = when (viewMode) {
  */
 @Composable
 internal fun DriveGridSkeleton(viewMode: DriveViewMode, tileSize: TileSize, modifier: Modifier = Modifier) {
-    val itemSpacing = gridItemSpacing(viewMode)
+    val widthClass = currentWidthClass()
+    val compact = widthClass == WidthClass.Compact
+    val itemSpacing = gridItemSpacing(viewMode, widthClass)
+    val horizontalPadding = gridHorizontalPadding(viewMode, widthClass)
     SkeletonGroup(modifier = modifier.fillMaxSize()) {
         LazyVerticalGrid(
-            columns = gridCells(viewMode, tileSize),
+            columns = gridCells(viewMode, tileSize, widthClass),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = gridHorizontalPadding(viewMode)),
+            contentPadding = PaddingValues(horizontal = horizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(itemSpacing),
             verticalArrangement = Arrangement.spacedBy(itemSpacing),
             userScrollEnabled = false,
@@ -470,8 +483,8 @@ internal fun DriveGridSkeleton(viewMode: DriveViewMode, tileSize: TileSize, modi
             items(SKELETON_ITEM_COUNT) { index ->
                 val titleFraction = SkeletonTitleWidths[index % SkeletonTitleWidths.size]
                 when (viewMode) {
-                    DriveViewMode.LIST -> FileRowSkeleton(titleFraction = titleFraction)
-                    DriveViewMode.POSTER -> PosterCardSkeleton(titleFraction)
+                    DriveViewMode.LIST -> FileRowSkeleton(titleFraction = titleFraction, compact = compact)
+                    DriveViewMode.POSTER -> PosterCardSkeleton(titleFraction, compact = compact)
                 }
             }
         }
@@ -560,6 +573,7 @@ private fun DriveCell(
     locationLabel: String?,
     callbacks: DriveItemCallbacks,
     moreButton: Boolean,
+    compact: Boolean,
     isEmptyFolder: Boolean,
     folderHasVault: Boolean,
     requestFocus: Boolean,
@@ -641,6 +655,7 @@ private fun DriveCell(
                 code = text.code,
                 resolution = text.resolution,
                 folderHasVault = folderHasVault,
+                compact = compact,
             )
             DriveViewMode.LIST -> FileListItem(
                 file = file,
@@ -661,6 +676,7 @@ private fun DriveCell(
                 tags = text.tags,
                 code = text.code,
                 folderHasVault = folderHasVault,
+                compact = compact,
             )
         }
     }

@@ -61,7 +61,9 @@ internal fun galleryTileMaxWidth(size: TileSize): Dp = when (size) {
 /**
  * 每一档一行排几栏，按窗口宽度档位取，卡宽由网格宽度除出来（见 DriveFileGrid 的 TileColumns）。
  * 按栏数而不按固定卡宽分档：固定卡宽时栏数随宽度跳，平板竖握（700dp 上下）大档只剩一栏，某些宽度下两档又撞成同样的栏数；
- * 列表在窄窗口下允许多档共用一栏，避免行内容过窄。窗口宽到卡片超过 [tileMaxWidth] 时才多排几栏，超宽屏上卡片不至于大得离谱。
+ * 列表在窄窗口下允许多档共用一栏，避免行内容过窄。海报墙在紧凑窗口整体前移一档：默认「中」即三栏，
+ * 手机首屏能多看到一列，同时保留小/中/大三档的相对顺序。窗口宽到卡片超过 [tileMaxWidth] 时才多排几栏，
+ * 超宽屏上卡片不至于大得离谱。
  */
 internal fun tileColumns(mode: DriveViewMode, size: TileSize, width: WidthClass): Int {
     val (small, medium, large) = when (mode) {
@@ -71,7 +73,7 @@ internal fun tileColumns(mode: DriveViewMode, size: TileSize, width: WidthClass)
             WidthClass.Expanded -> Triple(3, 2, 1)
         }
         DriveViewMode.POSTER -> when (width) {
-            WidthClass.Compact -> Triple(3, 2, 1)
+            WidthClass.Compact -> Triple(4, 3, 2)
             WidthClass.Medium -> Triple(4, 3, 2)
             WidthClass.Expanded -> Triple(6, 4, 3)
         }

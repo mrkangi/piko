@@ -117,6 +117,8 @@ internal fun PosterCard(
     resolution: String? = null,
     /** 文件夹里直接放着归档条目，见 itemMarks。 */
     folderHasVault: Boolean = false,
+    /** 紧凑窗口：更多按钮移到封面左上角，标题不再为它让出一栏。 */
+    compact: Boolean = false,
 ) {
     val item = file.filePresentation(title, original, tags, code, resolution, folderHasVault, isEmptyFolder)
     val hover = fileItemHover()
@@ -143,6 +145,12 @@ internal fun PosterCard(
                     if (isSelected) androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off,
                     { if (isSelectionMode) onSelectToggle(!isSelected) else onStartSelection?.invoke() }, label = tr("选择 ${item.name.fullName}", "Select ${item.name.fullName}", "${item.name.fullName} を選択", "${item.name.fullName} 선택", "選取 ${item.name.fullName}")),
                     modifier = Modifier.align(Alignment.TopStart).padding(6.dp).then(if (!isSelectionMode) Modifier.ownsClicks() else Modifier), interactive = !isSelectionMode)
+            }
+            if (compact && moreButton && !isSelectionMode && !(hover.mouseHovered && onStartSelection != null)) {
+                CardTrailing(
+                    onMoreClick = onMoreClick,
+                    modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                )
             }
             val cornerTags = tags.filter { it != resolution }.take(COVER_CORNER_TAGS)
             if (cornerTags.isNotEmpty()) {
@@ -174,7 +182,7 @@ internal fun PosterCard(
 
         // 右端的勾选框或更多按钮浮在标题上，不另占一栏：原来的三点按钮占着 48dp 的一栏，
         // 又往右上偏移出卡片，被卡片的圆角裁掉一半，偏出去的部分也点不到。显示时给标题让出位置
-        val trailingShown = moreButton
+        val trailingShown = moreButton && !compact
         // 下面留 4dp：叠在一行标题上的 28dp 按钮上下各探出 4dp，卡片裁了圆角，不留就被切掉
         Box(modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 4.dp)) {
             Row(
@@ -203,7 +211,11 @@ internal fun PosterCard(
  * 与按钮一直显示时（触屏）文字止于同一处。
  */
 @Composable
-internal fun PosterCardSkeleton(titleFraction: Float, modifier: Modifier = Modifier) {
+internal fun PosterCardSkeleton(
+    titleFraction: Float,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
     Column(modifier = modifier.fillMaxWidth()) {
         SkeletonBlock(Modifier.fillMaxWidth().aspectRatio(COVER_ASPECT), MaterialTheme.shapes.medium)
         Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(TITLE_HEIGHT)) {
@@ -215,7 +227,7 @@ internal fun PosterCardSkeleton(titleFraction: Float, modifier: Modifier = Modif
                 SkeletonTextLine(0.9f)
                 SkeletonTextLine(titleFraction)
             }
-            Spacer(modifier = Modifier.width(CARD_TRAILING_SIZE))
+            if (!compact) Spacer(modifier = Modifier.width(CARD_TRAILING_SIZE))
         }
     }
 }

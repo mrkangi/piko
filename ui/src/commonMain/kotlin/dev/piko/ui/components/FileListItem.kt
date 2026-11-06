@@ -57,12 +57,16 @@ import io.github.nihildigit.pikpak.FileStat
 /** M3 列表的前导图像尺寸（ItemLeadingImage 56x56dp）。 */
 val ListLeadingSize = 56.dp
 
+/** 紧凑窗口的前导图像尺寸：手机上用 44dp 换一行更密的内容，触控热区仍由整行承担。 */
+val CompactListLeadingSize = 44.dp
+
 /** 前导图标尺寸（ItemLeadingIconSize）。 */
 val ListLeadingIconSize = 24.dp
 
 // 前导 56dp 加上下各 8dp 即 72dp，正是 M3 两行列表项的高度。原先按扫读密度降到 64dp，
 // 前提是 48dp 的前导；前导改用规范的 56dp 后，64dp 放不下它加上下内边距。
 private val RowMinHeight = 72.dp
+private val CompactRowMinHeight = 64.dp
 
 // 外侧留 4dp，让按压与选中时变圆的容器不贴屏幕边缘；内侧起始 12dp，
 // 两者相加使内容仍落在紧凑窗口 16dp 的页边距上。末端为 0，让尾部 48dp 图标按钮
@@ -72,6 +76,7 @@ private val RowOuterPadding = 4.dp
 /** 上下两行之间的缝，M3 容器化列表的分段间隙（lists.md 的 Gaps & dividers）。 */
 private val RowGap = 4.dp
 private val RowContentPadding = PaddingValues(start = 12.dp, end = 0.dp, top = 8.dp, bottom = 8.dp)
+private val CompactRowContentPadding = PaddingValues(start = 12.dp, end = 0.dp, top = 6.dp, bottom = 6.dp)
 
 /** 禁用态内容的不透明度，用于弱化显示的行。 */
 private const val DIMMED_ALPHA = 0.38f
@@ -86,7 +91,7 @@ private const val DIMMED_ALPHA = 0.38f
  *
  * 标题最多两行，完整内容在详情面板顶部可见。
  *
- * 行高须始终落在 72dp 或 88dp 两档内，任何状态都不能把行撑高：副文本只放一行，
+ * 行高须始终落在 64dp、72dp 或 88dp 三档内，任何状态都不能把行撑高：副文本只放一行，
  * 长内容（如完整的错误信息）放进详情面板。副文本下还要放进度条的行，把
  * [headlineMaxLines] 设为 1，两行标题、一行副文本再加进度条会超出 88dp。
  *
@@ -114,6 +119,8 @@ fun FileListItem(
     isHighlighted: Boolean = false,
     isImportPreview: Boolean = false,
     dimmed: Boolean = false,
+    /** 紧凑窗口：缩小前导图与最小行高，整行仍是可点按的触控目标。 */
+    compact: Boolean = false,
 ) {
     val longClick = fileItemLongPress(onLongClick)
     val hover = fileItemHover()
@@ -145,14 +152,17 @@ fun FileListItem(
         .then(hover.modifier)
         .fillMaxWidth()
         .padding(horizontal = RowOuterPadding, vertical = RowGap / 2)
-        .heightIn(min = RowMinHeight)
+        .heightIn(min = if (compact) CompactRowMinHeight else RowMinHeight)
         .focusIndication(rowShape, showPointerFocus = !isSelectionMode)
         .locateHighlight(isHighlighted, rowShape)
     // 弱化加在各槽位上而不是整行：整行降透明度会连按压的状态层一起变淡
     val slotModifier = if (dimmed) Modifier.alpha(DIMMED_ALPHA) else Modifier
 
     val leadingSlot: @Composable () -> Unit = {
-        Box(slotModifier.size(ListLeadingSize), contentAlignment = Alignment.Center) {
+        Box(
+            slotModifier.size(if (compact) CompactListLeadingSize else ListLeadingSize),
+            contentAlignment = Alignment.Center,
+        ) {
             if (isSelectionMode || (hover.mouseHovered && onStartSelection != null)) {
                 FileItemSelectionControl(FileItemSelection(
                     if (isSelected) androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off,
@@ -195,7 +205,7 @@ fun FileListItem(
         onLongClickLabel = if (longClick != null) tr("操作", "Actions", "操作", "작업", "操作") else null,
         colors = colors,
         shapes = shapes,
-        contentPadding = RowContentPadding,
+        contentPadding = if (compact) CompactRowContentPadding else RowContentPadding,
         content = headlineSlot,
     )
 }
@@ -243,6 +253,8 @@ fun FileListItem(
     code: String? = null,
     /** 文件夹里直接放着归档条目，见 [itemMarks]。 */
     folderHasVault: Boolean = false,
+    /** 紧凑窗口下使用更小的前导图与行高，见 [FileListItem]。 */
+    compact: Boolean = false,
 ) {
     val item = file.filePresentation(title, original, tags, code, folderHasVault = folderHasVault)
     val listMarks = item.marks - FileItemMark.LocalMount
@@ -278,6 +290,7 @@ fun FileListItem(
         onSelectToggle = onSelectToggle,
         isHighlighted = isHighlighted,
         isImportPreview = file.isImportPreview,
+        compact = compact,
     )
 }
 
