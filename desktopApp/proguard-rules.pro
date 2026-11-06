@@ -65,6 +65,7 @@
 -keep class io.ktor.client.engine.okhttp.OkHttpEngineContainer { *; }
 -keep class io.ktor.serialization.kotlinx.json.KotlinxSerializationJsonExtensionProvider { *; }
 -keep class org.slf4j.simple.SimpleServiceProvider { *; }
+-keep class org.slf4j.nop.NOPServiceProvider { *; }
 
 # kotlinx.serialization：生成的 serializer 经伴生对象的 serializer() 查找
 -keepattributes *Annotation*, InnerClasses, Signature, EnclosingMethod
@@ -88,5 +89,6 @@
 -dontwarn org.slf4j.**
 -dontwarn kotlinx.coroutines.debug.**
 -dontwarn javax.annotation.**
+-dontwarn javax.el.**
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn org.jetbrains.annotations.**

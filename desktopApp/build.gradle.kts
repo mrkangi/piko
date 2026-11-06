@@ -176,6 +176,47 @@ fun linuxSonameFiles(jar: File): Set<String> {
     }.toSet()
 }
 
+/**
+ * ProGuard 合并多个依赖后，BouncyCastle 等签名 jar 里的 .SF/.RSA 已经对不上重写后的内容。
+ * JDK 启动合并 jar 时会因此拒绝加载；签名只约束原始构件，合并产物必须去掉签名文件。
+ */
+fun stripJarSignatures(jar: File) {
+    if (!jar.isFile) return
+    val temporary = File(jar.parentFile, "${jar.name}.unsigned")
+    try {
+        ZipFile(jar).use { input ->
+            ZipOutputStream(temporary.outputStream().buffered()).use { output ->
+                for (entry in input.entries()) {
+                    val name = entry.name
+                    if (name.startsWith("META-INF/") &&
+                        (name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA") || name.endsWith(".EC"))
+                    ) {
+                        continue
+                    }
+                    output.putNextEntry(ZipEntry(name).apply { time = entry.time })
+                    if (!entry.isDirectory) {
+                        input.getInputStream(entry).use { source ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                val read = source.read(buffer)
+                                if (read < 0) break
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    output.closeEntry()
+                }
+            }
+        }
+        check(temporary.length() > 0L) { "去掉签名后的 jar 为空：${jar.name}" }
+        if (!temporary.renameTo(jar)) {
+            temporary.copyTo(jar, overwrite = true)
+        }
+    } finally {
+        temporary.delete()
+    }
+}
+
 val bundledAppResources by tasks.registering(Sync::class) {
     from({ hostMpvRuntimeJar.map { zipTree(it) } }) {
         include("*.dll", "*.dylib", "*.txt")
@@ -437,6 +478,14 @@ tasks.matching { it.name == "createReleaseAotArchive" }.configureEach {
     }
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(bundledAppResources) }
+tasks.matching { it.name == "proguardReleaseJars" }.configureEach {
+    doLast {
+        layout.buildDirectory.dir("compose/tmp/main-release/proguard").get().asFile
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "jar" }
+            .forEach(::stripJarSignatures)
+    }
+}
 
 // jpackage 的 MSI 先卸旧版、单独提交，再装新版：新版装失败时旧版已经没了。打完即把卸载挪进
 // 安装事务，失败时整体回滚，理由见脚本。用 pwsh 跑：Windows PowerShell 按 ANSI 读无 BOM 的脚本

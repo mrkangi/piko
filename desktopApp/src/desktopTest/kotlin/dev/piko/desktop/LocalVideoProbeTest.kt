@@ -116,7 +116,7 @@ class LocalVideoProbeTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
             val access = DesktopLocalFileAccess(scope, {}, temporary("cache"))
-            val mount = LocalMount("mount-1", "account", "host", root.toString(), "Local", 0)
+            val mount = LocalMount("mount-1", "account", root.toString(), "Local", 0)
             val folder = access.list(mount, mount.location).single()
             assertTrue(folder.isFolder)
             val file = access.list(mount, assertNotNull(LocalLocation.of(folder.id))).single()
