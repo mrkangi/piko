@@ -4,13 +4,16 @@ import dev.piko.shared.log.PikoLog
 import io.github.nihildigit.pikpak.PikPakStreamReader
 import io.github.nihildigit.pikpak.StreamRole
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlin.concurrent.Volatile
+import kotlin.math.abs
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -37,6 +40,8 @@ internal class ProxySession(
         var inUse: Boolean = true,
         var lastUsedSeq: Long = 0L,
         var idleJob: Job? = null,
+        var activeStreamJob: Job? = null,
+        var releasedSignal: CompletableDeferred<Unit>? = null,
     )
 
     private val poolLock = Any()
@@ -115,7 +120,8 @@ internal class ProxySession(
     /** 把 [start, endExclusive) 的字节依次交给 [sink]。 */
     suspend fun stream(start: Long, endExclusive: Long, sink: suspend (ByteArray, Int, Int) -> Unit) {
         if (start == 0L) requestTail()
-        val entry = acquireReader(start)
+        val myJob = currentCoroutineContext().job
+        val entry = acquireReader(start, myJob)
         val reader = entry.reader
         var broken = false
         try {
@@ -149,33 +155,73 @@ internal class ProxySession(
         }
     }
 
-    private suspend fun acquireReader(start: Long): PooledReader {
-        var reused: PooledReader? = null
-        synchronized(poolLock) {
-            if (isClosed) throw CancellationException("会话已关闭")
-            val idle = pool.filter { !it.inUse }
-            // 1. 优先接续位置紧邻的闲置游标（连续分段 Range 或同一音/视频轨的下一帧，position == start 时零 seek）
-            val nearForward = idle
-                .filter { start >= it.reader.position && start - it.reader.position <= FORWARD_REUSE_GAP_BYTES }
-                .minByOrNull { start - it.reader.position }
-            val nearBackward = if (nearForward == null) {
-                idle
-                    .filter { it.reader.position > start && it.reader.position - start <= BACKWARD_REUSE_GAP_BYTES }
-                    .minByOrNull { it.reader.position - start }
-            } else null
-            val candidate = nearForward ?: nearBackward ?: if (pool.size >= MAX_POOLED_READERS) {
-                // 2. 池已满时淘汰复用最久未用的闲置游标；池未满时为远距离新轨道另开游标，免得音视频双轨交替互相冲掉预读
-                idle.minByOrNull { it.lastUsedSeq }
-            } else null
-            if (candidate != null) {
-                candidate.inUse = true
-                candidate.lastUsedSeq = ++useSeq
-                candidate.idleJob?.cancel()
-                candidate.idleJob = null
-                reused = candidate
+    private suspend fun acquireReader(start: Long, callerJob: Job): PooledReader {
+        for (attempt in 0 until 3) {
+            var reused: PooledReader? = null
+            var preemptSignal: CompletableDeferred<Unit>? = null
+            var preemptJob: Job? = null
+            synchronized(poolLock) {
+                if (isClosed) throw CancellationException("会话已关闭")
+                val idle = pool.filter { !it.inUse }
+                // 1. 优先命中已将 [start] 保留在内存窗口内（含回退窗口与后台超前预读窗口）的闲置游标
+                val inWindow = idle
+                    .filter { start in it.reader.retainedStartPosition..it.reader.retainedEndPosition }
+                    .minByOrNull { abs(it.reader.position - start) }
+                // 2. 其次接续前方不远处的闲置游标，或允许小幅回退的闲置游标
+                val nearForward = if (inWindow == null) {
+                    idle
+                        .filter { start > it.reader.retainedEndPosition && start - it.reader.retainedEndPosition <= FORWARD_REUSE_GAP_BYTES }
+                        .minByOrNull { start - it.reader.retainedEndPosition }
+                } else null
+                val nearBackward = if (inWindow == null && nearForward == null) {
+                    idle
+                        .filter { it.reader.retainedStartPosition > start && it.reader.retainedStartPosition - start <= BACKWARD_REUSE_GAP_BYTES }
+                        .minByOrNull { it.reader.retainedStartPosition - start }
+                } else null
+
+                val matchedIdle = inWindow ?: nearForward ?: nearBackward
+                if (matchedIdle != null) {
+                    matchedIdle.inUse = true
+                    matchedIdle.activeStreamJob = callerJob
+                    matchedIdle.lastUsedSeq = ++useSeq
+                    matchedIdle.idleJob?.cancel()
+                    matchedIdle.idleJob = null
+                    reused = matchedIdle
+                } else {
+                    // 3. 若播放器刚切走并重连同一条轨，新请求可能比旧回环 socket 的 FIN 早到数毫秒；
+                    //    此时该轨游标虽仍标为 inUse，但 start 恰落在它已覆盖的同轨窗口 `[retainedStartPosition, retainedEndPosition]` 内，
+                    //    立即取消旧响应协程并接管该游标，避免同轨并发新开多条重复 HTTP 连接互抢带宽。
+                    val inUseSameTrack = pool.firstOrNull {
+                        it.inUse &&
+                            it.reader.retainedStartPosition < it.reader.position &&
+                            start in it.reader.retainedStartPosition..it.reader.retainedEndPosition
+                    }
+                    if (inUseSameTrack != null) {
+                        preemptJob = inUseSameTrack.activeStreamJob
+                        preemptSignal = inUseSameTrack.releasedSignal
+                            ?: CompletableDeferred<Unit>().also { inUseSameTrack.releasedSignal = it }
+                    } else if (pool.size >= MAX_POOLED_READERS) {
+                        // 4. 池已满时淘汰复用最久未用的闲置游标；池未满时为远距离新轨道另开游标
+                        val victim = idle.minByOrNull { it.lastUsedSeq }
+                        if (victim != null) {
+                            victim.inUse = true
+                            victim.activeStreamJob = callerJob
+                            victim.lastUsedSeq = ++useSeq
+                            victim.idleJob?.cancel()
+                            victim.idleJob = null
+                            reused = victim
+                        }
+                    }
+                }
             }
+            reused?.let { return it }
+            if (preemptSignal != null) {
+                preemptJob?.cancel(CancellationException("同轨后续请求接管游标"))
+                preemptSignal.await()
+                continue
+            }
+            break
         }
-        reused?.let { return it }
 
         val fresh = source.openReader(role)
         var closeImmediately = false
@@ -184,7 +230,7 @@ internal class ProxySession(
                 closeImmediately = true
                 PooledReader(fresh, inUse = false)
             } else {
-                PooledReader(fresh, inUse = true, lastUsedSeq = ++useSeq).also { pool.add(it) }
+                PooledReader(fresh, inUse = true, lastUsedSeq = ++useSeq, activeStreamJob = callerJob).also { pool.add(it) }
             }
         }
         if (closeImmediately) {
@@ -196,17 +242,21 @@ internal class ProxySession(
 
     private fun releaseReader(entry: PooledReader, broken: Boolean) {
         var toClose: List<ProxyReader> = emptyList()
+        var waiterToWake: CompletableDeferred<Unit>? = null
         synchronized(poolLock) {
             entry.idleJob?.cancel()
             entry.idleJob = null
+            entry.activeStreamJob = null
+            waiterToWake = entry.releasedSignal
+            entry.releasedSignal = null
             if (isClosed || broken) {
                 pool.remove(entry)
                 toClose = listOf(entry.reader)
             } else {
                 entry.inUse = false
                 entry.lastUsedSeq = ++useSeq
-                // 超出池容量上限的额外并发游标在归还时收敛回 MAX_POOLED_READERS
-                if (pool.size > MAX_POOLED_READERS) {
+                // 若有同轨后续请求正等着接管该游标，先保留不淘汰；否则超出池容量上限时收敛回 MAX_POOLED_READERS
+                if (waiterToWake == null && pool.size > MAX_POOLED_READERS) {
                     val victims = pool.filter { !it.inUse }
                         .sortedBy { it.lastUsedSeq }
                         .take(pool.size - MAX_POOLED_READERS)
@@ -231,6 +281,7 @@ internal class ProxySession(
                 }
             }
         }
+        waiterToWake?.complete(Unit)
         toClose.forEach { runCatching { it.close() } }
     }
 
@@ -281,15 +332,15 @@ internal class ProxySession(
     private class ClientGone(cause: Exception) : Exception("播放器断开", cause)
 
     private companion object {
-        // 与 SDK reader 的块大小一致，一次 read 最多也只交出一块
-        const val CHUNK_BYTES = 256 * 1024
+        // 每次往本机回环 socket 推送 64 KiB，降低非交错 MP4 高频切轨时单次超前塞入内核回环缓冲区的冗余拷贝
+        const val CHUNK_BYTES = 64 * 1024
 
         const val TAIL_BYTES = 512L * 1024
 
         // 覆盖交错 MP4 的视频轨、音轨、字幕轨及尾部探测，互不挤占预读窗口
         const val MAX_POOLED_READERS = 4
-        const val FORWARD_REUSE_GAP_BYTES = 2L * 1024 * 1024
+        const val FORWARD_REUSE_GAP_BYTES = 4L * 1024 * 1024
         const val BACKWARD_REUSE_GAP_BYTES = 512L * 1024
-        val IDLE_READER_KEEP_ALIVE = 1500.milliseconds
+        val IDLE_READER_KEEP_ALIVE = 10_000.milliseconds
     }
 }

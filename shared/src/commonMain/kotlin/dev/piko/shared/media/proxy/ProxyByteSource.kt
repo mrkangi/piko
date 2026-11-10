@@ -58,6 +58,20 @@ interface ProxyReader : AutoCloseable {
 
     val position: Long
 
+    /**
+     * 在不关闭底层网络连接的前提下可直接回退重读的最早字节偏移（含）；默认等于 [position]。
+     *
+     * 本机回环 socket 发送缓冲区有数 MB，播放器只取走开头几十 KB 就断开连接切去读另一条轨道时，
+     * [position] 已被本机代理超前推到了数 MB 之后；暴露保留窗口起点后，[ProxySession] 下次看到
+     * 落在 `[retainedStartPosition, position]` 内的请求可直接命中该游标，不必新开连接重复下载。
+     */
+    val retainedStartPosition: Long get() = position
+
+    /**
+     * 在不关闭底层网络连接的前提下内存窗口已预读就绪的最晚字节偏移（不含）；默认等于 [position]。
+     */
+    val retainedEndPosition: Long get() = position
+
     suspend fun seekTo(position: Long)
 
     /** 读到的字节数，流尾返回 -1。 */

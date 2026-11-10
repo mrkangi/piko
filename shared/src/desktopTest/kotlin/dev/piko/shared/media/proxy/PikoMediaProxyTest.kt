@@ -5,6 +5,8 @@ import dev.piko.shared.media.testing.request
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -138,6 +140,78 @@ class PikoMediaProxyTest {
         assertEquals(2, source.openedReaders.get(), "openedReaders=${source.openedReaders.get()}")
         assertEquals(2, source.seekCalls.get(), "seekCalls=${source.seekCalls.get()}")
         assertEquals(0, source.concurrencyViolations.get())
+    }
+
+    @Test
+    fun httpStreamSourceReusesTwoLongLivedConnectionsAcrossAbortedOpenEndedPingPongRanges() = runBlocking {
+        val fileSize = 64 * 1024 * 1024
+        val upstreamRequests = AtomicInteger(0)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+        server.createContext("/video.mp4") { exchange ->
+            upstreamRequests.incrementAndGet()
+            val rangeHeader = exchange.requestHeaders.getFirst("Range").orEmpty()
+            val start = rangeHeader.substringAfter("bytes=", "0").substringBefore('-').toLongOrNull() ?: 0L
+            val remaining = fileSize - start
+            exchange.responseHeaders.add("Accept-Ranges", "bytes")
+            exchange.responseHeaders.add("Content-Range", "bytes $start-${fileSize - 1}/$fileSize")
+            exchange.sendResponseHeaders(206, remaining)
+            runCatching {
+                exchange.responseBody.use { out ->
+                    val chunk = ByteArray(32 * 1024)
+                    var pos = start
+                    while (pos < fileSize) {
+                        val n = minOf(chunk.size.toLong(), fileSize - pos).toInt()
+                        for (i in 0 until n) chunk[i] = ((pos + i) % 251).toByte()
+                        out.write(chunk, 0, n)
+                        pos += n
+                    }
+                }
+            }
+        }
+        server.start()
+        try {
+            val upstreamUrl = "http://127.0.0.1:${server.address.port}/video.mp4"
+            val source = HttpStreamByteSource(upstreamUrl, fileSize.toLong())
+            val stream = proxy.register(source, "video.mp4")
+            try {
+                var audioPos = 2L * 1024 * 1024
+                var videoPos = 32L * 1024 * 1024
+                var prevAudioSocket: java.net.Socket? = null
+                var prevVideoSocket: java.net.Socket? = null
+                repeat(12) {
+                    val audioResp = openRequest(stream.url, range = "bytes=$audioPos-")
+                    prevAudioSocket?.close()
+                    prevAudioSocket = audioResp.socket
+                    assertEquals(206, audioResp.status)
+                    val aBytes = audioResp.body.readNBytes(12_000)
+                    assertEquals(12_000, aBytes.size)
+                    for (i in aBytes.indices) {
+                        assertEquals(((audioPos + i) % 251).toByte(), aBytes[i])
+                    }
+                    audioPos += 12_000
+
+                    val videoResp = openRequest(stream.url, range = "bytes=$videoPos-")
+                    prevVideoSocket?.close()
+                    prevVideoSocket = videoResp.socket
+                    assertEquals(206, videoResp.status)
+                    val vBytes = videoResp.body.readNBytes(48_000)
+                    assertEquals(48_000, vBytes.size)
+                    for (i in vBytes.indices) {
+                        assertEquals(((videoPos + i) % 251).toByte(), vBytes[i])
+                    }
+                    videoPos += 48_000
+                }
+                prevAudioSocket?.close()
+                prevVideoSocket?.close()
+                // 24 次开放 Range 短请求（每次读几十 KB 即主动断开），远端应只建立音轨、视频轨 2 条长连接
+                assertEquals(2, upstreamRequests.get(), "upstreamRequests=${upstreamRequests.get()}")
+            } finally {
+                stream.close()
+            }
+        } finally {
+            server.stop(0)
+        }
     }
 
     @Test
