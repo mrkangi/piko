@@ -263,8 +263,14 @@ private fun VideoPlayerContent(
     val player = remember(playerScope) { MediampPlayer(Unit, playerScope.coroutineContext) }
     // 偏好是 StateFlow，first() 当场返回
     val hardwareDecoding = remember { runBlocking { services.preferences.hardwareDecodingFlow.first() } }
+    val compatibleHardwareDecoding = remember { runBlocking { services.preferences.compatibleHardwareDecodingFlow.first() } }
     val backend = remember(player) {
-        MediampPlaybackBackend(player, playerScope, hardwareDecoding = hardwareDecoding).also { created ->
+        MediampPlaybackBackend(
+            player,
+            playerScope,
+            hardwareDecoding = hardwareDecoding,
+            compatibleHardwareDecoding = compatibleHardwareDecoding,
+        ).also { created ->
             // mpv 的音量在换文件时保留，只需在开窗时设一次
             settings.get(KEY_PLAYER_VOLUME).toFloatOrNull()?.let(created::setVolume)
         }

@@ -19,6 +19,7 @@ import io.github.nihildigit.pikpak.FileKind
 import io.github.nihildigit.pikpak.FileStat
 import io.github.nihildigit.pikpak.StreamRole
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlin.io.encoding.Base64
 import kotlin.test.*
@@ -67,10 +68,14 @@ class LocalMountsTest {
             assertFalse(isDriveFolderId(location.id))
             assertFalse(location.id.contains("私人"))
         }
-        for (segment in listOf("..", ".", "", "/etc", "a/b", "a\\b", "C:", "\u0000")) {
+        for (segment in listOf("..", ".", "", "/etc", "a/b", "\u0000")) {
             assertFailsWith<IllegalArgumentException> { LocalLocation("mount-1", listOf(segment)) }
             val encoded = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(segment.encodeToByteArray())
             if (segment.isNotEmpty()) assertNull(LocalLocation.of("piko-local-dir:mount-1/$encoded"))
+        }
+        for (segment in listOf("a\\b", "C:")) {
+            val location = LocalLocation("mount-1", listOf(segment))
+            assertEquals(location, LocalLocation.of(location.id))
         }
         assertNull(LocalLocation.of("piko-local-dir:../"))
         assertNull(LocalLocation.of("piko-local-file:mount-1/%%%"))
@@ -334,6 +339,48 @@ class LocalMountsTest {
             "1234-5678:Photos",
             formatLocalPathForDisplay("content://com.android.externalstorage.documents/tree/1234-5678%3APhotos"),
         )
+    }
+
+    @Test fun restoringBeforeTheMountTableLoadsKeepsTheLocalPath() = smoke { scope ->
+        val preferences = object : PikoUserPreferences by MemoryPreferences() {
+            override val localMountsFlow = MutableSharedFlow<String>()
+        }
+        val mounts = LocalMounts(preferences, { "account-a" }, {}, scope)
+        val local = PikoPathBreadcrumb(LocalLocation("mount-1", listOf("season")).id, "season")
+        val stack = listOf(
+            PikoDriveRepository.ROOT_BREADCRUMB,
+            DeviceLocation.rootCrumb(),
+            DeviceLocation.selfCrumb(),
+            local,
+        )
+        assertEquals(stack, mounts.restoredStack(stack))
+    }
+
+    @Test fun repeatedListingsReuseTheShortCacheAndCanBeInvalidated() = smoke { scope ->
+        val mounts = LocalMounts(preferences(), { "account-a" }, {}, scope)
+        val mount = mounts.mount("/local", "Local")
+        var calls = 0
+        val file = FileStat(
+            id = mount.location.child("photo.jpg", false).id,
+            name = "photo.jpg",
+            parentId = mount.location.id,
+            thumbnailLink = "content://photo",
+        )
+        mounts.access = object : LocalFileAccess {
+            override suspend fun list(mount: LocalMount, location: LocalLocation): List<FileStat> {
+                calls++
+                return listOf(file)
+            }
+            override suspend fun playbackPath(mount: LocalMount, location: LocalLocation) = "/local/photo.jpg"
+            override suspend fun probe(mount: LocalMount, location: LocalLocation) = null
+        }
+        assertEquals(listOf(file), mounts.list(mount.location.id))
+        assertEquals(listOf(file), mounts.cachedListing(mount.location.id))
+        assertEquals(1, calls)
+        mounts.invalidateListing(mount.location.id)
+        assertNull(mounts.cachedListing(mount.location.id))
+        assertEquals(listOf(file), mounts.list(mount.location.id))
+        assertEquals(2, calls)
     }
 
     @Test fun gallerySessionIncludesImagesByDefaultAndTogglesDynamically() = smoke { scope ->

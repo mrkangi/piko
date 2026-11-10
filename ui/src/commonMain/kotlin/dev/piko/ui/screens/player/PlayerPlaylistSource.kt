@@ -25,7 +25,8 @@ suspend fun DriveRepository.siblingMedia(fileId: String): SiblingMedia {
     val parentId = locateFolder(fileId).getOrNull()?.lastOrNull()?.id
         ?: getFileDetail(fileId).getOrNull()?.parentId
         ?: return SiblingMedia(emptyList(), emptyList())
-    val files = listBrowsable(parentId, dev.piko.shared.data.PikoFileSortOrder.NAME_ASC).getOrNull().orEmpty()
+    val files = cachedBrowsable(parentId, dev.piko.shared.data.PikoFileSortOrder.NAME_ASC)
+        ?: listBrowsable(parentId, dev.piko.shared.data.PikoFileSortOrder.NAME_ASC).getOrNull().orEmpty()
     return SiblingMedia(
         videos = files.filter { it.isPlayableVideo() },
         subtitles = files.filter { !it.isFolder && isPlayerSubtitleName(it.name) },

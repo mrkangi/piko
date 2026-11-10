@@ -64,6 +64,8 @@ internal class MediampPlaybackBackend(
     private val keyframeStart: Boolean = false,
     /** 设置里的「硬件解码」，见 PikoUserPreferences.hardwareDecodingFlow。 */
     hardwareDecoding: Boolean = true,
+    /** 设置里的「兼容硬解」：帧拷回内存，见 PikoUserPreferences.compatibleHardwareDecodingFlow。 */
+    compatibleHardwareDecoding: Boolean = false,
 ) : PlaybackBackend {
     private val bufferingFeature = player.features[Buffering.Key]
     private val speedFeature = player.features[PlaybackSpeed.Key]
@@ -160,6 +162,7 @@ internal class MediampPlaybackBackend(
         // MediaMP 写死 hwdec=auto。这里在打开文件之前改属性就够了，不必经它的 configureOptions：mpv 的 hwdec 运行时可改，
         // 下一次建解码器时生效。只关解码，画面照旧经 D3D11 交给 Skia
         if (!hardwareDecoding) mpv?.setPropertyString("hwdec", "no")
+        else if (compatibleHardwareDecoding) mpv?.setPropertyString("hwdec", "auto-copy")
         scope.launch {
             player.currentPositionMillis.collect { pos ->
                 if (manualSeeking && pos != positionMillis) {

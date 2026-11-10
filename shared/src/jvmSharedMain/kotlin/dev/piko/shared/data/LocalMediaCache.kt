@@ -35,7 +35,11 @@ data class LocalMediaMetadata(val width: Int = 0, val height: Int = 0, val durat
 }
 
 /** 首屏仅查内存；磁盘读取与未命中探测在 IO 线程执行，最多同时探测两项。文件身份不作为缓存文件名。 */
-class LocalMediaCache(private val directory: File, private val scope: CoroutineScope, private val changed: (String) -> Unit) {
+class LocalMediaCache(
+    private val directory: File,
+    private val scope: CoroutineScope,
+    private val changed: (String, FileStat?) -> Unit,
+) {
     private val lanes = Semaphore(2)
     private val pending = ConcurrentHashMap.newKeySet<String>()
     private val locks = Array(64) { Mutex() }
@@ -126,11 +130,11 @@ class LocalMediaCache(private val directory: File, private val scope: CoroutineS
                 val job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                     try {
                         if (generation.get() != gen) return@launch
-                        probe(file, read)
+                        val enriched = probe(file, read)
                         val shouldNotify = synchronized(lifecycle) { generation.get() == gen }
                         if (shouldNotify) {
-                            changed(file.parentId)
-                            if (alsoNotifyFolder != null && alsoNotifyFolder != file.parentId) changed(alsoNotifyFolder)
+                            changed(file.parentId, enriched)
+                            if (alsoNotifyFolder != null && alsoNotifyFolder != file.parentId) changed(alsoNotifyFolder, enriched)
                         }
                     } catch (cancel: kotlinx.coroutines.CancellationException) {
                         throw cancel

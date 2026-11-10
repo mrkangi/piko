@@ -35,7 +35,8 @@ internal fun FileStat.isDiscoverableImage(): Boolean = isPreviewableImage() && !
 internal fun FileStat.isDiscoverableGalleryMedia(includeImages: Boolean = true): Boolean =
     isDiscoverableVideo() || (includeImages && isDiscoverableImage())
 
-internal fun FileStat.hasGalleryCover(): Boolean = dev.piko.shared.data.LocalLocation.isLocal(id) || thumbnailLink.isNotBlank() || hash.isNotBlank()
+internal fun FileStat.hasGalleryCover(): Boolean =
+    dev.piko.shared.data.VirtualLocation.isVirtual(id) || thumbnailLink.isNotBlank() || hash.isNotBlank()
 
 /** 显式选中的文件也能只借用作品归属，不必套用信息流的样片过滤。 */
 suspend fun analyzeVideoFolder(folderId: String, files: List<FileStat>): VideoFolderBatch = withContext(Dispatchers.Default) {
@@ -98,7 +99,8 @@ class VideoDiscovery internal constructor(
         }
         val id = level.firstOrNull() ?: return null
         val batch = readBatch(id)
-        level.removeFirst()
+        // readBatch 期间刷新可能已经把这个目录 forget 掉；不能再假定它还在队首。
+        level.remove(id)
         return batch
     }
 
@@ -134,7 +136,10 @@ class VideoDiscovery internal constructor(
                 }
             }.awaitAll()
         }
-        repeat(takeCount) { level.removeFirst() }
+        // 等待列目录期间 refreshFolders 可能已 forget 这些目录（issue: 本地挂载目录点瀑布流闪退）。
+        // 这里只能按 id 移除还在队列里的项，不能假定数量没变；被取消的旧批次也不再改动遍历状态。
+        currentCoroutineContext().ensureActive()
+        targets.forEach { level.remove(it) }
         return fetched.map { (id, batch) ->
             if (batch.failure != null) {
                 failures[id] = batch.failure

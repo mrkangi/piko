@@ -5,6 +5,7 @@ import io.github.nihildigit.pikpak.FileStat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -163,7 +164,16 @@ class LocalMounts(
     val flow: kotlinx.coroutines.flow.StateFlow<List<LocalMount>> = state
     private var cached: List<LocalMount>
         get() = state.value
-        set(value) { state.value = value }
+        set(value) {
+            state.value = value
+            loaded = true
+        }
+    @kotlin.concurrent.Volatile
+    private var loaded = false
+    private class ListingEntry(val at: Long, val files: List<FileStat>)
+    // 刚列过的目录直接复用，避免瀑布流、播放器取同目录列表和缩略图刷新对同一 SAF 目录反复整表查询。
+    // 时间很短；本机媒体探测有变化时会主动失效。
+    private val listings = kotlinx.coroutines.flow.MutableStateFlow<Map<String, ListingEntry>>(emptyMap())
     init {
         scope.launch {
             preferences?.localMountsFlow?.collect { raw ->
@@ -179,6 +189,21 @@ class LocalMounts(
 
     fun cachedRoots(): List<FileStat> =
         cached.filter { it.account == account() }.map(::toRootStat)
+    fun cachedListing(id: String): List<FileStat>? {
+        val entry = listings.value[id] ?: return null
+        return entry.files.takeIf { Clock.System.now().toEpochMilliseconds() - entry.at <= LISTING_TTL_MS }
+            ?: run { listings.update { it - id }; null }
+    }
+    fun invalidateListing(id: String) {
+        listings.update { it - id }
+    }
+    fun updateCachedListing(folderId: String, file: FileStat) {
+        listings.update { current ->
+            val entry = current[folderId] ?: return@update current
+            if (entry.files.none { it.id == file.id }) return@update current
+            current + (folderId to ListingEntry(entry.at, entry.files.map { if (it.id == file.id) file else it }))
+        }
+    }
     private suspend fun read(): List<LocalMount> = runCatching {
         json.decodeFromString<List<LocalMount>>(preferences?.localMountsFlow?.first().orEmpty().ifBlank { "[]" })
     }.getOrDefault(emptyList())
@@ -284,6 +309,8 @@ class LocalMounts(
         changed(setOf(DeviceLocation.SELF_ID))
     }
     fun restoredStack(stack: List<PikoPathBreadcrumb>): List<PikoPathBreadcrumb> {
+        // 挂载表尚未从偏好恢复时不能把本机路径当成已取消挂载，否则启动/恢复瞬间会退到「此设备」。
+        if (!loaded) return stack
         val firstLocal = stack.indexOfFirst { LocalLocation.isLocal(it.id) }
         if (firstLocal < 0) return stack
         val local = stack.drop(firstLocal).takeWhile { isMountedCached(it.id) }
@@ -302,12 +329,23 @@ class LocalMounts(
         runCatching { access?.closeMount(entry.mountId) }
         runCatching { secrets?.clearLocalMountPassword(entry.account, entry.mountId) }
         cached = entries
+        listings.update { current -> current.filterKeys { LocalLocation.of(it)?.mountId != entry.mountId } }
         changed(setOf(DeviceLocation.SELF_ID, entry.location.id))
+    }
+    fun cancelPending() {
+        listings.value = emptyMap()
     }
     suspend fun list(id: String): List<FileStat> {
         val location = requireNotNull(LocalLocation.of(id))
         val mount = find(id) ?: error("本地文件夹已取消挂载")
-        return safeRead { requireNotNull(access).list(mount, location) }
+        val files = safeRead { requireNotNull(access).list(mount, location) }
+        listings.update { current ->
+            val next = LinkedHashMap(current - id)
+            next[id] = ListingEntry(Clock.System.now().toEpochMilliseconds(), files)
+            while (next.size > LISTING_CACHE_LIMIT) next.remove(next.keys.first())
+            next
+        }
+        return files
     }
     suspend fun resolve(id: String, subtitle: Boolean = false): String? {
         val location = LocalLocation.of(id) ?: return null
@@ -353,5 +391,9 @@ class LocalMounts(
         return listOf(PikoPathBreadcrumb(mount.location.id, mount.fallbackName)) + location.segments.mapIndexed { i, name ->
             PikoPathBreadcrumb(LocalLocation(location.mountId, location.segments.take(i + 1)).id, name)
         }
+    }
+    private companion object {
+        const val LISTING_TTL_MS = 5_000L
+        const val LISTING_CACHE_LIMIT = 32
     }
 }

@@ -22,6 +22,7 @@ import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.shared.media.player.PlayerAspectRatio
+import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.shared.media.player.VideoCropRegion
 import dev.piko.shared.media.player.mpvSubtitleAddCommands
 import dev.piko.shared.media.player.mpvSubtitleSelectCommand
@@ -58,6 +59,8 @@ internal class MpvPlaybackBackend(
     private val headless: Boolean = false,
     /** 设置里的「硬件解码」，见 PikoUserPreferences.hardwareDecodingFlow。 */
     private val hardwareDecoding: Boolean = true,
+    /** 设置里的「兼容硬解」：直接用 mediacodec-copy，见 PikoUserPreferences.compatibleHardwareDecodingFlow。 */
+    compatibleHardwareDecoding: Boolean = false,
 ) : PlaybackBackend, MPVLib.EventObserver, MPVLib.LogObserver {
 
     private val mpv: MPVLib = MPVLib.create(context) ?: error(tr("libmpv 初始化失败", "libmpv initialization failed", "libmpvの初期化に失敗しました", "libmpv 초기화 실패", "libmpv 初始化失敗"))
@@ -96,6 +99,13 @@ internal class MpvPlaybackBackend(
     // 当前文件的外挂字幕，等 FILE_LOADED 再挂：loadfile 之前 sub-add 会挂到上一个文件上
     @Volatile private var pendingSubtitles: List<ExternalSubtitle> = emptyList()
 
+    // 单个视频的解码方式：设置页给的是默认值，播放页可按文件改。按 per-file 选项传，不重开 mpv 句柄
+    @Volatile private var currentDecodeMode: VideoDecodeMode = when {
+        !hardwareDecoding -> VideoDecodeMode.Software
+        compatibleHardwareDecoding -> VideoDecodeMode.Compatible
+        else -> VideoDecodeMode.Auto
+    }
+
     // 最近一次 loadfile 已到 FILE_LOADED。手动挂的字幕据此决定立即 sub-add 还是排进上面那一批
     @Volatile var fileLoaded = false
         private set
@@ -103,6 +113,9 @@ internal class MpvPlaybackBackend(
     private var isLoadingFile by mutableStateOf(false)
     private var isSeeking by mutableStateOf(false)
     private var isPausedForCache by mutableStateOf(false)
+
+    // paused-for-cache 每次由假变真计一次。详情面板据此区分卡在取流还是排帧/解码
+    @Volatile private var cacheStallCount = 0
 
     private val _events = MutableSharedFlow<PlaybackBackendEvent>(extraBufferCapacity = 16)
     override val events: Flow<PlaybackBackendEvent> = _events.asSharedFlow()
@@ -147,7 +160,7 @@ internal class MpvPlaybackBackend(
         mpv.setOptionString("opengl-es", "yes")
         // 零拷贝的 mediacodec 走 AImageReader 与 vo=gpu 互通；不支持的编码（wmv3、rv40 等）
         // 自动落回软解，这正是换 mpv 的目的
-        mpv.setOptionString("hwdec", if (hardwareDecoding) "mediacodec,mediacodec-copy" else "no")
+        mpv.setOptionString("hwdec", hwdecPropertyOf(currentDecodeMode))
         mpv.setOptionString("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         mpv.setOptionString("ao", "audiotrack,opensles")
         mpv.setOptionString("idle", "yes")
@@ -188,6 +201,8 @@ internal class MpvPlaybackBackend(
         } else {
             mpv.setOptionString("demuxer-max-bytes", "${48 * MIB}")
             mpv.setOptionString("demuxer-max-back-bytes", "${16 * MIB}")
+            // 卡顿后重新攒够 2 秒才继续，避免在供流边缘反复 loading→播一秒→loading
+            mpv.setOptionString("cache-pause-wait", "2")
         }
         mpv.addObserver(this)
         mpv.addLogObserver(this)
@@ -245,8 +260,10 @@ internal class MpvPlaybackBackend(
         positionMillis = startMillis.coerceAtLeast(0L)
         durationMillis = 0L
         bufferedPositionMillis = 0L
-        // mpv 0.38 起 loadfile 的第三个参数是插入位置，逐文件选项放在第四个
-        val command = arrayOf("loadfile", uri, "replace", "-1", "start=$start")
+        // mpv 0.38 起 loadfile 的第三个参数是插入位置，逐文件选项放在第四个。
+        // 解码方式只作用于这一个文件，不必重开 mpv 句柄
+        val perFileOptions = "start=$start,hwdec=${hwdecOptionOf(currentDecodeMode)}"
+        val command = arrayOf("loadfile", uri, "replace", "-1", perFileOptions)
         if (surfaceAttached || headless) {
             issueLoad(command)
         } else {
@@ -394,8 +411,52 @@ internal class MpvPlaybackBackend(
         onMpv { mpv.setPropertyString("cache-secs", "$seconds") }
     }
 
+    /**
+     * 按这一档的平均字节速率给解复用缓存定预算：目标为 [BUFFER_SECONDS] 秒的量，
+     * 低码率不低于 48 MiB，64 位设备最多 128 MiB，32 位设备封在 64 MiB。
+     * 码率未知（本地文件、探测不到时长）时维持构造函数里的默认值。
+     */
+    override fun tuneBuffering(mediaBytesPerSecond: Long?) {
+        if (preview) return
+        val rate = mediaBytesPerSecond?.takeIf { it > 0L } ?: return
+        val ceiling = if (android.os.Process.is64Bit()) MAX_BUFFER_BYTES_64 else MAX_BUFFER_BYTES_32
+        val bytes = (rate * BUFFER_SECONDS).coerceIn(MIN_BUFFER_BYTES, ceiling)
+        onMpv {
+            mpv.setPropertyString("demuxer-max-bytes", "$bytes")
+            mpv.setPropertyString("demuxer-max-back-bytes", "${(bytes / 4).coerceAtLeast(MIN_BACK_BUFFER_BYTES)}")
+        }
+        PikoLog.d("Player", "缓冲预算 ${bytes / MIB} MiB（估算码率 ${rate / 1024} KB/s）")
+    }
+
     fun bufferReport(): String? =
         if (released) null else "cache-secs=${mpv.getPropertyString("cache-secs")}，缓存 ${mpv.getPropertyString("demuxer-cache-duration")} 秒"
+
+    override fun preferCompatibleDecoding() {
+        if (!hardwareDecoding || currentDecodeMode != VideoDecodeMode.Auto) return
+        currentDecodeMode = VideoDecodeMode.Compatible
+        PikoLog.i("Player", "改用兼容硬解 mediacodec-copy，重新打开当前文件后生效")
+    }
+
+    override val decodeMode: VideoDecodeMode get() = currentDecodeMode
+
+    override val decodeModeOptions: List<VideoDecodeMode> =
+        if (preview) emptyList() else VideoDecodeMode.entries
+
+    override fun setDecodeMode(mode: VideoDecodeMode) {
+        if (preview || currentDecodeMode == mode) return
+        currentDecodeMode = mode
+        PikoLog.i("Player", "解码方式改为 $mode，重新打开当前文件后生效")
+    }
+
+    private fun hwdecOptionOf(mode: VideoDecodeMode): String = when (mode) {
+        // 逐文件选项按逗号分隔，值里不能再带逗号；Auto 只点零拷贝，解不了时 mpv 自己退软解
+        VideoDecodeMode.Auto -> "mediacodec"
+        VideoDecodeMode.Compatible -> "mediacodec-copy"
+        VideoDecodeMode.Software -> "no"
+    }
+
+    private fun hwdecPropertyOf(mode: VideoDecodeMode): String =
+        if (mode == VideoDecodeMode.Auto) "mediacodec,mediacodec-copy" else hwdecOptionOf(mode)
 
     override fun selectAudioTrack(id: String) {
         onMpv { mpv.setPropertyString("aid", id) }
@@ -456,9 +517,7 @@ internal class MpvPlaybackBackend(
             mpv.setOptionString("force-window", "yes")
             if (restoreVideoOutput && !headless) {
                 mpv.setPropertyString("vo", VIDEO_OUTPUT)
-                if (hardwareDecoding) {
-                    mpv.setPropertyString("hwdec", "mediacodec,mediacodec-copy")
-                }
+                mpv.setPropertyString("hwdec", hwdecPropertyOf(currentDecodeMode))
                 val targetVid = vidBeforeDetach.ifBlank { "auto" }
                 mpv.setPropertyString("vid", targetVid)
                 needsPausedRedrawOnResize = true
@@ -595,7 +654,10 @@ internal class MpvPlaybackBackend(
     fun readIntProperty(name: String): Int? = if (released) null else mpv.getPropertyInt(name)
 
     // 属性在当前文件上不存在时（例如没有音轨）当作读不到，不让面板因一项读失败整个出错
-    override fun mpvProperty(name: String): String? = runCatching { readStringProperty(name) }.getOrNull()
+    override fun mpvProperty(name: String): String? = when (name) {
+        CACHE_STALLS_PROPERTY -> cacheStallCount.toString()
+        else -> runCatching { readStringProperty(name) }.getOrNull()
+    }
 
     private fun issueLoad(command: Array<String>) {
         supersededLoads = issuedLoads
@@ -665,7 +727,10 @@ internal class MpvPlaybackBackend(
     override fun eventProperty(property: String, value: Boolean) {
         when (property) {
             "pause" -> isPlaying = !value
-            "paused-for-cache" -> isPausedForCache = value
+            "paused-for-cache" -> {
+                if (value && !isPausedForCache) cacheStallCount += 1
+                isPausedForCache = value
+            }
             "eof-reached" -> if (value) _events.tryEmit(PlaybackBackendEvent.Ended)
         }
     }
@@ -691,7 +756,7 @@ internal class MpvPlaybackBackend(
         }
         val summary = "mpv 解码状态（preview=$preview, load=#$issuedLoads, surface=#$surfaceGeneration, $trigger）：" +
             "codec=${codec.ifEmpty { "unknown" }}, ${w}x$h, vo=${vo.ifEmpty { "none" }}, 硬解：$hwdec"
-        if (hardwareDecoding && !headless && (hwdec == "no" || hwdec == "none") && codec.isNotEmpty()) {
+        if (currentDecodeMode != VideoDecodeMode.Software && !headless && (hwdec == "no" || hwdec == "none") && codec.isNotEmpty()) {
             PikoLog.w("Player", summary)
         } else {
             PikoLog.d("Player", summary)
@@ -761,6 +826,14 @@ internal class MpvPlaybackBackend(
         const val REDRAW_MARKER = "piko-redraw"
 
         const val MIB = 1024 * 1024
+
+        // 播放详情面板的自定义属性：缓冲停等次数，由 paused-for-cache 计数而来
+        const val CACHE_STALLS_PROPERTY = "piko-cache-stalls"
+        const val BUFFER_SECONDS = 25L
+        const val MIN_BUFFER_BYTES = 48L * MIB
+        const val MIN_BACK_BUFFER_BYTES = 16L * MIB
+        const val MAX_BUFFER_BYTES_64 = 128L * MIB
+        const val MAX_BUFFER_BYTES_32 = 64L * MIB
         const val CALL_THREAD_IDLE_SECONDS = 5L
         const val PREVIEW_PROBE_BYTES = 1024 * 1024
         const val PREVIEW_ANALYZE_SECONDS = 1

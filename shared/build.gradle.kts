@@ -51,6 +51,8 @@ kotlin {
         val jvmSharedMain by getting {
             dependencies {
                 implementation(libs.smbj)
+                implementation(libs.jellyfin.core)
+                implementation(libs.paho.mqttv3)
                 runtimeOnly(libs.slf4j.nop)
             }
         }

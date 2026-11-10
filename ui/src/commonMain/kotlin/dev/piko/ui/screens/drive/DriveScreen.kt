@@ -97,12 +97,12 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.LocalShowExtensions
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PanelAnchor
-import dev.piko.ui.components.PikoDialog
-import dev.piko.ui.components.PikoDialogConfirm
 import dev.piko.ui.components.RemoteDownloadDialog
 import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.SmbMountDialog
+import dev.piko.ui.components.JellyfinDialog
+import dev.piko.ui.components.MountChooserDialog
 import dev.piko.ui.components.pageFocusTarget
 import dev.piko.ui.components.previewImageCoverUrl
 import dev.piko.ui.components.rememberDownloadLauncher
@@ -216,6 +216,7 @@ private class DriveViewEvents(
     val onTogglePinFolder: (FileStat) -> Unit,
     val onRevealLocalInFileManager: (String) -> Unit,
     val onUnmountLocalFolder: (String) -> Unit,
+    val onUnmountJellyfinServer: (String) -> Unit,
 )
 
 @Stable
@@ -443,6 +444,7 @@ fun DriveScreen(
     val pickLocalFolder = platform.rememberLocalFolderLauncher { path, name -> viewModel.completeLocalMount(path, name) }
     var showMountChooser by remember { mutableStateOf(false) }
     var showSmbMount by remember { mutableStateOf(false) }
+    var showJellyfin by remember { mutableStateOf(false) }
     val mountAction = SheetAction(
         Icons.Outlined.Storage,
         tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄"),
@@ -450,32 +452,21 @@ fun DriveScreen(
         group = ActionGroup.Create,
     )
     if (showMountChooser) {
-        PikoDialog(
-            onDismissRequest = { showMountChooser = false },
-            confirmButton = {
-                TextButton(onClick = { showMountChooser = false }) {
-                    Text(tr("取消", "Cancel", "キャンセル", "취소", "取消"))
+        MountChooserDialog(
+            onDismiss = { showMountChooser = false },
+            onLocalFolder = pickLocalFolder?.let { launcher ->
+                {
+                    showMountChooser = false
+                    if (viewModel.beginLocalMount(latestActiveFolder.id)) launcher()
                 }
             },
-            title = { Text(tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄")) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PikoDialogConfirm(
-                        label = tr("本地文件夹", "Local folder", "ローカルフォルダー", "로컬 폴더", "本機資料夾"),
-                        enabled = pickLocalFolder != null,
-                        onClick = {
-                            showMountChooser = false
-                            if (pickLocalFolder != null && viewModel.beginLocalMount(latestActiveFolder.id)) pickLocalFolder()
-                        },
-                    )
-                    PikoDialogConfirm(
-                        label = tr("SMB 共享", "SMB share", "SMB 共有", "SMB 공유", "SMB 共用"),
-                        onClick = {
-                            showMountChooser = false
-                            showSmbMount = true
-                        },
-                    )
-                }
+            onSmbShare = {
+                showMountChooser = false
+                showSmbMount = true
+            },
+            onJellyfin = {
+                showMountChooser = false
+                showJellyfin = true
             },
         )
     }
@@ -485,6 +476,14 @@ fun DriveScreen(
             onTest = viewModel::testSmb,
             onMount = { info, name, password ->
                 viewModel.mountSmb(info, name, password)
+            },
+        )
+    }
+    if (showJellyfin) {
+        JellyfinDialog(
+            onDismiss = { showJellyfin = false },
+            onLogin = { url, name, username, password ->
+                viewModel.loginJellyfin(url, name, username, password)
             },
         )
     }
@@ -680,6 +679,7 @@ fun DriveScreen(
         onTogglePinFolder = { viewModel.togglePinFolder(it, pinnedFolders) },
         onRevealLocalInFileManager = viewModel::revealLocalInFileManager,
         onUnmountLocalFolder = viewModel::unmountLocalFolder,
+        onUnmountJellyfinServer = viewModel::removeJellyfinServer,
     )
 
     DriveScreenContent(
@@ -1005,6 +1005,7 @@ private fun DriveScreenContent(
         onRevealFromGalleryOrLibrary = ::revealFromGalleryOrLibrary,
         onRevealLocalInFileManager = events.onRevealLocalInFileManager,
         onUnmountLocal = events.onUnmountLocalFolder,
+        onUnmountJellyfin = events.onUnmountJellyfinServer,
     )
     remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
         RemoteDownloadDialog(files = targets, onDismiss = { remoteDownloadTargets = null })

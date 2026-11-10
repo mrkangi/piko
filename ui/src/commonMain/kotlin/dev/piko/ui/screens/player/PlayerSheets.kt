@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.dp
 import dev.piko.shared.media.ORIGINAL_QUALITY
 import dev.piko.shared.media.player.MediaTrack
 import dev.piko.shared.media.player.PlayerAspectRatio
+import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.preferredVersion
 import dev.piko.shared.media.player.trackDisplayName
@@ -691,6 +692,9 @@ internal fun PlayerSettingsPanel(
     aspectRatio: PlayerAspectRatio?,
     onAspectRatioChange: (PlayerAspectRatio) -> Unit,
     modifier: Modifier = Modifier,
+    /** 当前文件的解码方式；后端不支持在播放中切换时为 null，整节隐藏。 */
+    decodeMode: VideoDecodeMode? = null,
+    onDecodeModeChange: ((VideoDecodeMode) -> Unit)? = null,
     // 完整文件名。顶栏的标题单行、中间省略，长文件名在播放时只能到这里看全
     title: String? = null,
     /** 去处：音轨与字幕、详细信息。 */
@@ -761,6 +765,17 @@ internal fun PlayerSettingsPanel(
                     isSelected = { it == aspectRatio },
                     optionLabel = { it.label },
                     onSelect = onAspectRatioChange,
+                )
+            }
+        }
+        // 只改这一个文件，不动设置页的默认值；切档会重开当前文件，黑一瞬
+        if (decodeMode != null && onDecodeModeChange != null) {
+            SettingsSection(tr("解码方式", "Decoding", "デコード方式", "디코딩 방식", "解碼方式")) {
+                ConnectedChoiceRow(
+                    options = VideoDecodeMode.entries,
+                    isSelected = { it == decodeMode },
+                    optionLabel = { it.label },
+                    onSelect = onDecodeModeChange,
                 )
             }
         }
@@ -1002,6 +1017,13 @@ internal val PlayerAspectRatio.label: String
         PlayerAspectRatio.Crop -> tr("裁剪填充", "Crop to fill", "切り抜いて拡大", "잘라서 채우기", "裁切填滿")
         PlayerAspectRatio.Stretch -> tr("拉伸全屏", "Stretch to fill", "引き伸ばして表示", "늘려서 채우기", "拉伸至全螢幕")
         PlayerAspectRatio.RegionCrop -> tr("框选填充", "Fill selected area", "選択範囲を拡大", "선택 영역 채우기", "框選填滿")
+    }
+
+internal val VideoDecodeMode.label: String
+    get() = when (this) {
+        VideoDecodeMode.Auto -> tr("自动", "Auto", "自動", "자동", "自動")
+        VideoDecodeMode.Compatible -> tr("兼容", "Compatible", "互換", "호환", "相容")
+        VideoDecodeMode.Software -> tr("软件", "Software", "ソフトウェア", "소프트웨어", "軟體")
     }
 
 // 设置面板的倍速选项，[ ] 键也按这几档换

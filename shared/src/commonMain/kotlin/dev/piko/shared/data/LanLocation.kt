@@ -17,7 +17,8 @@ data class LanLocation(
     init {
         require(peerId.matches(IDENTIFIER))
         require(shareId.matches(IDENTIFIER))
-        require(segments.all { it.isNotEmpty() && it != "." && it != ".." && it.none { c -> c == '/' || c == '\\' || c == '\u0000' || c == ':' } })
+        // 冒号与反斜杠在 Linux/macOS 上是合法文件名；路径穿越由 host 的文件访问层再做根目录校验。
+        require(segments.all { it.isNotEmpty() && it != "." && it != ".." && it.none { c -> c == '/' || c == '\u0000' } })
     }
 
     val path: String get() = segments.joinToString("/")

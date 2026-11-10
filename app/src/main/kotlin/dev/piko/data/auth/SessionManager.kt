@@ -108,6 +108,7 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val AUTO_DETECT_CLIPBOARD_LINKS = booleanPreferencesKey("auto_detect_clipboard_links")
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
         val HARDWARE_DECODING = booleanPreferencesKey("hardware_decoding")
+        val COMPATIBLE_HARDWARE_DECODING = booleanPreferencesKey("compatible_hardware_decoding")
         val PLAYBACK_MAX_HEIGHT = intPreferencesKey("playback_max_height")
         // 不沿用开发期的 download_max_height：那时它只是对话框的默认选中，存过的值换到新语义就成了「不再询问」
         val DOWNLOAD_MAX_HEIGHT = intPreferencesKey("download_default_max_height")
@@ -145,6 +146,7 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val FOLDER_SORT_ORDERS = stringPreferencesKey("folder_sort_orders")
         val LOCAL_MOUNTS = stringPreferencesKey("local_mounts")
         val LAN_SHARE_SETTINGS = stringPreferencesKey("lan_share_settings")
+        val JELLYFIN_SERVERS = stringPreferencesKey("jellyfin_servers")
         val GALLERY_SHOW_IMAGES = booleanPreferencesKey("gallery_show_images")
         val BATCH_RENAME = stringPreferencesKey("batch_rename")
         val VAULT_ARCHIVE_OPTIONS = stringPreferencesKey("vault_archive_options")
@@ -230,6 +232,15 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     override suspend fun setHardwareDecoding(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.HARDWARE_DECODING] = enabled
+        }
+    }
+
+    override val compatibleHardwareDecodingFlow: Flow<Boolean> =
+        preference { it[PreferencesKeys.COMPATIBLE_HARDWARE_DECODING] ?: false }
+
+    override suspend fun setCompatibleHardwareDecoding(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.COMPATIBLE_HARDWARE_DECODING] = enabled
         }
     }
 
@@ -608,6 +619,10 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     override val localMountsFlow: Flow<String> = preference { it[PreferencesKeys.LOCAL_MOUNTS].orEmpty() }
     override suspend fun saveLocalMounts(serialized: String) {
         context.dataStore.edit { it[PreferencesKeys.LOCAL_MOUNTS] = serialized }
+    }
+    override val jellyfinServersFlow: Flow<String> = preference { it[PreferencesKeys.JELLYFIN_SERVERS].orEmpty() }
+    override suspend fun saveJellyfinServers(serialized: String) {
+        context.dataStore.edit { it[PreferencesKeys.JELLYFIN_SERVERS] = serialized }
     }
 
     override val lanShareSettingsFlow: Flow<String> = preference { it[PreferencesKeys.LAN_SHARE_SETTINGS].orEmpty() }

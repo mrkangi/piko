@@ -85,6 +85,10 @@ interface PikoUserPreferences {
     val lanShareSettingsFlow: Flow<String> get() = flowOf("")
     suspend fun saveLanShareSettings(serialized: String) {}
 
+    /** 本设备的 Jellyfin 服务器列表；访问令牌在平台机密存储，不在这里。 */
+    val jellyfinServersFlow: Flow<String> get() = flowOf("")
+    suspend fun saveJellyfinServers(serialized: String) {}
+
     /** 瀑布流是否一并展示图片，默认开启。 */
     val galleryShowImagesFlow: Flow<Boolean> get() = flowOf(true)
     suspend fun setGalleryShowImages(show: Boolean) {}
@@ -276,6 +280,14 @@ interface PikoUserPreferences {
      */
     val hardwareDecodingFlow: Flow<Boolean>
     suspend fun setHardwareDecoding(enabled: Boolean)
+
+    /**
+     * 兼容硬解：仍由硬件解码，但把帧拷回内存交给播放器排帧（Android 为 `mediacodec-copy`）。
+     * 零拷贝硬解在个别机型或码流上一卡一卡、关掉「硬件解码」又太费 CPU 时打开它。
+     * 默认关；每台设备各自的，不同步，理由同 [hardwareDecodingFlow]。
+     */
+    val compatibleHardwareDecodingFlow: Flow<Boolean>
+    suspend fun setCompatibleHardwareDecoding(enabled: Boolean)
 
     /**
      * 播放画质上限：画面高度，0 是原画（默认）。播放时挑不高于它的最大一档转码，没有就放原画，见 transcodeNameAtMost。

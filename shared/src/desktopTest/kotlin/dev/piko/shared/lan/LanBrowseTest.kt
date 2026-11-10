@@ -14,6 +14,8 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,8 +28,12 @@ class LanBrowseTest {
         assertEquals(directory, LanLocation.of(directory.id))
         assertEquals(file, LanLocation.of(file.id))
         assertEquals("host1", DeviceLocation.peerDeviceId(DeviceLocation.peerId("host1")))
-        for (segment in listOf("..", ".", "", "/etc", "a/b", "a\\b", "C:")) {
+        for (segment in listOf("..", ".", "", "/etc", "a/b")) {
             assertTrue(runCatching { LanLocation("host1", "share1", listOf(segment)) }.isFailure)
+        }
+        for (segment in listOf("a\\b", "C:")) {
+            val location = LanLocation("host1", "share1", listOf(segment))
+            assertEquals(location, LanLocation.of(location.id))
         }
         assertTrue(DeviceLocation.isDevice(DeviceLocation.peerId("host1")))
         assertTrue(DeviceLocation.isPeer(DeviceLocation.peerId("host1")))
@@ -104,5 +110,36 @@ class LanBrowseTest {
         } finally {
             http.close()
         }
+    }
+
+    @Test
+    fun peersAndHostTokensAreScopedToTheCurrentAccount() = runBlocking {
+        val account = MutableStateFlow<String?>("account-a")
+        val settings = LanShareSettings(
+            preferences = MemoryPreferences(),
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+            accountProvider = { account.value },
+            accountFlow = account,
+        )
+        settings.update {
+            it.copy(
+                peers = listOf(
+                    LanPeer("host-a", "A", "127.0.0.1", 1, "token-a", account = "account-a"),
+                    LanPeer("host-b", "B", "127.0.0.1", 2, "token-b", account = "account-b"),
+                ),
+                hostTokens = listOf(
+                    LanHostToken("host-token-a", "client-a", "A", account = "account-a"),
+                    LanHostToken("host-token-b", "client-b", "B", account = "account-b"),
+                ),
+            )
+        }
+
+        assertEquals(listOf("host-a"), settings.currentPeers().map { it.hostDeviceId })
+        assertEquals(listOf("host-token-a"), settings.currentTokens().map { it.token })
+
+        account.value = "account-b"
+
+        assertEquals(listOf("host-b"), settings.currentPeers().map { it.hostDeviceId })
+        assertEquals(listOf("host-token-b"), settings.currentTokens().map { it.token })
     }
 }

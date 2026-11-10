@@ -80,6 +80,13 @@ class PlayerScreenState(
     var isPreparing by mutableStateOf(true)
         private set
 
+    /** 当前文件的解码方式。设置页给的是默认值，这里可以按这个文件单独改，改完重开当前文件。 */
+    var decodeMode by mutableStateOf(backend.decodeMode)
+        private set
+
+    /** 可切换的解码方式；空表示这个后端不支持在播放中改，播放页不显示入口。 */
+    val decodeModeOptions: List<VideoDecodeMode> get() = backend.decodeModeOptions
+
     /** 退避重连或换源途中。期间不报错，否则每次重连都会闪一次失败卡片。 */
     var isRecovering by mutableStateOf(false)
         private set
@@ -230,6 +237,10 @@ class PlayerScreenState(
     private var stableJob: Job? = null
     private var startedThisAttempt = false
     private var retryAttempt = 0
+
+    // 零拷贝硬解的出帧节奏观察，见 startDecodePacingWatch。切换过一次后不再重复触发
+    private var decodeWatchJob: Job? = null
+    private var decodeCompatTried = false
 
     // 出错瞬间后端的位置可能已经归零，重连与持久化都用这个
     private var lastKnownPositionMillis = 0L
@@ -438,6 +449,16 @@ class PlayerScreenState(
 
     fun setCropRegion(region: VideoCropRegion?) = backend.setCropRegion(region)
 
+    /** 只对当前文件生效，不动设置页的默认值。切档要重新打开文件，必有一瞬黑帧。 */
+    fun selectDecodeMode(mode: VideoDecodeMode) {
+        if (mode == decodeMode) return
+        decodeMode = mode
+        pendingStartMillis = currentPosition()
+        resetRecovery()
+        backend.setDecodeMode(mode)
+        reload()
+    }
+
     /** 播放详细信息面板的内容：从哪里读、哪一档，再加 mpv 读得到的编码与缓冲。面板开着时每秒取一次。 */
     fun stats(): List<PlaybackStatsSection> {
         // 走不走本机代理是实现细节，看的人只关心是不是在用流量
@@ -486,7 +507,7 @@ class PlayerScreenState(
         // 上一集最后不足一个上报间隔的进度，换片后就报不出去了，这里补一次
         if (startedThisAttempt && !isImage) {
             val previousFileId = this.fileId
-            scope.launch { runCatchingNonCancel { repository.reportPlay(previousFileId, previousPosition, previousDuration) } }
+            scope.launch { runCatchingNonCancel { repository.reportPlay(previousFileId, previousPosition, previousDuration, stopped = true) } }
         }
 
         this.fileId = fileId
@@ -576,6 +597,7 @@ class PlayerScreenState(
         failure = null
         startedThisAttempt = false
         resumeTipJob?.cancel()
+        decodeWatchJob?.cancel()
         resumedFromMillis = null
         val oldStreams = detachPrepared()
         if (oldStreams.isNotEmpty()) {
@@ -622,6 +644,8 @@ class PlayerScreenState(
                 playback.urgent = true
                 prepared = playback
                 mediaInfo = playback.info
+                // 高码率按实测平均字节速率加深缓冲；后端不支持时忽略
+                backend.tuneBuffering(playback.estimatedBytesPerSecond)
                 // 按实际打开的那一档标：没点选过时由设置的上限挑，点选的档位没有时 SDK 退回原画
                 activeQuality = playback.info.transcodeName
                 when (playback.info.kind) {
@@ -663,6 +687,7 @@ class PlayerScreenState(
                 if (!startedThisAttempt) PikoLog.d(TAG, "首帧就绪")
                 startedThisAttempt = true
                 isRecovering = false
+                startDecodePacingWatch()
                 // 出第一帧不代表故障过去了：流每次放几秒就断，立刻清零会无限重连。
                 // 稳定播放一段时间才把退避次数还原
                 stableJob?.cancel()
@@ -680,6 +705,62 @@ class PlayerScreenState(
             }
 
             is PlaybackBackendEvent.Error -> onPlaybackError(event.detail)
+        }
+    }
+
+    /**
+     * 盯零拷贝硬解的出帧节奏。
+     *
+     * Android 的 `mediacodec` 把画面直接交给 Surface，帧何时上屏由解码器的输出队列决定；
+     * 部分机型或码流（B 帧多、VFR、23.976 一类非整数帧率）出帧不匀，表现就是一卡一卡，
+     * 但解码并不慢——统计里解码丢帧不涨，涨的是错时渲染/渲染延迟。
+     *
+     * 开播后观察一段时间，错时渲染占已解码帧的比例偏高就改用兼容硬解（`mediacodec-copy`：
+     * 仍是 SoC 硬解，帧拷回内存由播放器排帧）并从当前位置续播，只对本文件试一次。
+     */
+    private fun startDecodePacingWatch() {
+        if (decodeCompatTried || isLocalPlayback || isImage) return
+        decodeWatchJob?.cancel()
+        decodeWatchJob = scope.launch {
+            var baseErrors: Long? = null
+            var baseFrames: Long? = null
+            repeat(DECODE_WATCH_SAMPLES) {
+                delay(DECODE_WATCH_INTERVAL_MILLIS)
+                if (decodeCompatTried || isLocalPlayback || !startedThisAttempt) return@launch
+                // 只有零拷贝 mediacodec 需要盯；copy 与软解都由播放器自己排帧
+                if (backend.mpvProperty("hwdec-current")?.trim() != ZERO_COPY_HWDEC) return@launch
+                val mistimed = backend.mpvProperty("mistimed-frame-count")?.toLongOrNull()
+                val delayed = backend.mpvProperty("vo-delayed-frame-count")?.toLongOrNull()
+                if (mistimed == null && delayed == null) return@launch
+                val frames = backend.mpvProperty("estimated-frame-number")?.toLongOrNull() ?: return@launch
+                val errors = (mistimed ?: 0L) + (delayed ?: 0L)
+                val prevErrors = baseErrors
+                val prevFrames = baseFrames
+                if (prevErrors == null || prevFrames == null) {
+                    baseErrors = errors
+                    baseFrames = frames
+                    return@repeat
+                }
+                val deltaFrames = frames - prevFrames
+                // 样本太短，或刚 seek/重开过：把基准往前推，避免拿抖动期的计数下结论
+                if (deltaFrames < DECODE_WATCH_MIN_FRAMES) {
+                    baseErrors = errors
+                    baseFrames = frames
+                    return@repeat
+                }
+                val deltaErrors = (errors - prevErrors).coerceAtLeast(0L)
+                // 比例判据之外再留一个绝对量：帧数报不出来或帧率很低时，几十次错时也已经是肉眼可见的卡
+                if (deltaErrors * 100L / deltaFrames >= DECODE_WATCH_ERROR_PERCENT || deltaErrors >= DECODE_WATCH_MIN_ERRORS) {
+                    PikoLog.i(TAG, "零拷贝硬解出帧节奏不稳（错时/延迟 $deltaErrors/$deltaFrames 帧），改用兼容硬解续播")
+                    decodeCompatTried = true
+                    decodeMode = VideoDecodeMode.Compatible
+                    pendingStartMillis = currentPosition()
+                    resetRecovery()
+                    backend.preferCompatibleDecoding()
+                    reload()
+                }
+                return@launch
+            }
         }
     }
 
@@ -767,7 +848,7 @@ class PlayerScreenState(
             // 离开播放器时补一次，否则最后不足 5 秒的进度会丢
             withContext(NonCancellable) {
                 persist(positionKey, lastKnownPositionMillis, durationMillis)
-                reportPlay(force = true)
+                reportPlay(force = true, stopped = true)
             }
         }
     }
@@ -780,14 +861,14 @@ class PlayerScreenState(
      * 把进度报给 PikPak 的播放历史。要在出了第一帧之后、位置确实在走的时候才报：
      * 换片途中报出去的是上一个文件的位置。[force] 用于离开播放器，这时不看间隔。
      */
-    private suspend fun reportPlay(force: Boolean) {
+    private suspend fun reportPlay(force: Boolean, stopped: Boolean = false) {
         val id = fileId
         if (!startedThisAttempt || isImage || id.isBlank()) return
         val sameFile = id == lastReportedFileId
         if (!force && sameFile && lastReportedAt.elapsedNow() < PLAY_REPORT_INTERVAL) return
         lastReportedFileId = id
         lastReportedAt = TimeSource.Monotonic.markNow()
-        runCatchingNonCancel { repository.reportPlay(id, lastKnownPositionMillis, durationMillis) }
+        runCatchingNonCancel { repository.reportPlay(id, lastKnownPositionMillis, durationMillis, stopped) }
     }
 
     private suspend fun persist(key: String, positionMillis: Long, durationMillis: Long) {
@@ -880,6 +961,15 @@ class PlayerScreenState(
         const val RESUME_TIP_MILLIS = 5_000L
         const val STABLE_PLAYBACK_MILLIS = 15_000L
         const val STOP_DRAIN_TIMEOUT_MILLIS = 350L
+
+        // 零拷贝硬解出帧节奏的观察窗口：连续 6 次、每次 2.5 秒，约 15 秒出结论
+        const val DECODE_WATCH_SAMPLES = 6
+        const val DECODE_WATCH_INTERVAL_MILLIS = 2_500L
+        const val DECODE_WATCH_MIN_FRAMES = 120L
+        const val DECODE_WATCH_ERROR_PERCENT = 5L
+        const val DECODE_WATCH_MIN_ERRORS = 40L
+        const val ZERO_COPY_HWDEC = "mediacodec"
+
         val RECOVERY_DELAYS_MILLIS = longArrayOf(500L, 1_500L, 4_000L)
         val retireScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }

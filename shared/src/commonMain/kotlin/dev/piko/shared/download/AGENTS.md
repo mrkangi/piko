@@ -2,6 +2,14 @@
 
 本机下载调度集中在 `PikoDownloadCoordinator`，持久化任务表为 `DownloadTask` 列表（经 `PikoUserPreferences.saveDownloadTasks` 读写，结构变更时以 `PERSIST_INTERVAL_MS` 节流合并落盘，避免千级小文件文件夹下载频繁重写整份 DataStore）。`DownloadTask` 序列化格式自 `v1.0.0` 起已正式发布，**所有新增字段必须提供默认值**，确保旧版持久化的任务表可无损反序列化恢复。
 
+## 跨设备远程下载
+
+- **唯一传输通道**：远程下载只经 MQTT（`RemoteRealtimeTransport` / `MqttRemoteRealtimeTransport`）传输完整请求、执行状态与设备 presence；**不得再向网盘 `.piko` 写远程账本，也不得用轮询作为回退**。未配置 MQTT 时 UI 不允许开启远程下载，断线时保留开关但禁止发送并显示离线。
+- **主题与心跳**：每账号使用 `piko/v1/<账号哈希>/` 前缀；`dev/<deviceId>` 为 retained presence，`request/<targetDeviceId>` 与 `state/<sourceDeviceId>` 为 QoS1 请求/状态。presence 每 20 秒心跳一次，超过 60 秒无心跳判离线；正常停止与 LWT 都必须写 `online=false`。协调器只接受目标设备字段与本机匹配的状态，忽略未知请求。
+- **设备身份与名称**：设备 ID 由 `PikoUserPreferences.loadOrCreateRemoteDeviceId()` 持久化；设备名必须带 Piko 版本号，当前格式为「设备/系统 · Piko <版本>」。Jellyfin 的 `DeviceInfo.id` 使用 `piko-<deviceId>`。
+- **恢复与清理**：请求/状态只保存在设备本地缓存 `remote-download-<账号>.json`，进程重启后恢复并重发未终态请求；目标设备重启后若本地请求缺少状态应重新入队。离线设备保留在列表中置灰；30 天无心跳标记为「长期未出现，可能已卸载」，可手动 `forgetDevice` 清理；不要自动删除网盘中的旧 `remote-*.json`，它们只是历史遗留、不再读取。
+- **UI 约束**：设备列表显示在线/离线与接收开关；离线设备提供删除入口。发送前必须同时满足 MQTT 已连接、目标在线且开启了接收。
+
 ## 整文件下载与共享稀疏暂存池
 
 - **播放与下载共享块缓存（`media/cache/PikoFileCachePool`）**：整文件下载并非直接顺序写入最终文件，而是先写入共享稀疏暂存池，与在线播放、信息流及片段截取共用同一份已下载数据块（暂停中的原画下载任务在播放同一文件时也会由播放流顺带补齐块）；全部字节落满后再复制至目标下载目录并调用 `PikoDownloadStorage.commit` 交付。

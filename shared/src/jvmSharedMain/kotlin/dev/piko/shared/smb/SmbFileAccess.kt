@@ -23,6 +23,7 @@ import dev.piko.shared.i18n.tr
 import io.github.nihildigit.pikpak.FileKind
 import io.github.nihildigit.pikpak.FileStat
 import io.github.nihildigit.pikpak.TaskPhase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -56,9 +57,8 @@ class SmbFileAccess(
     override suspend fun list(mount: LocalMount, location: LocalLocation): List<FileStat> = withContext(Dispatchers.IO) {
         val info = mount.smb ?: error("SMB 挂载信息缺失")
         remember(mount)
-        val share = shareFor(mount, info)
         val directory = pathFor(info, location.segments)
-        val entries = runCatching { share.list(directory) }.getOrElse {
+        val entries = runCatching { withShare(mount, info) { share -> share.list(directory) } }.getOrElse {
             throw IllegalStateException(
                 tr(
                     "无法读取 SMB 目录",
@@ -90,9 +90,9 @@ class SmbFileAccess(
     override suspend fun probe(mount: LocalMount, location: LocalLocation): FileStat? = withContext(Dispatchers.IO) {
         val info = mount.smb ?: return@withContext null
         remember(mount)
-        val share = shareFor(mount, info)
         val path = pathFor(info, location.segments)
-        val all = runCatching { share.getFileInformation(path) }.getOrNull() ?: return@withContext null
+        val all = runCatching { withShare(mount, info) { share -> share.getFileInformation(path) } }.getOrNull()
+            ?: return@withContext null
         val name = location.segments.lastOrNull() ?: mount.fallbackName
         toStat(
             mount = mount,
@@ -187,20 +187,60 @@ class SmbFileAccess(
         next.share
     }
 
+    /**
+     * 连接掉线后同一个 DiskShare 会一直失败。这里把失败视为连接失效，关闭后重连一次；
+     * 认证错误等永久失败只会多一次连接尝试，随后仍把错误交给调用方。
+     */
+    private suspend fun <T> withShare(
+        mount: LocalMount,
+        info: SmbMountInfo,
+        block: suspend (DiskShare) -> T,
+    ): T {
+        val first = shareFor(mount, info)
+        return try {
+            block(first)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (firstError: Exception) {
+            invalidate(mount.mountId, first)
+            val second = shareFor(mount, info)
+            try {
+                block(second)
+            } catch (secondError: Exception) {
+                secondError.addSuppressed(firstError)
+                throw secondError
+            }
+        }
+    }
+
+    private fun invalidate(mountId: String, share: DiskShare) {
+        val stale = synchronized(connections) {
+            val current = connections[mountId]
+            if (current?.share === share) connections.remove(mountId) else null
+        }
+        runCatching { stale?.close() }
+    }
+
     private suspend fun openStream(mountId: String, segments: List<String>): SmbReadHandle? {
         val mount = mounts?.findCached(mountId)?.takeIf { it.isSmb } ?: knownMounts[mountId] ?: return null
         val info = mount.smb ?: return null
-        val share = shareFor(mount, info)
-        val file = openFile(share, pathFor(info, segments))
-        val all = file.getFileInformation()
-        val name = segments.lastOrNull() ?: mount.fallbackName
-        return SmbReadHandle(
-            name = name,
-            size = all.standardInformation.endOfFile,
-            modifiedMs = all.basicInformation.lastWriteTime.toEpochMillis(),
-            readAt = { offset, buffer, offsetInBuffer, length -> file.read(buffer, offset, offsetInBuffer, length) },
-            closeBlock = { runCatching { file.close() } },
-        )
+        return withShare(mount, info) { share ->
+            val file = openFile(share, pathFor(info, segments))
+            try {
+                val all = file.getFileInformation()
+                val name = segments.lastOrNull() ?: mount.fallbackName
+                SmbReadHandle(
+                    name = name,
+                    size = all.standardInformation.endOfFile,
+                    modifiedMs = all.basicInformation.lastWriteTime.toEpochMillis(),
+                    readAt = { offset, buffer, offsetInBuffer, length -> file.read(buffer, offset, offsetInBuffer, length) },
+                    closeBlock = { runCatching { file.close() } },
+                )
+            } catch (error: Throwable) {
+                runCatching { file.close() }
+                throw error
+            }
+        }
     }
 
     private fun connect(info: SmbMountInfo, password: String): ActiveConnection {
@@ -258,8 +298,11 @@ class SmbFileAccess(
         )
     }
 
-    private fun pathFor(info: SmbMountInfo, segments: List<String>): String =
-        (listOf(info.normalizedPath) + segments).filter { it.isNotEmpty() }.joinToString("/")
+    private fun pathFor(info: SmbMountInfo, segments: List<String>): String {
+        // Windows/SMB 把反斜杠当分隔符，不能把它当作普通文件名字符放过去。
+        require(segments.none { '\\' in it }) { "SMB 文件名包含反斜杠" }
+        return (listOf(info.normalizedPath) + segments).filter { it.isNotEmpty() }.joinToString("/")
+    }
 
     private fun remember(mount: LocalMount) {
         if (mount.isSmb) knownMounts[mount.mountId] = mount

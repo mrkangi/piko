@@ -70,6 +70,7 @@ data class LanHostToken(
     val clientDeviceId: String,
     val clientName: String,
     val createdAtMs: Long = 0,
+    val account: String = "",
 )
 
 @Serializable
@@ -81,6 +82,7 @@ data class LanPeer(
     val token: String,
     val lastSeenMs: Long = 0,
     val platform: String = "",
+    val account: String = "",
 )
 
 @Serializable

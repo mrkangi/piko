@@ -25,7 +25,11 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.attribute.BasicFileAttributes
 import javax.imageio.ImageIO
 
-class DesktopLocalFileAccess(private val scope: CoroutineScope, private val changed: (String) -> Unit, cacheDirectory: File = PikoHome.root.resolve("cache/local-media").toFile()) : LocalFileAccess {
+class DesktopLocalFileAccess(
+    private val scope: CoroutineScope,
+    private val changed: (String, FileStat?) -> Unit,
+    cacheDirectory: File = PikoHome.root.resolve("cache/local-media").toFile(),
+) : LocalFileAccess {
     private val cache = LocalMediaCache(cacheDirectory, scope, changed)
     private val folderCovers = ConcurrentHashMap<String, String>()
     private val pendingCovers = ConcurrentHashMap.newKeySet<String>()
@@ -84,7 +88,7 @@ class DesktopLocalFileAccess(private val scope: CoroutineScope, private val chan
                             if (cover.isNotEmpty()) notifyParent = location.parent?.id ?: DeviceLocation.SELF_ID
                         }
                     }
-                    notifyParent?.let(changed)
+                    notifyParent?.let { changed(it, null) }
                 } catch (cancel: CancellationException) {
                     throw cancel
                 } catch (_: Exception) {
@@ -164,7 +168,8 @@ class DesktopLocalFileAccess(private val scope: CoroutineScope, private val chan
                     if (attributes.isSymbolicLink || (!attributes.isDirectory && !attributes.isRegularFile)) return@mapNotNull null
                     val target = runCatching { location.child(child.fileName.toString(), attributes.isDirectory) }.getOrNull() ?: return@mapNotNull null
                     val file = stat(mount, target, child, attributes)
-                    cache.enrich(file) { output -> metadata(mount, target, file, output) }
+                    if (file.isPlayableVideo()) cache.enrich(file) { output -> metadata(mount, target, file, output) }
+                    file
                 }
             }
         } catch (_: Exception) { throw IllegalStateException("本机文件夹不可访问") }

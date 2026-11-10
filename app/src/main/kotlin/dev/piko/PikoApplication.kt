@@ -26,6 +26,9 @@ import dev.piko.shared.sync.JvmSyncCipher
 import dev.piko.shared.scrape.MetaTubeService
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import dev.piko.shared.jellyfin.JellyfinSettings
+import dev.piko.shared.jellyfin.createAndroidJellyfinRepository
+import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.InstantMagnetRepository
 import dev.piko.shared.data.PikoClientManager
 import java.io.File
@@ -37,6 +40,7 @@ import dev.piko.shared.lan.LanShareRepository
 import dev.piko.shared.lan.UdpLanDiscovery
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
+import dev.piko.shared.media.proxy.installHttpStreamSource
 import dev.piko.shared.smb.SmbFileAccess
 import dev.piko.shared.memory.MemoryPolicy
 import dev.piko.shared.memory.MemoryTrim
@@ -158,9 +162,21 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             sessionManager,
             clipCache = FileClipCache(File(cacheDir, "piko/clip-cache")),
         )
+        mediaRepository.installHttpStreamSource()
         val cacheStore = FilePikoCacheStore(
             File(cacheDir, "piko").path,
             jsonCodec = Json { ignoreUnknownKeys = true }.streamingCodec(),
+        )
+        val pikoDeviceName = "${Build.MODEL} · Android · Piko ${BuildConfig.VERSION_NAME}"
+        val remoteDeviceId = runBlocking { sessionManager.loadOrCreateRemoteDeviceId() }
+        val jellyfin = createAndroidJellyfinRepository(
+            context = this,
+            settings = JellyfinSettings(sessionManager, appScope),
+            secrets = sessionStore,
+            scope = appScope,
+            clientVersion = BuildConfig.VERSION_NAME,
+            deviceName = pikoDeviceName,
+            deviceId = remoteDeviceId,
         )
         services = PikoServices(
             platformPreferences = sessionManager,
@@ -181,6 +197,8 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                 sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
             },
             localMountSecrets = sessionStore,
+            jellyfin = jellyfin,
+            remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
             cacheStore = cacheStore,
             treeDatabaseFactory = dev.piko.shared.data.AndroidPikoTreeDatabaseFactory(File(cacheDir, "piko/trees")),
             syncCipher = JvmSyncCipher(),
@@ -196,7 +214,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     }
                 }
             },
-            deviceName = "${Build.MODEL} · Android",
+            deviceName = pikoDeviceName,
             platformName = "android",
             lanSharesFactory = { settings, scope ->
                 LanShareRepository(
@@ -204,7 +222,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     settings = settings,
                     scope = scope,
                     clientDeviceId = { sessionManager.loadOrCreateRemoteDeviceId() },
-                    clientName = { "${Build.MODEL} · Android" },
+                    clientName = { pikoDeviceName },
                     clientPlatform = "android",
                 )
             },

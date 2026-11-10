@@ -64,7 +64,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
@@ -113,6 +115,8 @@ private const val PREFETCH_DWELL_MILLIS = 400L
 private val HIGHLIGHT_RETRY_DELAYS = listOf(300L, 600L, 800L, 1000L)
 
 private const val TAG = "Drive"
+// 大目录（DCIM、相机导出等）先把文件画出来，名字解析与作品分区在后台补，避免首屏等完整解析。
+private const val DEFERRED_FOLDER_ANALYSIS_FILES = 1_000
 
 /** 对归档条目做只有网盘文件才能做的事时的提示。 */
 private val VAULTED_NEEDS_RESTORE: String get() = tr("已归档项目需先恢复至网盘", "Restore archived items to the drive first", "アーカイブ済みの項目は先にドライブへ復元してください", "보관된 항목은 먼저 드라이브로 복원해 주세요", "已歸檔項目需先還原至雲端硬碟")
@@ -313,8 +317,9 @@ class DriveScreenState(
     val isLocalPlace: Boolean by derivedStateOf { dev.piko.shared.data.LocalLocation.isLocal(activeFolderId) }
     val isDevicePlace: Boolean by derivedStateOf { dev.piko.shared.data.DeviceLocation.isDevice(activeFolderId) }
     val isLanPlace: Boolean by derivedStateOf { dev.piko.shared.data.LanLocation.isLan(activeFolderId) }
+    val isJellyfinPlace: Boolean by derivedStateOf { dev.piko.shared.data.JellyfinLocation.isJellyfin(activeFolderId) }
     val isVirtualPlace: Boolean by derivedStateOf {
-        isLocalPlace || isDevicePlace || isLanPlace || libraryView != null || archiveView != null || importPreviewView != null
+        isLocalPlace || isDevicePlace || isLanPlace || isJellyfinPlace || libraryView != null || archiveView != null || importPreviewView != null
     }
 
     /**
@@ -337,7 +342,11 @@ class DriveScreenState(
         }?.structure
     }
     val isDisplayStructureReady: Boolean by derivedStateOf {
-        isSearching || (isVirtualPlace && !isLocalPlace && !isDevicePlace && !isLanPlace && !usesFolderStructure) || currentAnalysis != null
+        // 大目录先画出文件，名字解析与分区在后台补；否则 DCIM 这类几千项的目录要等整轮解析才撤骨架屏。
+        isSearching ||
+            (loadedFolderId != null && loadedFolderId == activeFolderId && files.isNotEmpty()) ||
+            (isVirtualPlace && !isLocalPlace && !isDevicePlace && !isLanPlace && !usesFolderStructure) ||
+            currentAnalysis != null
     }
 
     /** 列过的文件夹空不空，见 PikoDriveRepository.folderEmptiness。 */
@@ -807,6 +816,7 @@ class DriveScreenState(
             launch { driveRepo.folderChanges.collect { change ->
                 if (change is DriveChange.Starred) {
                     libraryListings.remove(DriveLibrary.STARRED)
+                    if (libraryView == DriveLibrary.STARRED) reloads.trySend(Unit)
                 }
                 if (change is DriveChange.Renamed && change.parentId == activeFolderId && libraryView == null && archiveView == null && !isSearching) {
                     val folderId = activeFolderId
@@ -860,6 +870,24 @@ class DriveScreenState(
             for (reload in reloads) {
                 load()
                 loadJob?.join()
+            }
+        }
+        scope.launch {
+            driveRepo.localMediaUpdates.collect { updates ->
+                val folderId = activeFolderId
+                val patch = updates.asSequence()
+                    .filter { it.folderId == folderId }
+                    .associateBy { it.file.id }
+                if (patch.isEmpty() || files.none { it.id in patch }) return@collect
+                fun patched(list: List<FileStat>) = list.map { patch[it.id]?.file ?: it }
+                Snapshot.withMutableSnapshot {
+                    if (activeFolderId != folderId) return@withMutableSnapshot
+                    val next = patched(files)
+                    remoteFiles = patched(remoteFiles)
+                    files = next
+                    analysis = analysis?.takeIf { it.folderId == folderId }
+                        ?.let { FolderAnalysis(it.folderId, next, it.structure) }
+                }
             }
         }
     }
@@ -1097,7 +1125,7 @@ class DriveScreenState(
                             null
                         } else {
                             val merged = withImportPreviews(folderId, sorted)
-                            Triple(sorted, merged, DriveAnalysisCache.analyze(merged))
+                            Triple(sorted, merged, if (merged.size >= DEFERRED_FOLDER_ANALYSIS_FILES) null else DriveAnalysisCache.analyze(merged))
                         }
                     }
                     if (prepared == null || activeFolderId != folderId) return@onSuccess
@@ -1107,9 +1135,22 @@ class DriveScreenState(
                         remoteFiles = rawFiles
                         files = nextFiles
                         loadedFolderId = folderId
-                        revealHighlightedItems(structure, highlightedFileIds)
-                        analysis = FolderAnalysis(folderId, nextFiles, structure)
+                        if (structure != null) revealHighlightedItems(structure, highlightedFileIds)
+                        analysis = structure?.let { FolderAnalysis(folderId, nextFiles, it) }
                         loadError = null
+                        if (structure == null) {
+                            isLoading = false
+                            isRefreshing = false
+                        }
+                    }
+                    if (structure == null) {
+                        val analyzed = withContext(Dispatchers.Default) { DriveAnalysisCache.analyze(nextFiles) }
+                        if (activeFolderId != folderId) return@onSuccess
+                        Snapshot.withMutableSnapshot {
+                            if (activeFolderId != folderId) return@withMutableSnapshot
+                            revealHighlightedItems(analyzed, highlightedFileIds)
+                            analysis = FolderAnalysis(folderId, nextFiles, analyzed)
+                        }
                     }
                 }
                 .logFailure(TAG, "读取目录失败：${logFile(folderId, "")}，$elapsed ms，${if (files.isEmpty()) "无旧内容" else "保留旧内容 ${files.size} 项"}")
@@ -1357,7 +1398,23 @@ class DriveScreenState(
             LibraryListing(files, emptyMap())
         }
         DriveLibrary.RECENT -> driveRepo.recentlyAdded().map(::eventListing)
-        DriveLibrary.HISTORY -> driveRepo.playHistory().map(::eventListing)
+        DriveLibrary.HISTORY -> coroutineScope {
+            val jellyfinDeferred = async { driveRepo.jellyfinPlayHistory().getOrDefault(emptyList()) }
+            val remote = driveRepo.playHistory()
+            val jellyfin = jellyfinDeferred.await()
+            remote.map { page ->
+                val listing = eventListing(page)
+                if (jellyfin.isEmpty()) listing
+                else {
+                    val combined = jellyfin.map { it to it.params["last_played"].orEmpty() } +
+                        listing.files.map { it to listing.events[it.id]?.updatedTime.orEmpty() }
+                    LibraryListing(combined.sortedByDescending { it.second }.map { it.first }, listing.events)
+                }
+            }.recoverCatching { error ->
+                if (jellyfin.isEmpty()) throw error
+                LibraryListing(jellyfin, emptyMap())
+            }
+        }
         DriveLibrary.DUPLICATES -> error("${library.title}的内容来自会话，不经网络")
     }
 
@@ -1454,6 +1511,9 @@ class DriveScreenState(
 
     /** 清空播放历史。服务端没有撤销，官方客户端里的历史一起没了，由界面先确认。 */
     fun clearPlayHistory() {
+        if (files.any { dev.piko.shared.data.JellyfinLocation.isJellyfin(it.id) }) {
+            _messages.tryEmit(tr("Jellyfin 的播放记录需在服务器端清除", "Jellyfin playback history must be cleared on the server", "Jellyfin の再生履歴はサーバー側で削除してください", "Jellyfin 재생 기록은 서버에서 삭제해야 합니다", "Jellyfin 的播放記錄需在伺服器端清除"))
+        }
         submitHistoryAction(HistoryEditCommand.ClearPlay)
     }
 
@@ -2030,7 +2090,20 @@ class DriveScreenState(
             _messages.tryEmit(tr("请先将链接项目保存至网盘", "Save link items to the drive first", "リンク項目を先にドライブへ保存してください", "링크 항목을 먼저 드라이브에 저장해 주세요", "請先將連結項目儲存至雲端硬碟"))
             if (nonPreview.isEmpty()) return
         }
-        val (vaulted, real) = nonPreview.partition { it.isVaulted }
+        val (jellyfin, rest) = nonPreview.partition { dev.piko.shared.data.JellyfinLocation.isJellyfin(it.id) }
+        if (jellyfin.isNotEmpty()) {
+            scope.launch {
+                driveRepo.setJellyfinStarred(jellyfin, starred)
+                    .onSuccess {
+                        _messages.tryEmit(if (starred) tr("已添加收藏", "Added to favorites", "お気に入りに追加しました", "즐겨찾기에 추가했습니다", "已加入收藏") else tr("已取消收藏", "Removed from favorites", "お気に入りから削除しました", "즐겨찾기에서 제거했습니다", "已取消收藏"))
+                    }
+                    .onFailure {
+                        PikoLog.w(TAG, "修改 Jellyfin 收藏失败", it)
+                        _messages.tryEmit(if (starred) tr("添加收藏失败", "Failed to add favorite", "お気に入りに追加できませんでした", "즐겨찾기에 추가하지 못했습니다", "加入收藏失敗") else tr("取消收藏失败", "Failed to remove favorite", "お気に入りから削除できませんでした", "즐겨찾기에서 제거하지 못했습니다", "取消收藏失敗"))
+                    }
+            }
+        }
+        val (vaulted, real) = rest.partition { it.isVaulted }
         if (vaulted.isNotEmpty()) {
             val withResolvedParent = vaulted.map { item ->
                 if (item.parentId.isNotEmpty()) item
@@ -2041,7 +2114,7 @@ class DriveScreenState(
                 }
             }
             driveRepo.setVaultStarred(withResolvedParent, starred)
-            if (real.isEmpty()) {
+            if (real.isEmpty() && jellyfin.isEmpty()) {
                 _messages.tryEmit(if (starred) tr("已添加星标", "Starred", "スターを付けました", "별표를 추가했습니다", "已新增星號") else tr("已取消星标", "Unstarred", "スターを外しました", "별표를 해제했습니다", "已取消星號"))
             }
         }

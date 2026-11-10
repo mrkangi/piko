@@ -44,6 +44,7 @@ import dev.piko.shared.media.player.PlaybackStatsSection
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.VideoCropRegion
+import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.i18n.stringResource
 import dev.piko.ui.resources.Res
@@ -69,6 +70,7 @@ internal fun PlayerSheetsOverlay(
     qualityOptions: List<String>,
     currentQuality: String?,
     aspectRatio: PlayerAspectRatio?,
+    decodeMode: VideoDecodeMode?,
     seekStepSeconds: Int,
     longPressSpeed: Float,
     audioTracks: List<MediaTrack>,
@@ -81,6 +83,7 @@ internal fun PlayerSheetsOverlay(
     onSpeedChange: (Float) -> Unit,
     onQualityChange: (String) -> Unit,
     onAspectRatioChange: (PlayerAspectRatio) -> Unit,
+    onDecodeModeChange: ((VideoDecodeMode) -> Unit)?,
     onBeginCropEdit: () -> Unit,
     onSeekStepChange: ((Int) -> Unit)?,
     onLongPressSpeedChange: ((Float) -> Unit)?,
@@ -132,6 +135,11 @@ internal fun PlayerSheetsOverlay(
                     if (mode == PlayerAspectRatio.RegionCrop) onBeginCropEdit()
                     else onAspectRatioChange(mode)
                 },
+                decodeMode = decodeMode,
+                onDecodeModeChange = onDecodeModeChange?.let { change -> { mode ->
+                    onDismiss()
+                    change(mode)
+                } },
                 seekStepSeconds = seekStepSeconds,
                 onSeekStepChange = onSeekStepChange,
                 longPressSpeed = longPressSpeed,

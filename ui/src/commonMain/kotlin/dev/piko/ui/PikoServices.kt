@@ -18,6 +18,7 @@ import dev.piko.shared.data.InstantMagnetRepository
 import dev.piko.shared.data.MoveHistory
 import dev.piko.shared.data.OfflinePackTracker
 import dev.piko.shared.data.PikoCacheStore
+import dev.piko.shared.jellyfin.JellyfinRepository
 import dev.piko.shared.data.PikoTreeDatabaseFactory
 import dev.piko.shared.data.PikoAccountRepository
 import dev.piko.shared.data.PikoClientManager
@@ -56,6 +57,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
@@ -75,11 +78,15 @@ class PikoServices(
     syncCipher: SyncCipher? = null,
     /** 用户自己部署的 MetaTube，两端传入；为 null 时设置里没有刮削一组（截图环境）。 */
     val metaTube: MetaTubeService? = null,
-    localFileAccess: (((String) -> Unit) -> dev.piko.shared.data.LocalFileAccess)? = null,
+    localFileAccess: (((String, io.github.nihildigit.pikpak.FileStat?) -> Unit) -> dev.piko.shared.data.LocalFileAccess)? = null,
     /** SMB 等网络挂载来源；与本机路径来源一起组成挂载访问分派。 */
     smbFileAccess: dev.piko.shared.data.LocalFileAccess? = null,
     /** 网络挂载密码的设备级保管处，不进入网盘同步。 */
     localMountSecrets: dev.piko.shared.data.LocalMountSecrets? = null,
+    /** Jellyfin 只读客户端，由平台入口按设备名构造。 */
+    jellyfin: JellyfinRepository? = null,
+    /** 远程下载的实时通道；为 null 时远程下载不可用。 */
+    remoteRealtime: dev.piko.shared.download.RemoteRealtimeTransport? = null,
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     deviceName: String = "Piko",
     platformName: String = "unknown",
@@ -97,34 +104,63 @@ class PikoServices(
 
     // 不随任何界面结束的后台工作：离线任务的跟踪与 Piko-Temp 的清理
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val remoteRealtimeTransport = remoteRealtime
 
     /** 平台偏好，其中记着文件夹 ID 的几项换成按账号存的，见 AccountScopedPreferences。 */
     val preferences: PikoUserPreferences =
         cacheStore?.let { AccountScopedPreferences(platformPreferences, clientManager, it) } ?: platformPreferences
 
-    val lanShareSettings = LanShareSettings(preferences, backgroundScope)
+    val lanShareSettings = LanShareSettings(
+        preferences,
+        backgroundScope,
+        accountProvider = { clientManager.currentClient.value?.account },
+        accountFlow = clientManager.currentClient.map { it?.account }.distinctUntilChanged(),
+    )
     val lanShares: LanShareRepository? = lanSharesFactory?.invoke(lanShareSettings, backgroundScope)
-
     val driveRepository: DriveRepository = DriveRepository(
         clientManager,
         preferences,
         cacheStore,
         treeDatabaseFactory = treeDatabaseFactory,
         lanShares = lanShares,
+        jellyfin = jellyfin,
     ).also {
         val repository = it
         it.localMounts.secrets = localMountSecrets
-        val localAccess = localFileAccess?.invoke { folder ->
-            repository.applyChange(dev.piko.shared.data.DriveChange.ContentsChanged(setOf(folder)))
+        val localAccess = localFileAccess?.invoke { folder, file ->
+            if (file != null) {
+                // 只换这一行的封面/时长，不发目录变更，避免每张缩略图都重列整个目录。
+                repository.localMounts.updateCachedListing(folder, file)
+                repository.publishLocalMediaUpdate(folder, file)
+            } else {
+                // 文件夹封面暂无可直接替换的条目，仍走轻量重列；这类通知远少于文件缩略图。
+                repository.localMounts.invalidateListing(folder)
+                repository.applyChange(dev.piko.shared.data.DriveChange.ContentsChanged(setOf(folder)))
+            }
         }
         it.localMounts.access = dev.piko.shared.data.CompositeLocalFileAccess(localAccess, smbFileAccess)
         smbFileAccess?.attachMounts(it.localMounts)
         mediaRepository.localMounts = it.localMounts
         mediaRepository.lanShares = lanShares
+        mediaRepository.jellyfin = jellyfin
         mediaRepository.metadataSink = it.metadataSink
     }
     val lanShareHost: LanShareHost? = lanShareHostFactory?.invoke(driveRepository, preferences, lanShareSettings, deviceName)
         ?.also { it.start() }
+    val remoteRealtimeConfigStore: dev.piko.shared.download.RemoteRealtimeConfigStore? = syncCipher?.let { cipher ->
+        dev.piko.shared.download.RemoteRealtimeConfigStore(
+            clients = clientManager,
+            driveRepo = driveRepository,
+            passwordOf = clientManager::savedPassword,
+            cipher = cipher,
+            scope = backgroundScope,
+        ).also { it.start() }
+    }
+    val remoteRealtimeConfig: StateFlow<dev.piko.shared.download.RemoteRealtimeConfig?> =
+        remoteRealtimeConfigStore?.config ?: MutableStateFlow(null)
+    val remoteRealtimeConnected: StateFlow<Boolean> =
+        remoteRealtimeTransport?.connected ?: MutableStateFlow(false)
+
     val remoteDownloads: RemoteDownloadCoordinator = RemoteDownloadCoordinator(
         clients = clientManager,
         driveRepo = driveRepository,
@@ -133,7 +169,33 @@ class PikoServices(
         deviceName = deviceName,
         platformName = platformName,
         scope = backgroundScope,
+        cacheStore = cacheStore,
+        realtime = remoteRealtimeTransport,
     ).also { it.start() }
+    init {
+        backgroundScope.launch {
+            remoteRealtimeConfig.collect { config ->
+                remoteRealtimeTransport?.updateConfig(config)
+                remoteDownloads.refreshRealtime()
+            }
+        }
+    }
+
+    suspend fun testRemoteRealtime(config: dev.piko.shared.download.RemoteRealtimeConfig): Result<Unit> =
+        remoteRealtimeTransport?.testConnection(config)
+            ?: Result.failure(IllegalStateException("当前环境不支持实时通道"))
+
+    suspend fun saveRemoteRealtimeConfig(config: dev.piko.shared.download.RemoteRealtimeConfig): Result<Unit> =
+        remoteRealtimeConfigStore?.save(config)
+            ?: Result.failure(IllegalStateException("当前环境无法保存实时配置"))
+
+    suspend fun clearRemoteRealtimeConfig(): Result<Unit> =
+        remoteRealtimeConfigStore?.clear()
+            ?: Result.failure(IllegalStateException("当前环境无法清除实时配置"))
+
+    suspend fun refreshRemoteRealtimeConfig() {
+        remoteRealtimeConfigStore?.refresh()
+    }
     internal val presentationStores = dev.piko.ui.workbench.AccountPresentationStores()
     val fileExecutionScopes = dev.piko.shared.state.AccountExecutionScopes(
         driveRepository, CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Main.immediate),

@@ -140,6 +140,7 @@ class AndroidLanShareHost(
     private suspend fun startServer() {
         startLock.withLock {
             if (running || !settings.current().enabled) return
+            settings.ensureLoaded()
             deviceId = preferences.loadOrCreateRemoteDeviceId()
             val desiredPort = settings.current().port.takeIf { it in 1..65535 } ?: LanLocalSettings.DEFAULT_PORT
             var bound: ServerSocket? = null
@@ -282,10 +283,13 @@ class AndroidLanShareHost(
             clientDeviceId = parsed.clientDeviceId,
             clientName = parsed.clientName,
             createdAtMs = Clock.System.now().toEpochMilliseconds(),
+            account = settings.currentAccount().orEmpty(),
         )
         runBlocking {
             settings.update { current ->
-                current.copy(hostTokens = (current.hostTokens.filterNot { it.clientDeviceId == client.clientDeviceId } + client).takeLast(MAX_HOST_TOKENS))
+                current.copy(hostTokens = (current.hostTokens.filterNot {
+                    it.clientDeviceId == client.clientDeviceId && it.account == client.account
+                } + client).takeLast(MAX_HOST_TOKENS))
             }
         }
         sendJson(
@@ -309,7 +313,7 @@ class AndroidLanShareHost(
     ) {
         val header = request.headers["authorization"].orEmpty()
         val token = if (header.startsWith("Bearer ")) header.removePrefix("Bearer ") else query["token"].orEmpty()
-        if (settings.current().hostTokens.none { it.token == token }) {
+        if (settings.currentTokens().none { it.token == token }) {
             return sendError(output, 401, "unauthorized")
         }
         action()

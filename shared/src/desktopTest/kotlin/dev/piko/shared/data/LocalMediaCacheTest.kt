@@ -20,11 +20,11 @@ class LocalMediaCacheTest {
         try {
             val directory = temporary()
             val calls = AtomicInteger()
-            val cache = LocalMediaCache(directory, scope) {}
+            val cache = LocalMediaCache(directory, scope) { _, _ -> }
             val first = cache.probe(video()) { calls.incrementAndGet(); LocalMediaMetadata(1920, 1080, 120_500, "file:///cache/cover.jpg") }
             assertEquals("120.5", first.params["duration"])
             assertEquals("1920", first.params["width"])
-            val reloaded = LocalMediaCache(directory, scope) {}
+            val reloaded = LocalMediaCache(directory, scope) { _, _ -> }
             assertEquals(first, reloaded.probe(video()) { error("缓存命中时不能重复探测") })
             reloaded.probe(video("2026-01-02T00:00:00Z")) { calls.incrementAndGet(); LocalMediaMetadata(1280, 720, 100_000) }
             assertEquals(2, calls.get())
@@ -34,7 +34,7 @@ class LocalMediaCacheTest {
     @Test fun failedProbesAreNegativelyCachedAndDoNotCauseRefreshLoops() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
-            val cache = LocalMediaCache(temporary(), scope) {}
+            val cache = LocalMediaCache(temporary(), scope) { _, _ -> }
             assertEquals(video(), cache.probe(video()) { error("不可读") })
             assertEquals(video(), cache.probe(video()) { error("不能立即重试失败条目") })
         } finally { scope.cancel() }
@@ -46,7 +46,7 @@ class LocalMediaCacheTest {
             val maximum = AtomicInteger()
             val finished = AtomicInteger()
             val release = CompletableDeferred<Unit>()
-            val cache = LocalMediaCache(temporary(), scope) { finished.incrementAndGet() }
+            val cache = LocalMediaCache(temporary(), scope) { _, _ -> finished.incrementAndGet() }
             for (index in 0 until 8) {
                 val file = video().copy(id = LocalLocation("mount-1", listOf("$index.mkv"), false).id)
                 assertEquals(file, cache.enrich(file) {

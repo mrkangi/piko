@@ -72,6 +72,9 @@ import dev.piko.shared.sync.JvmSyncCipher
 import dev.piko.shared.scrape.MetaTubeService
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import dev.piko.shared.jellyfin.JellyfinSettings
+import dev.piko.shared.jellyfin.createDesktopJellyfinRepository
+import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.PikoClientManager
 import dev.piko.shared.state.InstantSheetState
 import dev.piko.shared.state.TorrentMagnet
@@ -81,6 +84,7 @@ import dev.piko.shared.log.LogLevel
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
+import dev.piko.shared.media.proxy.installHttpStreamSource
 import dev.piko.shared.smb.SmbFileAccess
 import dev.piko.shared.memory.PikoMemoryGovernor
 import dev.piko.shared.memory.cacheBudget
@@ -662,12 +666,23 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         preferences,
         clipCache = FileClipCache(PikoHome.root.resolve("cache/clip-cache").toFile()),
     )
+    mediaRepository.installHttpStreamSource()
     val cacheStore = FilePikoCacheStore(
         PikoHome.root.resolve("cache").toString(),
         jsonCodec = Json { ignoreUnknownKeys = true }.streamingCodec(),
     )
-    val lanDeviceName = System.getProperty("os.name").orEmpty() + " · Piko"
     val lanPlatform = System.getProperty("os.name").orEmpty()
+    val pikoVersion = System.getProperty("jpackage.app-version") ?: "dev"
+    val lanDeviceName = "$lanPlatform · Piko $pikoVersion"
+    val remoteDeviceId = runBlocking { preferences.loadOrCreateRemoteDeviceId() }
+    val jellyfin = createDesktopJellyfinRepository(
+        settings = JellyfinSettings(preferences, appScope),
+        secrets = sessionStore,
+        scope = appScope,
+        clientVersion = pikoVersion,
+        deviceName = lanDeviceName,
+        deviceId = remoteDeviceId,
+    )
     return PikoServices(
         platformPreferences = preferences,
         clientManager = clientManager,
@@ -687,6 +702,8 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
             sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
         },
         localMountSecrets = sessionStore,
+        jellyfin = jellyfin,
+        remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
         cacheStore = cacheStore,
         treeDatabaseFactory = dev.piko.shared.data.DesktopPikoTreeDatabaseFactory(),
         syncCipher = JvmSyncCipher(),

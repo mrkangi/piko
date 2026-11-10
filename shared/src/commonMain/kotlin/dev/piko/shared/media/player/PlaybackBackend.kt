@@ -100,6 +100,27 @@ interface PlaybackBackend {
      */
     fun mpvProperty(name: String): String? = null
 
+    /**
+     * 按当前这一档视频的平均字节速率调整预读预算，开播前调用一次。
+     * 高码率需要更深的缓冲才能扛住取流抖动；不支持的平台忽略。
+     */
+    fun tuneBuffering(mediaBytesPerSecond: Long?) = Unit
+
+    /**
+     * 改用兼容硬解：仍由硬件解码，但把帧拷回内存由播放器排帧（Android 为 `mediacodec-copy`）。
+     * 零拷贝输出在部分机型/码流上出帧节奏不匀，重新 [open] 后生效；不支持的后端忽略。
+     */
+    fun preferCompatibleDecoding() = Unit
+
+    /** 当前解码方式。设置页只提供默认值，播放页可以按文件临时改，见 [setDecodeMode]。 */
+    val decodeMode: VideoDecodeMode get() = VideoDecodeMode.Auto
+
+    /** 播放中可以切换的解码方式；空表示这个后端不支持，播放页不显示入口。 */
+    val decodeModeOptions: List<VideoDecodeMode> get() = emptyList()
+
+    /** 切换解码方式，下一次 [open] 生效。不支持的后端忽略。 */
+    fun setDecodeMode(mode: VideoDecodeMode) = Unit
+
     fun stop()
 
     /**
@@ -159,6 +180,20 @@ sealed interface PlaybackBackendEvent {
 }
 
 enum class PlayerAspectRatio { Fit, Crop, Stretch, RegionCrop }
+
+/**
+ * 视频解码方式。设置页里的是默认值，播放页可按单个视频临时改，改完重新打开当前文件。
+ */
+enum class VideoDecodeMode {
+    /** 零拷贝硬件解码，性能最好，个别机型/码流出帧节奏不匀。 */
+    Auto,
+
+    /** 硬件解码后把帧拷回内存，由播放器排帧；比纯软件解码省电。 */
+    Compatible,
+
+    /** 完全软件解码，最稳但最费 CPU。 */
+    Software,
+}
 
 /** 归一化（0f..1f）的画面区域选择框，用于区域裁剪铺满窗口。 */
 data class VideoCropRegion(

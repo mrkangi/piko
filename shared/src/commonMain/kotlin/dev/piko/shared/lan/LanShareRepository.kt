@@ -49,19 +49,18 @@ class LanShareRepository(
     private var indexCache = emptyMap<Pair<String, String>, CachedIndex>()
     private var shareNames = emptyMap<Pair<String, String>, String>()
 
-    val peers: StateFlow<List<LanPeer>> = settings.flow
-        .map { it.peers }
-        .stateIn(scope, SharingStarted.Eagerly, settings.current().peers)
+    val peers: StateFlow<List<LanPeer>> = settings.activePeersFlow
+        .stateIn(scope, SharingStarted.Eagerly, settings.currentPeers())
 
-    fun hasPeers(): Boolean = settings.current().peers.isNotEmpty()
+    fun hasPeers(): Boolean = settings.currentPeers().isNotEmpty()
 
     suspend fun ensureLoaded() = settings.ensureLoaded()
 
-    fun peer(deviceId: String): LanPeer? = settings.current().peers.firstOrNull { it.hostDeviceId == deviceId }
+    fun peer(deviceId: String): LanPeer? = settings.currentPeers().firstOrNull { it.hostDeviceId == deviceId }
 
     fun peerName(deviceId: String): String = peer(deviceId)?.name ?: deviceId
 
-    fun deviceNodes(): List<FileStat> = settings.current().peers.map { peer ->
+    fun deviceNodes(): List<FileStat> = settings.currentPeers().map { peer ->
         DeviceLocation.peerStat(peer.hostDeviceId, peer.name)
     }
 
@@ -157,9 +156,12 @@ class LanShareRepository(
             token = paired.token,
             lastSeenMs = now(),
             platform = paired.platform,
+            account = settings.currentAccount().orEmpty(),
         )
         settings.update { current ->
-            current.copy(peers = current.peers.filterNot { it.hostDeviceId == peer.hostDeviceId } + peer)
+            current.copy(peers = current.peers.filterNot {
+                it.hostDeviceId == peer.hostDeviceId && it.account == peer.account
+            } + peer)
         }
         cacheLock.withLock {
             shareCache = shareCache - peer.hostDeviceId
@@ -169,7 +171,12 @@ class LanShareRepository(
     }
 
     suspend fun removePeer(deviceId: String) {
-        settings.update { current -> current.copy(peers = current.peers.filterNot { it.hostDeviceId == deviceId }) }
+        val account = settings.currentAccount()
+        settings.update { current ->
+            current.copy(peers = current.peers.filterNot {
+                it.hostDeviceId == deviceId && (account == null || it.account == account)
+            })
+        }
         cacheLock.withLock {
             shareCache = shareCache - deviceId
             indexCache = indexCache.filterKeys { it.first != deviceId }
@@ -185,13 +192,15 @@ class LanShareRepository(
             lastSeenMs = now(),
         )
         settings.update { current ->
-            current.copy(peers = current.peers.map { if (it.hostDeviceId == peerId) updated else it })
+            current.copy(peers = current.peers.map {
+                if (it.hostDeviceId == peerId && it.account == peer.account) updated else it
+            })
         }
         fetchShares(updated)
     }
 
     suspend fun refreshAll() {
-        settings.current().peers.forEach { refresh(it.hostDeviceId) }
+        settings.currentPeers().forEach { refresh(it.hostDeviceId) }
     }
 
     fun streamUrl(fileId: String): String? = LanLocation.of(fileId)?.let(::streamUrl)

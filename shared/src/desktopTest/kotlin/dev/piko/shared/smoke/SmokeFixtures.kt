@@ -43,6 +43,8 @@ class MemoryPreferences : PikoUserPreferences {
     override suspend fun setReduceMotion(enabled: Boolean) = Unit
     override val hardwareDecodingFlow: Flow<Boolean> = MutableStateFlow(true)
     override suspend fun setHardwareDecoding(enabled: Boolean) = Unit
+    override val compatibleHardwareDecodingFlow: Flow<Boolean> = MutableStateFlow(false)
+    override suspend fun setCompatibleHardwareDecoding(enabled: Boolean) = Unit
     override val playbackMaxHeightFlow: Flow<Int> = MutableStateFlow(0)
     override suspend fun setPlaybackMaxHeight(height: Int) = Unit
     override val downloadMaxHeightFlow = MutableStateFlow<Int?>(null)
@@ -108,6 +110,9 @@ class MemoryPreferences : PikoUserPreferences {
     private val lanShareSettings = MutableStateFlow("")
     override val lanShareSettingsFlow: Flow<String> = lanShareSettings
     override suspend fun saveLanShareSettings(serialized: String) { lanShareSettings.value = serialized }
+    private val jellyfinServers = MutableStateFlow("")
+    override val jellyfinServersFlow: Flow<String> = jellyfinServers
+    override suspend fun saveJellyfinServers(serialized: String) { jellyfinServers.value = serialized }
     private var remoteDeviceId: String = ""
     private var remoteDeviceName: String = ""
     override suspend fun loadOrCreateRemoteDeviceId(): String {

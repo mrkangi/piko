@@ -22,14 +22,28 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
-class AndroidLocalFileAccess(private val context: Context, scope: CoroutineScope, changed: (String) -> Unit) : LocalFileAccess {
+class AndroidLocalFileAccess(
+    private val context: Context,
+    scope: CoroutineScope,
+    changed: (String, FileStat?) -> Unit,
+) : LocalFileAccess {
     private val resolver get() = context.contentResolver
     private val cache = LocalMediaCache(File(context.cacheDir, "piko/local-media"), scope, changed)
+    // SAF 的路径只能按显示名逐级查，深目录或大目录每列一次都要重新走一遍。记下已解析的 documentId，
+    // 后续列目录/播放/字幕直接用；取消待办或卸载时清掉，避免沿用已失效的授权。
+    private val documentIds = ConcurrentHashMap<String, String>()
     private val subtitleLocks = Array(16) { Mutex() }
     private val subtitleCleanup = Any()
-    override fun cancelPending() = cache.cancelPending()
+    override fun cancelPending() {
+        documentIds.clear()
+        cache.cancelPending()
+    }
+    override fun closeMount(mountId: String) {
+        documentIds.keys.removeAll { key -> LocalLocation.of(key)?.mountId == mountId }
+    }
     private fun atomicReplace(source: File, target: File) {
         try {
             Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
@@ -50,7 +64,17 @@ class AndroidLocalFileAccess(private val context: Context, scope: CoroutineScope
         require(location.mountId == mount.mountId)
         val tree = Uri.parse(mount.localRootUriOrPath)
         var id = DocumentsContract.getTreeDocumentId(tree)
-        for (segment in location.segments) id = children(tree, id).firstOrNull { it.name == segment }?.id ?: error("本机文件夹不可访问")
+        for ((index, segment) in location.segments.withIndex()) {
+            val child = LocalLocation(location.mountId, location.segments.take(index + 1))
+            val cached = documentIds[child.id]
+            if (cached != null) {
+                id = cached
+                continue
+            }
+            val found = children(tree, id).firstOrNull { it.name == segment }?.id ?: error("本机文件夹不可访问")
+            documentIds[child.id] = found
+            id = found
+        }
         return DocumentsContract.buildDocumentUriUsingTree(tree, id)
     }
     private fun stat(mount: LocalMount, location: LocalLocation, entry: Entry, uri: Uri): FileStat {
@@ -70,8 +94,10 @@ class AndroidLocalFileAccess(private val context: Context, scope: CoroutineScope
             children(tree, DocumentsContract.getDocumentId(parent)).mapNotNull { entry ->
                 val child = runCatching { location.child(entry.name, entry.mime == DocumentsContract.Document.MIME_TYPE_DIR) }.getOrNull() ?: return@mapNotNull null
                 val uri = DocumentsContract.buildDocumentUriUsingTree(tree, entry.id)
+                if (child.directory) documentIds[child.id] = entry.id
                 val file = stat(mount, child, entry, uri)
-                cache.enrich(file) { output -> metadata(file, uri, output) }
+                if (file.isPlayableVideo()) cache.enrich(file) { output -> metadata(file, uri, output) }
+                file
             }
         } catch (_: Exception) { throw IllegalStateException("本机文件夹不可访问") }
     }

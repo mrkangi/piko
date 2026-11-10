@@ -45,6 +45,7 @@ class DesktopPikoPreferences(
     private val autoDetectClipboardLinks = MutableStateFlow(settings.get("ui.autoDetectClipboardLinks") == "true")
     private val reduceMotion = MutableStateFlow(settings.get(KEY_REDUCE_MOTION) == "true")
     private val hardwareDecoding = MutableStateFlow(settings.get(KEY_HARDWARE_DECODING, "true").toBoolean())
+    private val compatibleHardwareDecoding = MutableStateFlow(settings.get(KEY_COMPATIBLE_HARDWARE_DECODING) == "true")
     private val playbackMaxHeight = MutableStateFlow(settings.get(KEY_PLAYBACK_MAX_HEIGHT).toIntOrNull() ?: 0)
     private val downloadMaxHeight = MutableStateFlow(settings.get(KEY_DOWNLOAD_MAX_HEIGHT).toIntOrNull())
     private val playerSeekStepSeconds = MutableStateFlow(
@@ -98,6 +99,12 @@ class DesktopPikoPreferences(
     override suspend fun saveLocalMounts(serialized: String) {
         settings.set("drive.localMounts", serialized)
         localMounts.value = serialized
+    }
+    private val jellyfinServers = MutableStateFlow(settings.get("jellyfin.servers"))
+    override val jellyfinServersFlow: Flow<String> = jellyfinServers.asStateFlow()
+    override suspend fun saveJellyfinServers(serialized: String) {
+        settings.set("jellyfin.servers", serialized)
+        jellyfinServers.value = serialized
     }
 
     private val lanShareSettings = MutableStateFlow(settings.get("lan.share.settings"))
@@ -176,6 +183,12 @@ class DesktopPikoPreferences(
     override suspend fun setHardwareDecoding(enabled: Boolean) {
         settings.set(KEY_HARDWARE_DECODING, enabled.toString())
         hardwareDecoding.value = enabled
+    }
+
+    override val compatibleHardwareDecodingFlow: Flow<Boolean> = compatibleHardwareDecoding.asStateFlow()
+    override suspend fun setCompatibleHardwareDecoding(enabled: Boolean) {
+        settings.set(KEY_COMPATIBLE_HARDWARE_DECODING, enabled.toString())
+        compatibleHardwareDecoding.value = enabled
     }
 
     override val playbackMaxHeightFlow: Flow<Int> = playbackMaxHeight.asStateFlow()
@@ -518,6 +531,7 @@ class DesktopPikoPreferences(
         const val KEY_AUTO_CHECK_UPDATES = "update.autoCheck"
         const val KEY_REDUCE_MOTION = "ui.reduceMotion"
         const val KEY_HARDWARE_DECODING = "player.hardwareDecoding"
+        const val KEY_COMPATIBLE_HARDWARE_DECODING = "player.compatibleHardwareDecoding"
         const val KEY_PLAYBACK_MAX_HEIGHT = "player.maxHeight"
         // 不沿用开发期的 download.maxHeight，理由同 Android 的 DOWNLOAD_MAX_HEIGHT
         const val KEY_DOWNLOAD_MAX_HEIGHT = "download.defaultMaxHeight"

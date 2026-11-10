@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 /**
  * Android 作为远程下载目标时保持进程存活的前台服务。
  *
- * 只负责挂通知，真正的轮询在 [dev.piko.shared.download.RemoteDownloadCoordinator] 里。
+ * 只负责挂通知；MQTT 连接、presence 与任务状态在 [dev.piko.shared.download.RemoteDownloadCoordinator] 里。
  * 使用 `specialUse`：远程接收是用户显式开启的长期能力，不属于 6 小时限额的 dataSync。
  */
 class RemoteDownloadService : Service() {

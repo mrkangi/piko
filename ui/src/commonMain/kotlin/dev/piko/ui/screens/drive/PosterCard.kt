@@ -4,6 +4,7 @@ import dev.piko.shared.i18n.tr
 
 import dev.piko.ui.components.itemMarks
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Shape
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -51,6 +53,7 @@ import dev.piko.ui.components.MediaTagRow
 import dev.piko.ui.components.SkeletonBlock
 import dev.piko.ui.components.SkeletonTextLine
 import io.github.nihildigit.pikpak.FileStat
+import dev.piko.shared.data.jellyfinPlaybackFraction
 import dev.piko.ui.components.*
 
 /**
@@ -140,6 +143,22 @@ internal fun PosterCard(
                 .locateHighlight(isHighlighted, coverShape),
         ) {
             FileArtwork(item.visual, FileArtworkFormat.Poster, isSpoilerBlurred, Modifier.fillMaxSize())
+            file.jellyfinPlaybackFraction?.let { progress ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
             if (isSelectionMode || (hover.mouseHovered && onStartSelection != null)) {
                 FileOverlaySelectionControl(FileItemSelection(
                     if (isSelected) androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off,

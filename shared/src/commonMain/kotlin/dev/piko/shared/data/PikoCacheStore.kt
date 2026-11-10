@@ -82,6 +82,7 @@ class FilePikoCacheStore(
                 SystemFileSystem.createDirectories(directory)
                 val temp = Path(directory, "$key.${Random.nextLong().toULong()}.tmp")
                 try {
+                    temp.parent?.let { SystemFileSystem.createDirectories(it) }
                     SystemFileSystem.sink(temp).buffered().use(encode)
                     currentCoroutineContext().ensureActive()
                     SystemFileSystem.atomicMove(temp, Path(directory, key))

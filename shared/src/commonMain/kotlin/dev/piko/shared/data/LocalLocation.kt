@@ -7,7 +7,8 @@ import kotlin.io.encoding.Base64
 data class LocalLocation(val mountId: String, val segments: List<String> = emptyList(), val directory: Boolean = true) {
     init {
         require(mountId.matches(Regex("[a-zA-Z0-9_-]{1,80}")))
-        require(segments.all { it.isNotEmpty() && it != "." && it != ".." && it.none { c -> c == '/' || c == '\\' || c == '\u0000' || c == ':' } })
+        // 冒号与反斜杠在 Linux/macOS 上是合法文件名；Windows 侧靠 toRealPath().startsWith(root) 防穿越。
+        require(segments.all { it.isNotEmpty() && it != "." && it != ".." && it.none { c -> c == '/' || c == '\u0000' } })
     }
     val id: String get() = (if (directory) DIR_PREFIX else FILE_PREFIX) + mountId + "/" +
         segments.joinToString("/") { Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).encode(it.encodeToByteArray()) }

@@ -40,6 +40,7 @@ import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.data.isLocal
 import dev.piko.shared.data.isLocalMountRoot
 import dev.piko.shared.data.isVirtual
+import dev.piko.shared.data.JellyfinLocation
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.naming.av.hasAvCode
@@ -60,7 +61,7 @@ internal val DriveViewMode.paletteLabel: String
     }
 
 internal fun commandPlaceOf(state: DriveScreenState, stackDepth: Int): CommandPlace = when {
-    state.isLocalPlace || state.isDevicePlace || state.isLanPlace -> CommandPlace.LOCAL
+    state.isLocalPlace || state.isDevicePlace || state.isLanPlace || state.isJellyfinPlace -> CommandPlace.LOCAL
     state.importPreviewView != null -> CommandPlace.IMPORT_PREVIEW
     state.archiveView != null -> CommandPlace.ARCHIVE
     state.libraryView == DriveLibrary.TRASH -> CommandPlace.TRASH
@@ -141,6 +142,7 @@ internal class DriveItemActionIntents(
     val onRevealFromGalleryOrLibrary: (FileStat) -> Unit,
     val onRevealLocalInFileManager: (String) -> Unit,
     val onUnmountLocal: (String) -> Unit,
+    val onUnmountJellyfin: (String) -> Unit,
 )
 
 internal fun buildArchiveEntryActions(
@@ -416,6 +418,17 @@ internal fun buildDriveOperations(
                         Icons.Outlined.LinkOff,
                         tr("取消挂载", "Unmount", "マウント解除", "마운트 해제", "取消掛載"),
                         { intents.onUnmountLocal(file.id) },
+                        destructive = true,
+                    ),
+                )
+            }
+            val jellyfin = JellyfinLocation.of(file.id)
+            if (jellyfin != null && jellyfin.itemId.isEmpty()) {
+                add(
+                    SheetAction(
+                        Icons.Outlined.LinkOff,
+                        tr("移除服务器", "Remove server", "サーバーを削除", "서버 제거", "移除伺服器"),
+                        { intents.onUnmountJellyfin(jellyfin.serverId) },
                         destructive = true,
                     ),
                 )

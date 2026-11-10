@@ -5,6 +5,9 @@ import dev.piko.data.auth.PikoUserPreferences
 import dev.piko.shared.data.PikoClientProvider
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.data.LeasedFile
+import dev.piko.shared.data.JellyfinLocation
+import dev.piko.shared.jellyfin.JellyfinPlayback
+import dev.piko.shared.jellyfin.JellyfinRepository
 import dev.piko.shared.data.VaultEntry
 import dev.piko.shared.log.logFailure
 import dev.piko.shared.log.logFile
@@ -181,7 +184,15 @@ class PikoMediaRepository(
     var leaseFolder: (suspend (PikPakClient) -> String)? = null
     var localMounts: dev.piko.shared.data.LocalMounts? = null
     var lanShares: dev.piko.shared.lan.LanShareRepository? = null
+    var jellyfin: JellyfinRepository? = null
     var metadataSink: dev.piko.shared.data.DriveMetadataSink? = null
+
+    /**
+     * 直连 HTTP 地址的读取通道，由 JVM 平台注入（见 installHttpStreamSource）。
+     * 用系统 HTTP 栈替代播放器内置的 FFmpeg 栈：后者 TCP 接收缓冲很小，跨公网时单流吞吐常被压到几 Mbps。
+     */
+    var httpStreamSourceFactory: (suspend (url: String, sizeBytes: Long) -> ProxyByteSource?)? = null
+
     suspend fun localPath(fileId: String, subtitle: Boolean = false): String? {
         if (dev.piko.shared.data.LanLocation.isLan(fileId)) {
             return if (subtitle) lanShares?.streamUrl(fileId) else null
@@ -226,6 +237,7 @@ class PikoMediaRepository(
                         return@runSuspendCatching lanPlayableInfo(shares, location)
                     }
                 }
+                jellyfinPlayableInfo(fileId)?.let { return@runSuspendCatching it }
                 smbPlayableInfo(fileId)?.let { return@runSuspendCatching it }
                 val detail = detailOf(client, fileId)
                 val resolved = detail.resolveVariant(preferenceFor(preferredResolution))
@@ -282,6 +294,42 @@ class PikoMediaRepository(
         )
     }
 
+    private suspend fun jellyfinPlayableInfo(fileId: String): PlayableMediaInfo? {
+        if (!JellyfinLocation.isJellyfin(fileId)) return null
+        val repo = jellyfin ?: return null
+        return repo.playback(fileId).toPlayableInfo(fileId)
+    }
+
+    /**
+     * Jellyfin 原始文件经本机代理、用系统 HTTP 栈读取。播放器内置的 FFmpeg HTTP 接收缓冲偏小，
+     * 跨公网 RTT 一高就卡在几 Mbps；浏览器与 Findroid 快，走的正是系统栈。
+     * 拿不到长度或登记失败时返回 null，播放端退回直链。
+     */
+    private suspend fun jellyfinStream(info: PlayableMediaInfo): ProxyStream? {
+        if (info.kind != PlayableMediaKind.Video) return null
+        val factory = httpStreamSourceFactory ?: return null
+        val source = factory(info.currentUrl, info.sizeBytes) ?: return null
+        return registerProxy(source, fileName = info.name, role = StreamRole.FOREGROUND)
+    }
+
+    private fun JellyfinPlayback.toPlayableInfo(fileId: String) = PlayableMediaInfo(
+        fileId = fileId,
+        name = name.ifBlank { tr("Jellyfin 媒体", "Jellyfin media", "Jellyfin メディア", "Jellyfin 미디어", "Jellyfin 媒體") },
+        gcid = "",
+        currentUrl = url,
+        durationSeconds = durationSeconds,
+        currentResolution = "",
+        availableVariants = emptyList(),
+        sizeBytes = sizeBytes,
+        kind = when {
+            mimeType.startsWith("image/") -> PlayableMediaKind.Image
+            else -> PlayableMediaKind.Video
+        },
+        width = width,
+        height = height,
+        isOrigin = true,
+    )
+
     /**
      * 获取文件的下载直链（含归档条目或压缩包内条目的按需借出直链）。
      */
@@ -290,6 +338,9 @@ class PikoMediaRepository(
             runSuspendCatching {
                 localMounts?.streamUrl(fileId)?.let { return@runSuspendCatching it }
                 lanShares?.streamUrl(fileId)?.let { return@runSuspendCatching it }
+                if (JellyfinLocation.isJellyfin(fileId)) {
+                    return@runSuspendCatching requireNotNull(jellyfin).playback(fileId).url
+                }
                 val detail = detailOf(client, fileId)
                 detail.downloadUrl?.takeIf { it.isNotBlank() } ?: error(tr("未获取到下载链接", "Download link unavailable", "ダウンロードリンクを取得できません", "다운로드 링크를 가져올 수 없습니다", "無法取得下載連結"))
             }
@@ -318,6 +369,9 @@ class PikoMediaRepository(
                         val info = lanPlayableInfo(shares, location)
                         return@runSuspendCatching PreparedPlayback(info, null)
                     }
+                }
+                jellyfinPlayableInfo(fileId)?.let { info ->
+                    return@runSuspendCatching PreparedPlayback(info, jellyfinStream(info))
                 }
                 smbPlayableInfo(fileId)?.let { info ->
                     return@runSuspendCatching PreparedPlayback(info, null)
@@ -406,6 +460,13 @@ class PikoMediaRepository(
                     val path = requireNotNull(localPath(fileId)) { "本机文件夹不可访问" }
                     return@runSuspendCatching PreparedClip(null, path, false, startMs, 0.0,
                         maxWindowMs = dev.piko.shared.state.localClipMaxWindowMs(startMs, videoDurationMs), localPath = path)
+                }
+                if (JellyfinLocation.isJellyfin(fileId)) {
+                    val playback = requireNotNull(jellyfin).playback(fileId)
+                    val durationMs = playback.durationSeconds * 1000L
+                    val bytesPerMs = if (durationMs > 0) playback.sizeBytes.toDouble() / durationMs else 0.0
+                    return@runSuspendCatching PreparedClip(null, playback.url, false, startMs, bytesPerMs,
+                        maxWindowMs = dev.piko.shared.state.localClipMaxWindowMs(startMs, videoDurationMs))
                 }
                 val key = clipKey(client.account, fileId, startMs)
                 val leased = LeasedFile.isLeased(fileId)
@@ -513,6 +574,10 @@ class PikoMediaRepository(
                     val file = localMounts?.probe(fileId)
                     return@runSuspendCatching ClipProbe(false, file?.params?.get("duration")?.toDoubleOrNull()?.let { (it * 1000).toLong() })
                 }
+                if (JellyfinLocation.isJellyfin(fileId)) {
+                    val playback = requireNotNull(jellyfin).playback(fileId)
+                    return@runSuspendCatching ClipProbe(false, playback.durationSeconds * 1000L)
+                }
                 val owner = client
                 val detail = detailOf(owner, fileId)
                 freshDetailsLock.withLock {
@@ -537,7 +602,7 @@ class PikoMediaRepository(
      * 读这份详情建 handle 时要带 leased，直链过期后重建出的对象才会同样删掉。
      */
     private suspend fun detailOf(client: PikPakClient, fileId: String): FileDetail {
-        require(!dev.piko.shared.data.LocalLocation.isLocal(fileId)) { "本地文件不支持云端操作" }
+        require(!dev.piko.shared.data.LocalLocation.isLocal(fileId) && !JellyfinLocation.isJellyfin(fileId)) { "虚拟文件不支持云端操作" }
         val observer = metadataSink?.capture(client)
         val leased = LeasedFile.resolvedFileOf(fileId)
         val detail = if (leased == null) {
@@ -733,7 +798,15 @@ class PikoMediaRepository(
      * 把播放进度上报到 PikPak 的播放历史。同步关闭时不做事；失败不抛，上报是附带的，不能打断播放。
      * 服务端会悄悄丢掉同一文件间隔太短的上报（实测 1.5 秒丢、6 秒收），节流由调用方负责。
      */
-    suspend fun reportPlay(fileId: String, positionMillis: Long, durationMillis: Long) {
+    suspend fun reportPlay(fileId: String, positionMillis: Long, durationMillis: Long, stopped: Boolean = false) {
+        if (JellyfinLocation.isJellyfin(fileId)) {
+            if (fileId.isBlank() || positionMillis <= 0L || durationMillis <= 0L) return
+            withContext(Dispatchers.Default) {
+                runSuspendCatching { jellyfin?.reportPlayback(fileId, positionMillis, durationMillis, stopped) }
+                    .logFailure(TAG, "上报 Jellyfin 播放进度失败：${logFile(fileId, "")}")
+            }
+            return
+        }
         // 归档条目与压缩包里的文件在网盘里没有常驻的文件，播放历史记不上；续播位置照样记在本机
         if (dev.piko.shared.data.VirtualLocation.isVirtual(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId) || positionMillis <= 0L || durationMillis <= 0L) return
         withContext(Dispatchers.Default) {
@@ -748,6 +821,12 @@ class PikoMediaRepository(
      * 服务端不能按文件查，只看第一页（最近播放的 100 条）：从历史里点进来的一定在里面，更早的就算了。
      */
     suspend fun cloudPlaybackPosition(fileId: String): Long? {
+        if (JellyfinLocation.isJellyfin(fileId)) {
+            val repo = jellyfin ?: return null
+            return withContext(Dispatchers.Default) {
+                runSuspendCatching { repo.resumePosition(fileId) }.getOrNull()
+            }
+        }
         if (dev.piko.shared.data.VirtualLocation.isVirtual(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId)) return null
         // 读偏好也包在里面：这只是续播的参考，任何一步失败都不该挡住开播
         return withContext(Dispatchers.Default) {

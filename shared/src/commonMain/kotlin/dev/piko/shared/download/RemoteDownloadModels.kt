@@ -1,16 +1,12 @@
 package dev.piko.shared.download
 
 import dev.piko.download.DownloadTask
-import dev.piko.shared.data.PikoClientProvider
-import dev.piko.shared.data.PikoDriveRepository
-import dev.piko.shared.log.PikoLog
-import dev.piko.shared.sync.DriveSettingsStore
+import dev.piko.shared.data.PikoCacheStore
 import io.github.nihildigit.pikpak.FileStat
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
-import kotlin.time.Clock
 
 @Serializable
 enum class RemoteDownloadStatus {
@@ -23,6 +19,14 @@ enum class RemoteDownloadStatus {
     CANCELLED,
     REJECTED,
     EXPIRED,
+}
+
+@Serializable
+enum class RemoteDownloadCommand {
+    NONE,
+    PAUSE,
+    RESUME,
+    RETRY,
 }
 
 /** 一台设备发出的下载请求。只有源设备会写它，目标设备只读。 */
@@ -41,6 +45,9 @@ data class RemoteDownloadRequest(
     val expiresAtMs: Long = 0L,
     /** 源设备请求取消；目标设备看到后停止任务并写回 CANCELLED。 */
     val cancelRequested: Boolean = false,
+    /** 源设备请求暂停/继续/重试；[commandAtMs] 用来让目标设备只执行一次。 */
+    val command: RemoteDownloadCommand = RemoteDownloadCommand.NONE,
+    val commandAtMs: Long = 0L,
 )
 
 /** 目标设备对一条请求的执行状态。只有目标设备会写它，源设备只读。 */
@@ -52,24 +59,9 @@ data class RemoteDownloadState(
     val status: RemoteDownloadStatus,
     val downloadedBytes: Long = 0L,
     val totalBytes: Long = 0L,
+    val speedBytesPerSec: Long = 0L,
     val error: String? = null,
     val updatedAtMs: Long = 0L,
-)
-
-/**
- * 一台设备在 `.piko` 里的完整账本。每个设备只写自己的文件：
- * requests 是它发出的请求，states 是它作为目标设备执行过的任务状态。
- */
-@Serializable
-data class RemoteDeviceDocument(
-    val version: Int = 1,
-    val deviceId: String,
-    val name: String,
-    val platform: String,
-    val receiverEnabled: Boolean = false,
-    val updatedAtMs: Long = 0L,
-    val requests: List<RemoteDownloadRequest> = emptyList(),
-    val states: List<RemoteDownloadState> = emptyList(),
 )
 
 /** 界面用的一台已发现设备。 */
@@ -79,6 +71,8 @@ data class RemoteDevice(
     val platform: String,
     val receiverEnabled: Boolean,
     val updatedAtMs: Long,
+    val online: Boolean = false,
+    val stale: Boolean = false,
 )
 
 /** 界面用的一条远程下载记录；源设备与目标设备看到的是同一条，方向不同。 */
@@ -89,11 +83,13 @@ data class RemoteDownloadItem(
     val targetDeviceName: String,
     val outgoing: Boolean,
     val status: RemoteDownloadStatus,
+    val targetOnline: Boolean = false,
 ) {
     val requestId: String get() = request.requestId
     val fileName: String get() = request.fileName
     val totalBytes: Long get() = state?.totalBytes?.takeIf { it > 0L } ?: request.totalBytes
     val downloadedBytes: Long get() = state?.downloadedBytes ?: 0L
+    val speedBytesPerSec: Long get() = state?.speedBytesPerSec ?: 0L
     val error: String? get() = state?.error
 }
 
@@ -108,47 +104,51 @@ interface RemoteDownloadExecutor {
 
     fun cancelRemote(taskId: String)
 
+    fun pauseRemote(taskId: String)
+    fun resumeRemote(taskId: String)
+    fun retryRemote(taskId: String)
+
     suspend fun findCompletedLocalPath(file: FileStat): String?
 }
 
-/** 远程设备账本的存储边界。生产实现读写网盘 `.piko`，测试用内存实现。 */
-interface RemoteDownloadStore {
-    suspend fun readAll(account: String): List<RemoteDeviceDocument>
+/**
+ * 远程下载在本机的持久化。请求与状态不再写入网盘；这里只保存当前账号下本设备需要恢复的数据。
+ */
+@Serializable
+data class RemoteDownloadLocalState(
+    val version: Int = 1,
+    val requests: List<RemoteDownloadRequest> = emptyList(),
+    val states: List<RemoteDownloadState> = emptyList(),
+    val forgottenDevices: List<String> = emptyList(),
+    val updatedAtMs: Long = 0L,
+)
 
-    suspend fun write(account: String, document: RemoteDeviceDocument)
+interface RemoteDownloadStore {
+    suspend fun read(account: String): RemoteDownloadLocalState?
+
+    suspend fun write(account: String, state: RemoteDownloadLocalState)
 }
 
-/**
- * `.piko/remote-<deviceId>-<timestamp>.json` 的存储实现。
- * 每个设备只写自己的前缀，因此多台设备并发写不会互相覆盖；读取时按 `remote-` 前缀汇总。
- */
-class DriveRemoteDownloadStore(
-    clients: PikoClientProvider,
-    driveRepo: PikoDriveRepository,
-    deviceId: String,
+/** 设备本地缓存实现。丢了只会丢远程任务视图，不会影响网盘中的任何文件。 */
+class CacheRemoteDownloadStore(
+    private val cache: PikoCacheStore?,
 ) : RemoteDownloadStore {
-    private val reader = DriveSettingsStore(clients, driveRepo, PREFIX)
-    private val writer = DriveSettingsStore(clients, driveRepo, "$PREFIX$deviceId-")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    override suspend fun readAll(account: String): List<RemoteDeviceDocument> =
-        reader.readAll(account, PREFIX).mapNotNull { (name, text) ->
-            runCatching { json.decodeFromString(RemoteDeviceDocument.serializer(), text) }
-                .onFailure { PikoLog.w(TAG, "读取远程设备文件 $name 失败", it) }
-                .getOrNull()
+    override suspend fun read(account: String): RemoteDownloadLocalState? =
+        cache?.read(key(account))?.let { text ->
+            runCatching { json.decodeFromString(RemoteDownloadLocalState.serializer(), text) }.getOrNull()
         }
 
-    override suspend fun write(account: String, document: RemoteDeviceDocument) {
-        writer.write(
-            account,
-            json.encodeToString(RemoteDeviceDocument.serializer(), document),
-            Clock.System.now().toEpochMilliseconds(),
-        )
+    override suspend fun write(account: String, state: RemoteDownloadLocalState) {
+        cache?.write(key(account), json.encodeToString(RemoteDownloadLocalState.serializer(), state))
     }
 
+    private fun key(account: String) =
+        "remote-download-" + account.replace(UNSAFE_KEY_CHARS, "_") + ".json"
+
     private companion object {
-        const val PREFIX = "remote-"
-        const val TAG = "RemoteDownload"
+        val UNSAFE_KEY_CHARS = Regex("""[^A-Za-z0-9._@-]""")
     }
 }
 

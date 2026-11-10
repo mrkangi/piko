@@ -115,7 +115,7 @@ class LocalVideoProbeTest {
         val movie = Files.write(nested.resolve("movie.mkv"), byteArrayOf(1, 2, 3))
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val access = DesktopLocalFileAccess(scope, {}, temporary("cache"))
+            val access = DesktopLocalFileAccess(scope, { _, _ -> }, temporary("cache"))
             val mount = LocalMount("mount-1", "account", root.toString(), "Local", 0)
             val folder = access.list(mount, mount.location).single()
             assertTrue(folder.isFolder)

@@ -92,6 +92,26 @@ class GallerySession(
                 }
             }
         }
+        scope.launch {
+            driveRepo.localMediaUpdates.collect { updates ->
+                if (root == null) return@collect
+                val patch = updates.associateBy { it.file.id }
+                if (patch.isEmpty() || patch.keys.none { id ->
+                        files.any { it.id == id } ||
+                            pool.values.any { it.id == id } ||
+                            folderVideos.values.any { list -> list.any { it.id == id } }
+                    }
+                ) {
+                    return@collect
+                }
+                fun patched(list: List<FileStat>) = list.map { patch[it.id]?.file ?: it }
+                files = patched(files)
+                pool.keys.toList().forEach { key -> pool[key]?.let { pool[key] = patch[it.id]?.file ?: it } }
+                folderVideos.keys.toList().forEach { key ->
+                    folderVideos[key]?.let { folderVideos[key] = patched(it) }
+                }
+            }
+        }
     }
 
     fun updateIncludeImages(enabled: Boolean) {

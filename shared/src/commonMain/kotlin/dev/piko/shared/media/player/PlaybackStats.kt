@@ -19,6 +19,9 @@ fun readPlaybackStats(property: (String) -> String?): List<PlaybackStatsSection>
         read("video-format")?.let { tr("编码", "Codec", "コーデック", "코덱", "編碼") to it.uppercase() },
         if (width != null && height != null) tr("分辨率", "Resolution", "解像度", "해상도", "解析度") to "$width × $height" else null,
         read("container-fps")?.toDoubleOrNull()?.let { tr("帧率", "Frame rate", "フレームレート", "프레임 레이트", "影格率") to formatFps(it) },
+        read("display-fps")?.toDoubleOrNull()?.takeIf { it > 1.0 }?.let {
+            tr("屏幕刷新率", "Display refresh rate", "画面のリフレッシュレート", "화면 주사율", "螢幕更新率") to "${it.roundToInt()} Hz"
+        },
         read("video-params/pixelformat")?.let { tr("像素格式", "Pixel format", "ピクセル形式", "픽셀 형식", "像素格式") to it },
         read("video-params/gamma")?.takeIf { it in HDR_TRANSFERS }?.let { "HDR" to it.uppercase() },
         tr("解码", "Decoder", "デコード", "디코딩", "解碼") to (read("hwdec-current")?.takeUnless { it == "no" }?.let { tr("硬件（$it）", "Hardware ($it)", "ハードウェア（$it）", "하드웨어($it)", "硬體（$it）") } ?: tr("软件", "Software", "ソフトウェア", "소프트웨어", "軟體")),
@@ -27,6 +30,9 @@ fun readPlaybackStats(property: (String) -> String?): List<PlaybackStatsSection>
         // 两种丢帧分开写：渲染丢帧多是显示跟不上，解码丢帧是解码跟不上，排查方向不同
         read("frame-drop-count")?.let { tr("渲染丢帧", "Dropped frames (VO)", "描画ドロップフレーム", "렌더링 드롭 프레임", "繪製遺失影格") to it },
         read("decoder-frame-drop-count")?.let { tr("解码丢帧", "Dropped frames (decoder)", "デコードドロップフレーム", "디코더 드롭 프레임", "解碼遺失影格") to it },
+        // 错时渲染是排帧节奏，渲染延迟是输出跟不上；与上面两个丢帧数一起看能分清是解码还是呈现
+        read("mistimed-frame-count")?.let { tr("错时渲染", "Mistimed frames", "タイミングずれ描画", "타이밍 어긋난 프레임", "時序錯誤影格") to it },
+        read("vo-delayed-frame-count")?.let { tr("渲染延迟帧", "Delayed frames (VO)", "描画遅延フレーム", "렌더링 지연 프레임", "繪製延遲影格") to it },
     ).takeIf { width != null }.orEmpty()
 
     val channels = read("audio-params/channel-count")
@@ -41,6 +47,7 @@ fun readPlaybackStats(property: (String) -> String?): List<PlaybackStatsSection>
     val stream = listOfNotNull(
         read("file-format")?.let { tr("容器", "Container", "コンテナ", "컨테이너", "容器") to it },
         read("demuxer-cache-duration")?.toDoubleOrNull()?.let { tr("已缓冲", "Buffered", "バッファ済み", "버퍼링됨", "已緩衝") to tr("${it.roundToInt()} 秒", "${it.roundToInt()} s", "${it.roundToInt()} 秒", "${it.roundToInt()}초", "${it.roundToInt()} 秒") },
+        read("piko-cache-stalls")?.takeIf { it != "0" }?.let { tr("缓冲停等", "Cache stalls", "バッファ停止", "버퍼 정지", "緩衝停等") to it },
         read("cache-speed")?.toDoubleOrNull()?.let { tr("读取速度", "Read speed", "読み込み速度", "읽기 속도", "讀取速度") to formatByteRate(it) },
     )
 

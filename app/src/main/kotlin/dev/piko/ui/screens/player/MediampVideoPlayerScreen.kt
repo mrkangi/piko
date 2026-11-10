@@ -98,7 +98,12 @@ fun MediampVideoPlayerScreen(
     val backend = remember {
         // 启动时已读过偏好，DataStore 有缓存，first() 不等磁盘
         val hardwareDecoding = runBlocking { preferences.hardwareDecodingFlow.first() }
-        MpvPlaybackBackend(context.applicationContext, hardwareDecoding = hardwareDecoding)
+        val compatibleHardwareDecoding = runBlocking { preferences.compatibleHardwareDecodingFlow.first() }
+        MpvPlaybackBackend(
+            context.applicationContext,
+            hardwareDecoding = hardwareDecoding,
+            compatibleHardwareDecoding = compatibleHardwareDecoding,
+        )
     }
     val state = remember(initialFileId) {
         PlayerScreenState(
@@ -444,6 +449,8 @@ fun MediampVideoPlayerScreen(
                 bufferedPositionMillis = state.bufferedPositionMillis,
                 playbackSpeed = state.playbackSpeed,
                 aspectRatio = state.aspectRatio,
+                decodeMode = state.decodeMode.takeIf { state.decodeModeOptions.isNotEmpty() },
+                onDecodeModeChange = state::selectDecodeMode,
                 cropRegion = state.cropRegion,
                 videoAspect = state.videoAspect,
                 qualityOptions = state.qualityOptions,

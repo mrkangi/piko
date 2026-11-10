@@ -365,6 +365,18 @@ class PikoDownloadCoordinator(
         cancelDownload(taskId)
     }
 
+    override fun pauseRemote(taskId: String) {
+        pauseDownload(taskId)
+    }
+
+    override fun resumeRemote(taskId: String) {
+        startDownload(taskId)
+    }
+
+    override fun retryRemote(taskId: String) {
+        startDownload(taskId)
+    }
+
     /**
      * 多选文件一次入队，共用全局并发上限；重复文件复用已有任务。视频按画质上限 [maxHeight] 挑档（0 是原画，
      * null 取设置里的默认下载画质，没设过取原画），开始下载时才挑，见 [DownloadTask.qualityCap]。

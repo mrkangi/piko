@@ -22,7 +22,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -110,6 +112,48 @@ class VideoDiscoveryTest {
         released.complete(Unit)
         assertEquals("root", assertNotNull(discovery.next()).folderId)
         assertEquals(listOf("root", "root"), reads)
+    }
+
+    @Test fun forgettingFoldersWhileABatchIsListingDoesNotCrash() = runBlocking {
+        val entered = AtomicInteger()
+        val release = CompletableDeferred<Unit>()
+        val discovery = VideoDiscovery("root", { id ->
+            if (id == "root") {
+                Result.success(listOf(folder("a"), folder("b")))
+            } else {
+                entered.incrementAndGet()
+                release.await()
+                Result.success(emptyList())
+            }
+        }, Random(0))
+        discovery.next()
+        val request = async(start = CoroutineStart.UNDISPATCHED) { discovery.nextBatch(2, 2) }
+        while (entered.get() < 2) delay(5)
+        discovery.forgetFolders(setOf("a", "b"))
+        release.complete(Unit)
+        assertEquals(setOf("a", "b"), request.await().map { it.folderId }.toSet())
+        assertFalse(discovery.hasPending)
+    }
+
+    @Test fun forgettingTheFolderBeingListedDoesNotCrashNext() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val discovery = VideoDiscovery("root", { id ->
+            if (id == "root") {
+                Result.success(listOf(folder("a")))
+            } else {
+                entered.complete(Unit)
+                release.await()
+                Result.success(emptyList())
+            }
+        }, Random(0))
+        discovery.next()
+        val request = async(start = CoroutineStart.UNDISPATCHED) { discovery.next() }
+        entered.await()
+        discovery.forgetFolders(setOf("a"))
+        release.complete(Unit)
+        assertEquals("a", request.await()?.folderId)
+        assertFalse(discovery.hasPending)
     }
 
     @Test fun emptyAndSingleFoldersFinishAndUnknownDurationRemainsPlayable() = runBlocking {

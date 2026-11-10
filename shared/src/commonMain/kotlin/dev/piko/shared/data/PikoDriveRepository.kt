@@ -88,6 +88,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -110,6 +111,8 @@ import kotlinx.coroutines.flow.stateIn
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.log.logFailure
 import dev.piko.shared.lan.LanShareRepository
+import dev.piko.shared.jellyfin.JellyfinRepository
+
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.emitAll
@@ -119,6 +122,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -127,6 +131,9 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
+
+/** 本地挂载的媒体元数据（封面、时长、宽高）更新；不是目录内容变化。 */
+data class LocalMediaUpdate(val folderId: String, val file: FileStat)
 
 enum class PikoFileSortOrder { NAME_ASC, NAME_DESC, TIME_DESC, TIME_ASC, SIZE_DESC, SIZE_ASC, DURATION_DESC, DURATION_ASC }
 
@@ -141,6 +148,7 @@ data class FolderUsage(val fileCount: Int, val bytes: Long, val progress: Progre
 }
 
 private const val FOLDER_USAGE_CONCURRENCY = 4
+private const val LOCAL_MEDIA_UPDATE_BATCH_MS = 120L
 
 open class PikoDriveRepository(
     private val clientManager: PikoClientProvider,
@@ -148,6 +156,7 @@ open class PikoDriveRepository(
     private val cacheStore: PikoCacheStore? = null,
     private val treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     internal val lanShares: LanShareRepository? = null,
+    val jellyfin: JellyfinRepository? = null,
 ) {
     private val client get() = clientManager.currentClient.value ?: error("Not logged in")
 
@@ -504,11 +513,44 @@ open class PikoDriveRepository(
     /** 网盘里的改动，见 [DriveChange]。网盘页与目录图据此刷新受影响的那几层。 */
     val folderChanges: SharedFlow<DriveChange> = _folderChanges.asSharedFlow()
 
+    // 本机媒体探测完成不是「目录内容变了」：逐个文件合并成小批，供页面原地换封面，
+    // 不再让每个缩略图都触发一次整目录重列。
+    private val localMediaQueue = Channel<LocalMediaUpdate>(Channel.UNLIMITED)
+    private val _localMediaUpdates = MutableSharedFlow<List<LocalMediaUpdate>>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val localMediaUpdates: SharedFlow<List<LocalMediaUpdate>> = _localMediaUpdates.asSharedFlow()
+
+    fun publishLocalMediaUpdate(folderId: String, file: FileStat) {
+        localMediaQueue.trySend(LocalMediaUpdate(folderId, file))
+    }
+
     init {
+        backgroundScope.launch {
+            while (true) {
+                val first = localMediaQueue.receive()
+                val batch = LinkedHashMap<String, LocalMediaUpdate>()
+                batch[first.file.id] = first
+                delay(LOCAL_MEDIA_UPDATE_BATCH_MS)
+                while (true) {
+                    val next = localMediaQueue.tryReceive().getOrNull() ?: break
+                    batch[next.file.id] = next
+                }
+                _localMediaUpdates.emit(batch.values.toList())
+            }
+        }
         lanShares?.let { shares ->
             backgroundScope.launch {
                 shares.peers.collect {
                     _folderChanges.tryEmit(DriveChange.ContentsChanged(setOf("", DeviceLocation.ROOT_ID)))
+                }
+            }
+        }
+        jellyfin?.let { jellyfin ->
+            backgroundScope.launch {
+                jellyfin.servers.collect {
+                    _folderChanges.tryEmit(DriveChange.ContentsChanged(setOf(DeviceLocation.ROOT_ID)))
                 }
             }
         }
@@ -632,6 +674,9 @@ open class PikoDriveRepository(
             val asked = client
             devicePathTo(fileId)?.let { return@runSuspendCatching it }
             lanPathTo(fileId, containing = true)?.let { return@runSuspendCatching it }
+            JellyfinLocation.of(fileId)?.let { location ->
+                return@runSuspendCatching jellyfin?.pathTo(fileId, containing = !location.directory).orEmpty()
+            }
             LocalLocation.of(fileId)?.let { local ->
                 localMounts.find(fileId) ?: error("本地文件夹已取消挂载")
                 val localParent = local.parent
@@ -718,6 +763,7 @@ open class PikoDriveRepository(
     fun knownLocalPath(folderId: String): List<PikoPathBreadcrumb>? {
         devicePathTo(folderId)?.let { return it }
         lanPathTo(folderId, containing = false)?.let { return it }
+        jellyfin?.cachedPathTo(folderId, containing = false)?.let { return it }
         LocalLocation.of(folderId) ?: return null
         localMounts.findCached(folderId) ?: return null
         return devicePathTo(DeviceLocation.SELF_ID).orEmpty() + localMounts.cachedPathTo(folderId).orEmpty()
@@ -750,10 +796,10 @@ open class PikoDriveRepository(
     }
 
     private fun hasDeviceNodes(): Boolean =
-        localMounts.cachedRoots().isNotEmpty() || lanShares?.hasPeers() == true
+        localMounts.cachedRoots().isNotEmpty() || lanShares?.hasPeers() == true || jellyfin?.serverNodes().orEmpty().isNotEmpty()
 
     private suspend fun virtualBrowsable(parentId: String, sortOrder: PikoFileSortOrder): List<FileStat>? = when {
-        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat()) + lanShares?.deviceNodes().orEmpty()
+        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat()) + lanShares?.deviceNodes().orEmpty() + jellyfin?.serverNodes().orEmpty()
         parentId == DeviceLocation.SELF_ID -> sortFiles(localMounts.roots(), sortOrder, parentId)
         LocalLocation.isLocal(parentId) -> sortFiles(localMounts.list(parentId), sortOrder, parentId)
         DeviceLocation.peerDeviceId(parentId) != null -> {
@@ -763,6 +809,10 @@ open class PikoDriveRepository(
         LanLocation.of(parentId) != null -> {
             val location = LanLocation.of(parentId)!!
             sortFiles(lanShares?.list(location).orEmpty(), sortOrder, parentId)
+        }
+        JellyfinLocation.of(parentId) != null -> {
+            val location = JellyfinLocation.of(parentId)!!
+            sortFiles(jellyfin?.list(location.serverId, location.itemId).orEmpty(), sortOrder, parentId)
         }
         else -> null
     }
@@ -1294,7 +1344,9 @@ open class PikoDriveRepository(
             DeviceLocation.ROOT_ID -> return listOf(DeviceLocation.selfStat())
             DeviceLocation.SELF_ID -> return sortFiles(localMounts.cachedRoots(), sortOrder, folderId)
         }
-        if (LocalLocation.isLocal(folderId)) return null
+        if (LocalLocation.isLocal(folderId)) {
+            return localMounts.cachedListing(folderId)?.let { sortFiles(it, sortOrder, folderId) }
+        }
         cachedListing(folderId)?.let { listing ->
             return withVaulted(folderId, listing, vault.cached(folderId, listing).orEmpty(), sortOrder)
         }
@@ -2066,7 +2118,9 @@ open class PikoDriveRepository(
      * getFileDetail 才带。链接是签过名的，过期后 CDN 直接 403，所以不缓存，每次打开现取。
      */
     suspend fun originalImageUrl(fileId: String): String? =
-        if (LeasedFile.isLeased(fileId)) {
+        if (JellyfinLocation.isJellyfin(fileId)) {
+            jellyfin?.originalImageUrl(fileId)
+        } else if (LeasedFile.isLeased(fileId)) {
             LeasedFile.resolvedFileOf(fileId)?.gcid?.takeIf { it.isNotBlank() }?.let { imageThumbnailUrlOf(it, large = true) }
         } else getFileDetail(fileId).getOrNull()?.downloadUrl
 
@@ -3391,14 +3445,37 @@ open class PikoDriveRepository(
 
     /** 全盘的星标文件与文件夹（含服务端真实星标与 Piko 自管的归档条目星标）。 */
     suspend fun starredFiles(): Result<List<FileStat>> = withContext(Dispatchers.Default) {
-        runSuspendCatching {
-            val remote = sourceLedger.enrich(client.listStarred())
+        val remote = runSuspendCatching {
+            val cloud = sourceLedger.enrich(client.listStarred())
             val vaulted = sourceLedger.enrich(vaultStars.starredFileStats())
-            if (vaulted.isEmpty()) remote else {
-                val combined = (remote + vaulted).distinctBy { it.id }
-                sortFiles(combined, PikoFileSortOrder.TIME_DESC, "")
-            }
+            if (vaulted.isEmpty()) cloud else (cloud + vaulted).distinctBy { it.id }
         }
+        val jellyfin = runSuspendCatching { jellyfin?.favorites().orEmpty() }
+        val favorites = jellyfin.getOrDefault(emptyList())
+        remote.map { files ->
+            if (favorites.isEmpty()) sortFiles(files, PikoFileSortOrder.TIME_DESC, "")
+            else sortFiles((files + favorites).distinctBy { it.id }, PikoFileSortOrder.TIME_DESC, "")
+        }.recoverCatching { error ->
+            if (favorites.isEmpty()) throw error
+            sortFiles(favorites, PikoFileSortOrder.TIME_DESC, "")
+        }
+    }
+
+    /** Jellyfin 的播放记录，与 PikPak 的分开取，单个服务器失败不影响其余。 */
+    suspend fun jellyfinPlayHistory(): Result<List<FileStat>> = withContext(Dispatchers.Default) {
+        val repo = jellyfin ?: return@withContext Result.success(emptyList())
+        runSuspendCatching { repo.playbackHistory() }
+    }
+
+    /** Jellyfin 条目没有服务端写入通道之外的星标状态，直接改服务器并原地刷新。 */
+    suspend fun setJellyfinStarred(stats: Collection<FileStat>, starred: Boolean): Result<Unit> = withContext(Dispatchers.Default) {
+        val repo = jellyfin ?: return@withContext Result.failure(IllegalStateException("Jellyfin 不可用"))
+        val ids = stats.map { it.id }
+        runSuspendCatching { repo.setFavorite(ids, starred) }
+            .onSuccess {
+                val parents = stats.mapNotNull { it.parentId.takeIf(String::isNotEmpty) }.toSet()
+                applyChange(DriveChange.Starred(ids, starred, parents.ifEmpty { null }))
+            }
     }
 
     private fun resolveVaultedStat(virtualId: String, knownStats: Map<String, FileStat> = emptyMap()): FileStat? {
@@ -3448,15 +3525,33 @@ open class PikoDriveRepository(
         starred: Boolean,
         knownStats: Map<String, FileStat> = emptyMap(),
     ): Result<Unit> = withContext(Dispatchers.Default) {
+        val jellyfinIds = ids.distinct().filter(JellyfinLocation::isJellyfin)
+        var jellyfinFailure: Throwable? = null
+        if (jellyfinIds.isNotEmpty()) {
+            val repo = jellyfin
+            if (repo == null) {
+                jellyfinFailure = IllegalStateException("Jellyfin 不可用")
+            } else {
+                runSuspendCatching { repo.setFavorite(jellyfinIds, starred) }
+                    .onSuccess {
+                        val parents = jellyfinIds.mapNotNull { repo.cachedParentOf(it) }.toSet()
+                        applyChange(DriveChange.Starred(jellyfinIds, starred, parents.ifEmpty { null }))
+                    }
+                    .onFailure { jellyfinFailure = it }
+            }
+        }
         val (vaultedIds, realIds) = ids.distinct().filterNot(VirtualLocation::isVirtual).partition(VaultEntry::isVaulted)
         if (vaultedIds.isNotEmpty()) {
             val stats = vaultedIds.mapNotNull { resolveVaultedStat(it, knownStats) }
             setVaultStarred(stats, starred)
         }
-        if (realIds.isEmpty()) return@withContext Result.success(Unit)
+        if (realIds.isEmpty()) {
+            return@withContext jellyfinFailure?.let { Result.failure(it) } ?: Result.success(Unit)
+        }
         val parents = knownParentsOf(realIds)
-        runSuspendCatching { if (starred) client.starFiles(realIds) else client.unstarFiles(realIds) }
+        val result = runSuspendCatching { if (starred) client.starFiles(realIds) else client.unstarFiles(realIds) }
             .onSuccess { applyChange(DriveChange.Starred(realIds, starred, parents)) }
+        if (result.isFailure) result else jellyfinFailure?.let { Result.failure(it) } ?: Result.success(Unit)
     }
 
     /** 播放历史的一页，按最近播放倒序，与官方客户端共用同一份。 */

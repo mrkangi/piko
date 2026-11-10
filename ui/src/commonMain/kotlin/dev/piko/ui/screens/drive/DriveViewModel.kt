@@ -543,11 +543,32 @@ internal class DriveViewModel(
         val outcome = driveRepo.localMounts.mountSmb(info, name, password)
         if (account == driveRepo.currentAccount) {
             state.restoreFolderStack(
-                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()),
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
             )
             state.highlight(setOf(outcome.mount.location.id))
         }
         return outcome
+    }
+
+    suspend fun loginJellyfin(url: String, name: String, username: String, password: String) {
+        val account = driveRepo.currentAccount ?: error(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入"))
+        val server = driveRepo.jellyfin?.authenticate(url, username, password, name)
+            ?: error(tr("Jellyfin 不可用", "Jellyfin is unavailable", "Jellyfin を利用できません", "Jellyfin을 사용할 수 없습니다", "Jellyfin 無法使用"))
+        if (account == driveRepo.currentAccount) {
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb(), DeviceLocation.selfCrumb()),
+            )
+            state.highlight(setOf(dev.piko.shared.data.JellyfinLocation(server.serverId).id))
+        }
+    }
+
+    fun removeJellyfinServer(serverId: String) {
+        viewModelScope.launch {
+            driveRepo.jellyfin?.remove(serverId)
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
+            )
+        }
     }
 
     fun revealLocalInFileManager(fileId: String) {

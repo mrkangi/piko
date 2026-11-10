@@ -376,7 +376,17 @@ class DesktopPikoPlatform(
             val backend = remember(player) {
                 // 偏好是 StateFlow，first() 当场返回
                 val hardwareDecoding = runBlocking { preferences.hardwareDecodingFlow.first() }
-                MediampPreviewBackend(MediampPlaybackBackend(player, playerScope, preview = true, keyframeStart = keyframeStart, hardwareDecoding = hardwareDecoding))
+                val compatibleHardwareDecoding = runBlocking { preferences.compatibleHardwareDecodingFlow.first() }
+                MediampPreviewBackend(
+                    MediampPlaybackBackend(
+                        player,
+                        playerScope,
+                        preview = true,
+                        keyframeStart = keyframeStart,
+                        hardwareDecoding = hardwareDecoding,
+                        compatibleHardwareDecoding = compatibleHardwareDecoding,
+                    ),
+                )
             }
             DisposableEffect(backend, player) {
                 onDispose {

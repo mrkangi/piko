@@ -81,7 +81,7 @@ class DesktopLanShareHost(
     }
 
     override fun start() {
-        if (running) return
+        if (running || !settings.current().enabled) return
         scope.launch(Dispatchers.IO) {
             runCatching { startServer() }
                 .onFailure { error ->
@@ -110,6 +110,7 @@ class DesktopLanShareHost(
 
     private suspend fun startServer() = startLock.withLock {
         if (running) return
+        settings.ensureLoaded()
         deviceId = preferences.loadOrCreateRemoteDeviceId()
         val desiredPort = settings.current().port.takeIf { it in 1..65535 } ?: LanLocalSettings.DEFAULT_PORT
         var bound: HttpServer? = null
@@ -214,10 +215,13 @@ class DesktopLanShareHost(
             clientDeviceId = request.clientDeviceId,
             clientName = request.clientName,
             createdAtMs = Clock.System.now().toEpochMilliseconds(),
+            account = settings.currentAccount().orEmpty(),
         )
         runBlocking {
             settings.update { current ->
-                current.copy(hostTokens = (current.hostTokens.filterNot { it.clientDeviceId == client.clientDeviceId } + client).takeLast(MAX_HOST_TOKENS))
+                current.copy(hostTokens = (current.hostTokens.filterNot {
+                    it.clientDeviceId == client.clientDeviceId && it.account == client.account
+                } + client).takeLast(MAX_HOST_TOKENS))
             }
         }
         sendJson(
@@ -237,7 +241,7 @@ class DesktopLanShareHost(
         val token = header.removePrefix("Bearer ").takeIf { header.startsWith("Bearer ") }
             ?: query["token"]
             ?: ""
-        val known = settings.current().hostTokens.any { it.token == token }
+        val known = settings.currentTokens().any { it.token == token }
         if (!known) return sendError(exchange, 401, "unauthorized")
         action()
     }

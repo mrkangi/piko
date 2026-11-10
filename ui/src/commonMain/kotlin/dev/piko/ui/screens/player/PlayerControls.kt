@@ -104,6 +104,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -432,13 +433,13 @@ private fun PlayPauseButton(
     }
     fun containerColorOf(face: CenterFace): Color = when (face) {
         is CenterFace.Readout -> colors.tertiary
-        CenterFace.Loading -> colors.primaryContainer
-        CenterFace.Icon -> colors.primary
+        // 暂停与加载时用半透明深色玻璃，画面从底下透出来，不再被一整块实色盖住
+        CenterFace.Loading -> GLASS_SCRIM
+        CenterFace.Icon -> GLASS_SCRIM
     }
     fun contentColorOf(face: CenterFace): Color = when (face) {
         is CenterFace.Readout -> colors.onTertiary
-        CenterFace.Loading -> colors.onPrimaryContainer
-        CenterFace.Icon -> colors.onPrimary
+        else -> Color.White
     }
     // 按钮的标签只说点下去做什么：读数形态下点击照样是播放或暂停，标签换成读数的话，读屏念完读数却不知道这一下做了什么
     val actionLabel = when {
@@ -470,6 +471,7 @@ private fun PlayPauseButton(
             anchorSize = size,
             onClick = onClick,
             interactionSource = interactionSource,
+            containerBorder = { face -> if (face is CenterFace.Readout) null else GLASS_BORDER },
             containerModifier = Modifier
                 .handCursor()
                 .semantics { contentDescription = actionLabel },
@@ -1277,6 +1279,10 @@ private const val BUFFERED_TRACK_ALPHA = 0.55f
 
 private const val CONTAINER_ALPHA = 0.72f
 private const val LOADING_INDICATOR_FRACTION = 0.75f
+
+// 中央按钮的玻璃底：深色半透明，加一道很淡的白边把边界勾出来，亮画面上也看得清
+private val GLASS_SCRIM = Color.Black.copy(alpha = 0.34f)
+private val GLASS_BORDER = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f))
 private const val DISABLED_CONTENT_ALPHA = 0.38f
 private const val SEEK_SETTLE_TOLERANCE_MILLIS = 1_500L
 private const val SEEK_SETTLE_TIMEOUT_MILLIS = 1_500L

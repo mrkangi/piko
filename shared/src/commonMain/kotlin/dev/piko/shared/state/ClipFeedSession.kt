@@ -20,6 +20,7 @@ import dev.piko.shared.log.logFile
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.upload.isUploading
 import io.github.nihildigit.pikpak.FileStat
+import io.ktor.util.Digest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -157,6 +158,13 @@ class ClipFeedSession(
 
     init {
         scope.launch { driveRepo.folderIndex.flow.collect { folders = it } }
+        scope.launch {
+            driveRepo.localMediaUpdates.collect { updates ->
+                updates.forEach { update ->
+                    if (listedFiles[update.file.id] != null) listedFiles[update.file.id] = update.file
+                }
+            }
+        }
     }
 
     /** [folderId] 的名字；还没遍历到的为 null。 */
@@ -686,11 +694,24 @@ class ClipFeedSession(
 
     // 根目录的 ID 是空串。1.1.0 及更早的存盘不带账号（clip-feed-<文件夹>），不再读：分不出是哪个账号的，
     // 丢掉只是重开时从头遍历
-    private fun keyOf(owner: String, folderId: String) = "clip-feed-${safeKey(owner)}-${folderId.ifEmpty { "root" }}"
+    private suspend fun keyOf(owner: String, folderId: String) =
+        "clip-feed-${safeKey(owner)}-${folderKey(folderId)}"
 
     private fun indexKeyOf(owner: String) = "clip-feeds-${safeKey(owner)}"
 
     private fun safeKey(account: String) = account.replace(UNSAFE_KEY_CHARS, "_")
+
+    /**
+     * 文件夹 ID 直接拼进缓存文件名。本机挂载的 ID 含 `/` 与 `:`，原样写会把文件放进不存在的子目录，
+     * 每次保存都报 ENOENT；过长的深路径也会超过文件名上限。只让普通网盘 ID 原样保留，其余取摘要。
+     */
+    private suspend fun folderKey(folderId: String): String {
+        val id = folderId.ifEmpty { "root" }
+        if (id.length <= SAFE_FOLDER_KEY_LENGTH && id.all { it.isLetterOrDigit() || it in SAFE_FOLDER_CHARS }) return id
+        val digest = Digest("SHA-256")
+        digest += id.encodeToByteArray()
+        return "h" + digest.build().toHexString().take(SAFE_FOLDER_HASH_LENGTH)
+    }
 
     @Serializable
     private class SavedFeed(
@@ -725,6 +746,9 @@ class ClipFeedSession(
     private companion object {
         const val TAG = "Clips"
         val UNSAFE_KEY_CHARS = Regex("""[^A-Za-z0-9._@-]""")
+        const val SAFE_FOLDER_KEY_LENGTH = 96
+        const val SAFE_FOLDER_HASH_LENGTH = 32
+        const val SAFE_FOLDER_CHARS = "._@-"
         const val KEPT_FOLDERS = 8
         const val KEPT_AROUND = 25
         // 查详情是 API 请求，不占 CDN 的连接；4 个一批约一秒，大半没有转码的文件夹里挑得太慢

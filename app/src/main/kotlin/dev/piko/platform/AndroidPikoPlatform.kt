@@ -572,7 +572,16 @@ class AndroidPikoPlatform(
             return remember {
                 // 启动时已读过偏好，DataStore 有缓存，first() 不等磁盘
                 val hardwareDecoding = runBlocking { preferences.hardwareDecodingFlow.first() }
-                MpvPreviewBackend(MpvPlaybackBackend(context, preview = true, keyframeStart = keyframeStart, hardwareDecoding = hardwareDecoding))
+                val compatibleHardwareDecoding = runBlocking { preferences.compatibleHardwareDecodingFlow.first() }
+                MpvPreviewBackend(
+                    MpvPlaybackBackend(
+                        context,
+                        preview = true,
+                        keyframeStart = keyframeStart,
+                        hardwareDecoding = hardwareDecoding,
+                        compatibleHardwareDecoding = compatibleHardwareDecoding,
+                    ),
+                )
             }
         }
 

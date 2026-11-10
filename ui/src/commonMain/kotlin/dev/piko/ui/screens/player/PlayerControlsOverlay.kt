@@ -56,6 +56,7 @@ import dev.piko.shared.media.player.PlaybackStatsSection
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.VideoCropRegion
+import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.SheetAction
 import io.github.nihildigit.pikpak.FileStat
@@ -82,6 +83,8 @@ fun MobilePlayerControls(
     bufferedPositionMillis: Long,
     playbackSpeed: Float?,
     aspectRatio: PlayerAspectRatio?,
+    decodeMode: VideoDecodeMode? = null,
+    onDecodeModeChange: ((VideoDecodeMode) -> Unit)? = null,
     cropRegion: VideoCropRegion? = null,
     videoAspect: Float? = null,
     qualityOptions: List<String>,
@@ -523,6 +526,8 @@ fun MobilePlayerControls(
                 qualityOptions = qualityOptions,
                 currentQuality = currentQuality,
                 aspectRatio = aspectRatio,
+                decodeMode = decodeMode,
+                onDecodeModeChange = onDecodeModeChange,
                 seekStepSeconds = seekStepSeconds,
                 longPressSpeed = longPressSpeed,
                 audioTracks = audioTracks,

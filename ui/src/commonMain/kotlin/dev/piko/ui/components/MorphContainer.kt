@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
@@ -63,6 +64,7 @@ fun <S> MorphContainer(
     anchorSize: DpSize,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    containerBorder: (S) -> BorderStroke? = { null },
     containerModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
     content: @Composable (S) -> Unit,
@@ -135,6 +137,7 @@ fun <S> MorphContainer(
                 shape = RoundedCornerShape(animatedCorner.value.coerceAtLeast(0.dp)),
                 color = animatedColor.value,
                 contentColor = contentColor(live),
+                border = containerBorder(live),
                 interactionSource = interactionSource,
                 modifier = Modifier
                     .requiredSize(animatedWidth.value.coerceAtLeast(0.dp), anchorSize.height)

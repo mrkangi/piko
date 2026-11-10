@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class PikoCacheStoreTest {
     @Test
@@ -60,6 +61,19 @@ class PikoCacheStoreTest {
             assertFailsWith<CancellationException> {
                 store.readStream<Unit>("key") { throw CancellationException("cancel") }
             }
+        } finally {
+            Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
+        }
+    }
+
+    @Test
+    fun keyWithSeparatorsStillWritesInsideTheStore() = runBlocking {
+        val directory = Files.createTempDirectory("piko-cache-nested")
+        try {
+            val store = FilePikoCacheStore(directory.toString())
+            store.write("feed/local/123", "value")
+            assertEquals("value", store.read("feed/local/123"))
+            assertTrue(Files.exists(directory.resolve("feed").resolve("local").resolve("123")))
         } finally {
             Files.walk(directory).use { files -> files.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
         }
