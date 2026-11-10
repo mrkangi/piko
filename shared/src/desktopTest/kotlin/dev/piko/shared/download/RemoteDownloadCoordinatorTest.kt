@@ -163,6 +163,40 @@ class RemoteDownloadCoordinatorTest {
         assertEquals(file.name, second.remoteDownloads.value.single().fileName)
     }
 
+    @Test
+    fun remoteListKeepsCreationOrderWhileProgressUpdatesArrive() = runBlocking {
+        val store = MemoryStore()
+        val realtime = FakeRealtime()
+        val coordinator = coordinator("android", store, FakeExecutor(), realtime).also { it.start() }
+        coordinator.refresh()
+        await("realtime started") { realtime.started }
+        realtime.emit(RemoteRealtimeEvent.Presence(presence("windows", "Desktop", online = true)))
+        await("target online") { coordinator.devices.value.any { it.deviceId == "windows" && it.online } }
+
+        val olderId = coordinator.sendDownload(listOf(file), "windows").getOrThrow().single()
+        delay(5)
+        val newerFile = file.copy(id = "file-2", name = "episode-2.mkv")
+        val newerId = coordinator.sendDownload(listOf(newerFile), "windows").getOrThrow().single()
+        assertEquals(listOf(newerId, olderId), coordinator.remoteDownloads.value.map { it.requestId })
+
+        // 旧任务进度刷新不应把行顶到最前面
+        realtime.emit(
+            RemoteRealtimeEvent.State(
+                RemoteDownloadState(
+                    requestId = olderId,
+                    sourceDeviceId = "android",
+                    targetDeviceId = "windows",
+                    status = RemoteDownloadStatus.DOWNLOADING,
+                    downloadedBytes = 512,
+                    totalBytes = 1024,
+                    updatedAtMs = System.currentTimeMillis() + 60_000,
+                ),
+            ),
+        )
+        await("state applied") { coordinator.remoteDownloads.value.first { it.requestId == olderId }.status == RemoteDownloadStatus.DOWNLOADING }
+        assertEquals(listOf(newerId, olderId), coordinator.remoteDownloads.value.map { it.requestId })
+    }
+
     private fun request(id: String) = RemoteDownloadRequest(
         requestId = id,
         sourceDeviceId = "android",

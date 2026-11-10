@@ -692,7 +692,8 @@ class RemoteDownloadCoordinator(
                     targetOnline = byId[request.targetDeviceId]?.online == true,
                 )
             }
-            .sortedByDescending { it.state?.updatedAtMs ?: it.request.createdAtMs }
+            // 按添加时间倒序固定展示顺序：进度状态每秒刷新，若按 updatedAtMs 排序会导致列表持续跳动。
+            .sortedByDescending { it.request.createdAtMs.takeIf { at -> at > 0L } ?: it.state?.updatedAtMs ?: 0L }
     }
 
     private fun cleanupLocked() {
