@@ -66,6 +66,11 @@
 -keep class io.ktor.serialization.kotlinx.json.KotlinxSerializationJsonExtensionProvider { *; }
 -keep class org.slf4j.simple.SimpleServiceProvider { *; }
 -keep class org.slf4j.nop.NOPServiceProvider { *; }
+# Paho 经 META-INF/services 查找网络实现；裁掉后 release 包里 MQTT 会在建连前失败
+-keep class org.eclipse.paho.client.mqttv3.internal.TCPNetworkModuleFactory { *; }
+-keep class org.eclipse.paho.client.mqttv3.internal.SSLNetworkModuleFactory { *; }
+-keep class org.eclipse.paho.client.mqttv3.internal.websocket.WebSocketNetworkModuleFactory { *; }
+-keep class org.eclipse.paho.client.mqttv3.internal.websocket.WebSocketSecureNetworkModuleFactory { *; }
 
 # kotlinx.serialization：生成的 serializer 经伴生对象的 serializer() 查找
 -keepattributes *Annotation*, InnerClasses, Signature, EnclosingMethod
@@ -92,3 +97,7 @@
 -dontwarn javax.el.**
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn org.jetbrains.annotations.**
+
+# Jellyfin SDK 传递引入的 kotlin-logging 内含 Logback 适配类，桌面端实际使用 slf4j-nop
+-dontwarn io.github.oshai.kotlinlogging.logback.**
+-dontwarn ch.qos.logback.**
