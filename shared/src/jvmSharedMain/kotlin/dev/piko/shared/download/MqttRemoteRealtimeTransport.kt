@@ -184,10 +184,29 @@ class MqttRemoteRealtimeTransport(
         created.setCallback(object : MqttCallbackExtended {
             override fun connectComplete(reconnect: Boolean, serverURI: String?) {
                 lastConnectionError = null
-                _connected.value = true
-                subscribe(created)
-                publishPresence(receiverEnabled)
-                PikoLog.i(TAG, "EMQX 已连接${if (reconnect) "（重连）" else ""}")
+                // 首次连接时 Paho 在网络线程回调这里，自动重连则走 CommsCallback 线程。
+                // 在回调线程里同步等 SUBACK 会与它自己处理回包的队列互锁，只能异步订阅；
+                // 订阅成功后才对外报「已连接」，免得请求发出去却收不到对方的状态。
+                scope.launch(Dispatchers.IO) {
+                    var subscribed = false
+                    for (attempt in 0 until 3) {
+                        if (!started || client !== created) return@launch
+                        if (subscribe(created)) {
+                            subscribed = true
+                            break
+                        }
+                        if (attempt < 2) delay(SUBSCRIBE_RETRY_MS)
+                    }
+                    if (!started || client !== created) return@launch
+                    if (subscribed) {
+                        _connected.value = true
+                        publishPresence(receiverEnabled)
+                        PikoLog.i(TAG, "EMQX 已连接${if (reconnect) "（重连）" else ""}")
+                    } else {
+                        _connected.value = false
+                        PikoLog.w(TAG, "EMQX 已连接但订阅主题失败，等待自动重连")
+                    }
+                }
             }
 
             override fun connectionLost(cause: Throwable?) {
@@ -245,14 +264,14 @@ class MqttRemoteRealtimeTransport(
         }
     }
 
-    private fun subscribe(client: MqttAsyncClient) {
+    private fun subscribe(client: MqttAsyncClient): Boolean =
         runCatching {
             client.subscribe(
                 arrayOf("$prefix/dev/+", "$prefix/request/$deviceId", "$prefix/state/$deviceId"),
                 intArrayOf(1, 1, 1),
             ).waitForCompletion(SUBSCRIBE_TIMEOUT_MS)
-        }.onFailure { PikoLog.w(TAG, "订阅 EMQX 主题失败", it) }
-    }
+            true
+        }.onFailure { PikoLog.w(TAG, "订阅 EMQX 主题失败", it) }.getOrDefault(false)
 
     private fun publish(topic: String, payload: ByteArray, qos: Int, retained: Boolean): Boolean {
         val current = client ?: return false
@@ -276,6 +295,7 @@ class MqttRemoteRealtimeTransport(
         const val TAG = "RemoteRealtime"
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val SUBSCRIBE_TIMEOUT_MS = 10_000L
+        const val SUBSCRIBE_RETRY_MS = 2_000L
         const val HEARTBEAT_INTERVAL_MS = 20_000L
         const val CONNECT_RETRY_MS = 10_000L
     }

@@ -576,9 +576,22 @@ class SdkJellyfinRepository internal constructor(
     private fun LocalDateTime.toUtcIso(): String = atZone(ZoneOffset.UTC).toOffsetDateTime().toString()
 
     private fun loginFailure(error: ApiClientException): JellyfinException {
-        PikoLog.w(TAG, "登录失败：${error::class.simpleName}")
+        // 地址写错（404）、反向代理拒绝（400/405）与服务器内部错误都落到这里；只记类名没法定位，
+        // 把 HTTP 状态一并带出来，用户反馈日志时才能区分是路径、权限还是服务端问题。
+        val status = (error as? InvalidStatusException)?.status
+        PikoLog.w(TAG, "登录失败：${error::class.simpleName}${status?.let { "（HTTP $it）" }.orEmpty()}")
         return JellyfinException(
-            tr("Jellyfin 登录失败", "Jellyfin sign-in failed", "Jellyfin へのサインインに失敗しました", "Jellyfin 로그인에 실패했습니다", "Jellyfin 登入失敗"),
+            if (status != null) {
+                tr(
+                    "Jellyfin 登录失败（HTTP $status）",
+                    "Jellyfin sign-in failed (HTTP $status)",
+                    "Jellyfin へのサインインに失敗しました（HTTP $status）",
+                    "Jellyfin 로그인에 실패했습니다(HTTP $status)",
+                    "Jellyfin 登入失敗（HTTP $status）",
+                )
+            } else {
+                tr("Jellyfin 登录失败", "Jellyfin sign-in failed", "Jellyfin へのサインインに失敗しました", "Jellyfin 로그인에 실패했습니다", "Jellyfin 登入失敗")
+            },
             error,
         )
     }

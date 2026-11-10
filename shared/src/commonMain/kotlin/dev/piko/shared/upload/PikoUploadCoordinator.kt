@@ -472,8 +472,11 @@ class PikoUploadCoordinator(
      * 何时继续，免得一开应用就占满上行。
      */
     private suspend fun restore() {
+        val serialized = preferences.loadUploadTasks()
+        // 首次启动或从未上传过时偏好里没有这一项，读回空串是正常状态，不必按解析失败告警
+        if (serialized.isBlank()) return
         val saved = runSuspendCatching {
-            json.decodeFromString(taskListSerializer, preferences.loadUploadTasks())
+            json.decodeFromString(taskListSerializer, serialized)
         }.logFailure(TAG, "读回上传任务表失败，按空表处理").getOrDefault(emptyList())
         if (saved.isEmpty()) return
         // 1.1.0 把凭据随任务表明文存着，读到的照原样用，随后第一次保存就把它们搬进机密存储、从任务表里抹掉
