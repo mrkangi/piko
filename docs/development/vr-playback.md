@@ -8,11 +8,11 @@
 | 文件 | 职责 |
 | --- | --- |
 | `shared/.../media/player/PlaybackBackend.kt` | `VrProjection`、`VrEye`、`VrModeState`（限幅、拖动、缩放、回正、按文件名猜格式）与后端接口 |
-| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `piko_vr.glsl`、落盘、`glsl-shader-opts` 序列化 |
+| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、`4x1 rgba8` 参数纹理编码与 `MpvVrShaderSession` 序号轮转 |
 | `shared/.../media/player/PlayerScreenState.kt` | `vrMode` 状态与 `updateVrMode` / `panVr` / `zoomVr`，换集回正 |
 | `app/.../MpvPlaybackBackend.kt` | Android libmpv：挂着色器、合并高频更新、恢复画面比例 |
 | `desktopApp/.../MediampPlaybackBackend.kt` | 桌面 mpv：同上，着色器放 `PikoHome/cache/mpv` |
-| `ui/.../player/PlayerGestures.kt` | VR 下拖动转视角、捏合缩放，其余手势让位 |
+| `ui/.../player/PlayerGestures.kt` | VR 下拖动转视角、松手惯性阻尼滑行（Fling）、捏合缩放，其余手势让位 |
 | `ui/.../player/PlayerSheets.kt` | 设置面板的「VR 视角」分节 |
 | `ui/.../player/PlayerOverlays.kt` | 底部「回正视角 / 退出 VR」胶囊 |
 
@@ -22,23 +22,37 @@
   会打断零拷贝硬解（4K/8K 手机与轻薄本直接掉帧），而且暂停时改角度不会重绘。
 - 着色器挂 `//!HOOK MAINPRESUB`。这样反投影只作用在视频平面上，字幕后画、保持屏幕平铺；
   挂 `OUTPUT` 会把字幕一起卷进球面。
-- 视角用**一次整串** `setPropertyString("glsl-shader-opts", ...)` 下发，不要照搬
-  `mpv360.lua` 的 `change-list ... add`：后者会不断往键值列表里追加，长时间拖动后列表越来越长。
-  整串覆盖同样触发 `UPDATE_VIDEO`，不会重编译着色器。
-- 选项键是 `<着色器文件名去掉扩展名>/<参数名>`，即 `piko_vr/yaw`。改文件名必须同步改
-  `MpvVrShader.optionsOf`。
+- **严禁在着色器中使用 `//!PARAM` 与 `glsl-shader-opts`（踩坑实录）：**
+  - mpv 0.41.0 的 `//!PARAM` 指令仅在 `vo=gpu-next`（libplacebo 的 `pl_mpv_user_shader_parse`）中实现；
+  - Piko 的 Android 端使用 `vo=gpu`，桌面端 MediaMP 使用 `vo=libmpv`（底层绑定 `video/out/gpu/libmpv_gpu.c`），
+    二者走的都是传统 `video/out/gpu/user_shaders.c` 的 `parse_user_shader`（仅认识 `//!TEXTURE`、`//!HOOK`、
+    `//!BIND`、`//!SAVE`、`//!DESC`、`//!OFFSET`、`//!ALIGN`、`//!WIDTH`、`//!HEIGHT`、`//!WHEN`、`//!COMPONENTS`、`//!COMPUTE`）。
+  - 一旦文件里出现 `//!PARAM`，`vo=gpu` / `vo=libmpv` 在第一行就会报 `Unrecognized command 'PARAM fov'!`
+    并直接中止解析该着色器文件，表现出来就是「UI 上开关和按钮都能点，但画面毫无变化」。
+- **`//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`）零重编译传参方案 + 路径轮转：**
+  - 7 个视角参数（`fov`, `yaw`, `pitch`, `roll`, `fisheye_fov`, `input_projection`, `eye`）由 `MpvVrShader.encodeParamsHex`
+    按 16-bit 定点编码进 `4x1` 的 `rgba8` 纹理（16 字节，所有移动与桌面 GPU 100% 必选支持 `rgba8`；角度分辨率约 `0.0055°`），
+    下方 `//!HOOK MAINPRESUB` 的 GLSL 代码固定不变。
+  - 每次更新视角时，`vo=gpu` 的 `shader_cache` 因 GLSL 源码字符串完全未变而 100% 命中已编译的 GPU Program（**零 GLSL 重编译**），
+    仅重传 16 字节参数纹理并置 `vo->want_redraw` 立即重绘（含暂停状态）。
+  - 注意：`video/out/gpu/video.c` 的 `gl_video_setup_hooks` 会在内存中按文件路径字符串（`strcmp(p->files[n].path, path)`）
+    缓存已读取的文件内容，重复传入相同路径不会重新读盘；因此 `MpvVrShaderSession` 每次写出新的序号文件 `piko_vr_<seq>.glsl`
+    并通过 `no-osd change-list glsl-shaders set <path>` 下发，同时保留最近 4 份文件防止渲染线程异步读取时撞上文件被删的竞态。
+  - Android 端显式设置 `gpu-dumb-mode=no`，防止部分移动 GPU 因未命中 16-bit FBO 自动回退 dumb-mode 而清空 `glsl-shaders`。
 - 进入 VR 前必须 `keepaspect=no`（透视投影按窗口真实宽高比铺满），并清掉
   `video-zoom` / `video-pan-x` / `video-pan-y`；否则「框选填充」留下的缩放会叠在球面上。
   退出时按当前 `PlayerAspectRatio` 还原 `keepaspect` / `panscan`。
-- mpv 在暂停时收到 `UPDATE_VIDEO` 会置 `vo->want_redraw`，所以暂停着拖动也能实时出画面，
-  不需要额外 seek 或强制重绘。
-- 参数声明的初始值会被 mpv 解析成 uniform；`//!TYPE ENUM int` 的枚举名会变成 `#define`。
-  不要声明未使用的参数，`//!PARAM` 每个都算一个 uniform。
 
 ## 着色器实现注意
 
 - **GLSL ES 不允许用 uniform 初始化全局变量。** 旋转矩阵必须在函数内计算，
   写成全局 `mat3 rot_yaw = mat3(cos(yaw), ...)` 在 Android (`opengl-es=yes`) 上编译失败。
+- **GLSL `mat3` 按列主序（column-major）构造：**
+  - 要让「向右拖画面（`yaw > 0`）看向左边、向下拖画面（`pitch > 0`）看向上方」符合抓住画面拖动的手感，
+    `rot_yaw` 必须写成 `mat3(cy, 0.0, sy, 0.0, 1.0, 0.0, -sy, 0.0, cy)`（使 `dir.x = -sin(yaw)`），
+    否则水平拖动方向会与垂直拖动方向相反。
+  - 双眼模式（`EYE_BOTH`）拆左右半屏时，`render()` 内判断半屏宽高比折半（`aspect *= 0.5`）必须检查总模式 `eye_mode == EYE_BOTH`，
+    不能检查已被替换成单眼（`EYE_LEFT` / `EYE_RIGHT`）的 `source_eye`。
 - `asin` / `acos` 的入参要 `clamp`：旋转后的浮点误差可能给出 `1.0000001`，
   Adreno / Mali 上会返回 `NaN`，画面出现黑点。
 - 左右并排（SBS）的双目片源要在眼睛边界内缩半个像素，否则双线性插值会把相邻眼睛的像素混进来。

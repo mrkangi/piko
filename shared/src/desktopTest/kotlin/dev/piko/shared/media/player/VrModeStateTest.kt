@@ -1,13 +1,15 @@
 package dev.piko.shared.media.player
 
+import java.nio.file.Files
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** VR 视角的限幅、拖动、缩放与文件名猜测。命令串的格式由 mpv 的键值解析决定，改动时这里会先失败。 */
+/** VR 视角的限幅、拖动、缩放、文件名猜测与参数纹理编码。 */
 class VrModeStateTest {
     @Test
     fun pitchStopsAtStraightUpAndDown() {
@@ -48,28 +50,56 @@ class VrModeStateTest {
     }
 
     @Test
-    fun shaderOptionsCarryEveryParameter() {
-        val options = MpvVrShader.optionsOf(
-            VrModeState(
-                enabled = true,
-                projection = VrProjection.DualHalfEquirectangular180,
-                eye = VrEye.Right,
-                yawRadians = 0.5f,
-                pitchRadians = -0.25f,
-                fovDegrees = 90f,
-                fisheyeFovDegrees = 190f,
-            ),
+    fun shaderEncodesParametersIntoRgba8TextureWithoutParamDirectives() {
+        val mode = VrModeState(
+            enabled = true,
+            projection = VrProjection.DualHalfEquirectangular180,
+            eye = VrEye.Right,
+            yawRadians = 0.5f,
+            pitchRadians = -0.25f,
+            fovDegrees = 90f,
+            fisheyeFovDegrees = 190f,
         )
-        val values = options.split(',').associate { entry ->
-            val (key, value) = entry.split('=')
-            key.removePrefix("piko_vr/") to value
+        val hex = MpvVrShader.encodeParamsHex(mode)
+        assertEquals(32, hex.length)
+        val bytes = hex.chunked(2).map { it.toInt(16) }
+        fun decodeU16(hi: Int, lo: Int, min: Float, max: Float): Float {
+            val u = hi * 256 + lo
+            return min + (u / 65535f) * (max - min)
         }
-        assertEquals(7, values.size)
-        assertEquals("2", values["input_projection"])
-        assertEquals("1", values["eye"])
-        assertEquals("0.500000", values["yaw"])
-        assertEquals("-0.250000", values["pitch"])
-        assertEquals("1.570796", values["fov"])
-        assertEquals("3.316126", values["fisheye_fov"])
+        assertEquals((90.0 * PI / 180.0).toFloat(), decodeU16(bytes[0], bytes[1], 0.1f, 3.0f), 1e-3f)
+        assertEquals(0.5f, decodeU16(bytes[2], bytes[3], -6.2831855f, 6.2831855f), 1e-3f)
+        assertEquals(-0.25f, decodeU16(bytes[4], bytes[5], -1.5707964f, 1.5707964f), 1e-3f)
+        assertEquals(0f, decodeU16(bytes[6], bytes[7], -3.1415927f, 3.1415927f), 1e-3f)
+        assertEquals((190.0 * PI / 180.0).toFloat(), decodeU16(bytes[8], bytes[9], 1.5707964f, 3.6651914f), 1e-3f)
+        assertEquals(2, bytes[10])
+        assertEquals(1, bytes[11])
+
+        val source = MpvVrShader.shaderSourceOf(mode)
+        // vo=gpu 与 vo=libmpv 不认识 //!PARAM，一旦混入就会整份着色器解析失败
+        assertFalse("//!PARAM" in source)
+        assertTrue("//!TEXTURE PIKO_VR_PARAMS" in source)
+        assertTrue("//!HOOK MAINPRESUB" in source)
+    }
+
+    @Test
+    fun shaderSessionRotatesFilesAndCleansUpOldOnes() {
+        val dir = Files.createTempDirectory("piko-vr-test").toFile()
+        try {
+            val session = MpvVrShaderSession(dir)
+            assertTrue(session.isAvailable)
+            val paths = (1..6).map { idx ->
+                session.writeNext(VrModeState(enabled = true, yawRadians = idx * 0.1f))
+            }
+            assertTrue(paths.all { it != null })
+            assertEquals(6, paths.toSet().size)
+            val remaining = dir.listFiles()?.filter { it.name.startsWith(MpvVrShader.FILE_PREFIX) }.orEmpty()
+            assertTrue(remaining.size <= 4)
+            assertNotNull(paths.last()?.let { last -> remaining.find { it.absolutePath == last } })
+            session.clear()
+            assertEquals(0, dir.listFiles()?.count { it.name.startsWith(MpvVrShader.FILE_PREFIX) } ?: 0)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }
