@@ -664,7 +664,6 @@
     <string name="text_reset_fit">還原適應</string>
     <string name="text_fill_screen">鋪滿畫面</string>
     <string name="text_file_not_found_it_may_have_been_deleted">找不到此檔案，可能已被刪除</string>
-    <string name="text_play_fullscreen">全螢幕播放</string>
     <string name="text_reset">還原</string>
     <string name="text_play_from_start">從頭播放</string>
     <string name="text_unlock_screen">解鎖螢幕</string>

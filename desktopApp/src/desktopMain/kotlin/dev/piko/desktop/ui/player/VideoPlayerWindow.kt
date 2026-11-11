@@ -415,7 +415,6 @@ private fun VideoPlayerContent(
                 onBack = onClose,
                 onToggleFullscreen = onToggleFullscreen,
                 isFullscreen = isFullscreen,
-                isLandscapeVideo = state.isLandscapeVideo,
                 playlist = state.playlist,
                 currentFileId = state.fileId,
                 hasPrevious = state.previousEntry != null,

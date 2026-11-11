@@ -340,14 +340,28 @@ private fun openFeed(): List<Step> = listOf(Step.Pump(600), Step.Click("信息�
 
 private val feedSeed: FakePikPak.() -> Unit = { giveVideosDuration() }
 
-/** 播放器的一种画面在三种形态加手机横屏下各一张。 */
-private fun playerShots(name: String, player: PlayerShot = PlayerShot(), settleMs: Long = SETTLE_MAX_MS, steps: (Form) -> List<Step> = { emptyList() }): List<Shot> =
+/**
+ * 播放器的一种画面在三种形态加手机横屏下各一张。
+ *
+ * [landscapeSteps] 给手机横屏那张单独用：860×400 已超过紧凑宽度，底栏与竖屏手机不是同一套排布。
+ */
+private fun playerShots(
+    name: String,
+    player: PlayerShot = PlayerShot(),
+    settleMs: Long = SETTLE_MAX_MS,
+    steps: (Form) -> List<Step> = { emptyList() },
+    landscapeSteps: ((Form) -> List<Step>)? = null,
+): List<Shot> =
     tri(name, player = player, waitFor = null, settleMs = settleMs, steps = steps) +
-        Shot("$name-phone-landscape-860x400", 860, 400, steps = steps(Form.PHONE), player = player, mobile = true, waitFor = null, settleMs = settleMs)
+        Shot("$name-phone-landscape-860x400", 860, 400, steps = (landscapeSteps ?: steps)(Form.PHONE), player = player, mobile = true, waitFor = null, settleMs = settleMs)
 
 /** 先暂停让控件常驻，再点 [button]。 */
 private fun playerPanel(vararg buttons: String): List<Step> =
     buttons.flatMap { listOf(Step.Click(it, topmost = true), Step.Pump(900)) }
+
+/** 紧凑底栏（手机竖屏）把倍速、选集收进了「更多」，先展开再点。 */
+private fun playerPanelCompact(form: Form, vararg buttons: String): List<Step> =
+    (if (form == Form.PHONE) listOf(Step.Click("更多"), Step.Pump(700)) else emptyList()) + playerPanel(*buttons)
 
 /** `all` 的清单，按状态表的节排列。改了布局先跑它，再挑有关的几张细看。 */
 private val standardSet: List<Shot> = buildList {
@@ -678,13 +692,35 @@ private val standardSet: List<Shot> = buildList {
     addAll(playerShots("player-resume", PlayerShot(resumedFromMillis = 754_000)))
     addAll(playerShots("player-paused", PlayerShot(playing = false)))
     addAll(playerShots("player-fullscreen", PlayerShot(fullscreen = true)))
-    addAll(playerShots("player-episodes", PlayerShot(playing = false)) { playerPanel("选集") })
+    addAll(
+        playerShots(
+            "player-episodes", PlayerShot(playing = false),
+            steps = { playerPanelCompact(it, "选集") },
+            landscapeSteps = { playerPanel("选集") },
+        ),
+    )
     addAll(playerShots("player-settings", PlayerShot(playing = false)) { playerPanel("播放设置") })
     addAll(playerShots("player-tracks", PlayerShot(playing = false)) { playerPanel("播放设置", "字幕") })
     addAll(playerShots("player-drive-subtitles", PlayerShot(playing = false)) { playerPanel("播放设置", "字幕", "从网盘选择字幕") + listOf(Step.Pump(1_500)) })
     addAll(playerShots("player-stats", PlayerShot(playing = false)) { playerPanel("播放设置", "信息") })
-    addAll(playerShots("player-speed", PlayerShot(playing = false)) { playerPanel("倍速") })
+    addAll(
+        playerShots(
+            "player-speed", PlayerShot(playing = false),
+            steps = { playerPanelCompact(it, "倍速") },
+            landscapeSteps = { playerPanel("倍速") },
+        ),
+    )
     addAll(playerShots("player-lock", PlayerShot(playing = false)) { playerPanel("锁定屏幕") })
+    addAll(playerShots("player-vr", PlayerShot(vr = true)))
+    // 360dp 是常见手机竖屏：验证紧凑底栏不挤时间，以及「更多」菜单本身
+    add(Shot("player-phone-narrow-360x800", 360, 800, player = PlayerShot(playing = false, vr = true), waitFor = null))
+    add(
+        Shot(
+            "player-phone-narrow-more-360x800", 360, 800,
+            player = PlayerShot(playing = false, vr = true), waitFor = null,
+            steps = listOf(Step.Click("更多"), Step.Pump(700)),
+        ),
+    )
     // HUD 只亮 800ms，按完键立刻存图
     addAll(playerShots("player-hud", PlayerShot(playing = false), settleMs = 0) { listOf(Step.Key("Up"), Step.Pump(100)) })
     addAll(playerShots("player-boost") { form -> listOf(Step.LongPressAt(Offset(if (form == Form.PHONE) 200f else form.width / 2f, 260f), release = false)) })

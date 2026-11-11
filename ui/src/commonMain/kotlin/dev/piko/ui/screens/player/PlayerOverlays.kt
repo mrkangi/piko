@@ -41,10 +41,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
-import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -70,36 +68,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-
-/**
- * 竖屏放横屏片子时的全屏入口，落在画面下方的黑边里。
- *
- * 全屏入口在底栏那排图标里太远，这里在拇指位置再给一个。用 Small 规格：Medium 在黑边里
- * 比中央的播放键还抢眼，而它只是个次要入口。位置由 [PlayerBottomStack] 统一安排。
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-internal fun FullscreenPromptButton(
-    visible: Boolean,
-    onClick: () -> Unit,
-) {
-    val motion = MaterialTheme.motionScheme
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(motion.defaultEffectsSpec()) + slideInVertically(motion.defaultSpatialSpec()) { it / 2 },
-        exit = fadeOut(motion.fastEffectsSpec()) + slideOutVertically(motion.fastSpatialSpec()) { it / 2 },
-    ) {
-        Button(onClick = onClick, shapes = ButtonDefaults.shapes()) {
-            Icon(
-                imageVector = Icons.Filled.Fullscreen,
-                contentDescription = null,
-                modifier = Modifier.size(ButtonDefaults.IconSize),
-            )
-            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text(stringResource(Res.string.text_play_fullscreen))
-        }
-    }
-}
 
 /**
  * 框选填充生效时的「还原」浮窗胶囊按钮，随控件栏显隐浮在画面底部，一键还原回适应屏幕。

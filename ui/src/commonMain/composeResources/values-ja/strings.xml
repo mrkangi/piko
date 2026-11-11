@@ -664,7 +664,6 @@
     <string name="text_reset_fit">表示範囲をリセット</string>
     <string name="text_fill_screen">画面いっぱいに表示</string>
     <string name="text_file_not_found_it_may_have_been_deleted">ファイルが見つかりません。削除された可能性があります</string>
-    <string name="text_play_fullscreen">全画面で再生</string>
     <string name="text_reset">元に戻す</string>
     <string name="text_play_from_start">最初から再生</string>
     <string name="text_unlock_screen">画面ロックを解除</string>

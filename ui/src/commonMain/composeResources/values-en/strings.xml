@@ -664,7 +664,6 @@
     <string name="text_reset_fit">Reset fit</string>
     <string name="text_fill_screen">Fill screen</string>
     <string name="text_file_not_found_it_may_have_been_deleted">File not found. It may have been deleted</string>
-    <string name="text_play_fullscreen">Play fullscreen</string>
     <string name="text_reset">Reset</string>
     <string name="text_play_from_start">Play from start</string>
     <string name="text_unlock_screen">Unlock screen</string>

@@ -106,13 +106,14 @@
 - 依据：`m3-material-mirror/pages/components/snackbar.md` 第 218–220 行，浮在底部的元素要避开常用触控目标。
 - 改法：确认网格的 `contentPadding.bottom` 包含这条的高度（与 FAB 取大者），滚到底时最后一行完全露出；横屏手机高度只有 400dp，可考虑把这条并进 FAB 左侧同一行，或收成带文字的小号扩展 FAB。
 
-### M11 「全屏播放」胶囊不随控件收起（已核实）
+### M11 「全屏播放」胶囊不随控件收起（已修复：浮钮已移除）
 
 - 图：`player-boost-phone-400x860`（长按倍速时其余控件全收，只剩它和倍速读数）；另见 `player-fullscreen-phone-400x860`
 - 现象：长按加速的设计是「控件一并收起，只留倍速读数」（`PlayerControlsOverlay.kt:281`），这枚胶囊却还在画面下方。
 - 成因：`PlayerControlsOverlay.kt:708` 的显隐只看 `!isLocked && !isLandscape && isLandscapeVideo && errorMessage == null`，没有 `chromeVisible`。`player-fullscreen-phone` 里它与「退出全屏」图标同时出现，是因为截图窗口转不了屏、`isLandscape` 仍为假，真机上转屏后会消失，那张不算问题。
 - 依据：`apple-hig-mirror/pages/playing-video.md` 第 69 行，控件要帮人尽快回到观看本身。
 - 改法：显隐条件加上 `chromeVisible`（或至少在 boost 时隐藏）；它若是要在控件收起后仍常驻黑边，也应在长按倍速与沉浸类状态下让位。
+- 后续：这枚浮钮与底栏全屏键重复，已整体删掉；全屏入口只保留底栏图标，竖屏窄宽度下也常驻。
 
 ### M12 进度条在黑底上几乎看不见，信息流的进度条贴着手势区（疑似）
 

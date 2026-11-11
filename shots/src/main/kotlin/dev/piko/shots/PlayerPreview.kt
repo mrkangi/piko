@@ -17,6 +17,7 @@ import dev.piko.shared.media.player.MediaTrack
 import dev.piko.shared.media.player.PlaybackStatsSection
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.PlaylistEntry
+import dev.piko.shared.media.player.VrModeState
 import dev.piko.ui.LocalPikoServices
 import dev.piko.ui.navigation.Screen
 import dev.piko.ui.adaptive.FormFactor
@@ -39,8 +40,8 @@ data class PlayerShot(
     val error: String? = null,
     val resumedFromMillis: Long? = null,
     val fullscreen: Boolean = false,
-    /** 竖屏窗口里横向视频另有「全屏播放」浮钮。 */
-    val landscapeVideo: Boolean = true,
+    /** 后端支持 VR 时的初始视角：true 即已开启，底栏按开启态高亮。 */
+    val vr: Boolean = false,
 )
 
 private class FixedLevel(private var value: Float) : PlayerLevelControl {
@@ -70,6 +71,7 @@ internal fun PlayerPreview(
             var speed by remember { mutableFloatStateOf(1f) }
             var rotation by remember { mutableIntStateOf(0) }
             var subtitle by remember { mutableStateOf<String?>("s1") }
+            var vrMode by remember { mutableStateOf(VrModeState(enabled = shot.vr)) }
             val episodes = remember(request) {
                 if (request == null) playlist(env)
                 else listOf(PlaylistEntry(fileId = request.fileId, name = request.fileName, label = request.fileName,
@@ -83,13 +85,14 @@ internal fun PlayerPreview(
                     isPlaying = playing, isLoading = shot.loading, positionMillis = position,
                     durationMillis = 1_440_000, bufferedPositionMillis = 120_000,
                     playbackSpeed = speed, aspectRatio = PlayerAspectRatio.Fit,
+                    vrMode = vrMode,
+                    onVrModeChange = { vrMode = it },
                     qualityOptions = listOf("原画", "1080P", "720P"), currentQuality = "原画",
                     errorMessage = shot.error, resumedFromMillis = shot.resumedFromMillis,
                     onPlayPause = { playing = !playing }, onSeek = { position = it }, onSpeedChange = { speed = it },
                     onAspectRatioChange = {}, onQualityChange = {}, onRetry = {}, onRestartFromBeginning = {},
                     onBack = onBack, onToggleFullscreen = {},
                     isFullscreen = shot.fullscreen,
-                    isLandscapeVideo = shot.landscapeVideo,
                     playlist = episodes, currentFileId = current.fileId, hasPrevious = false, hasNext = episodes.size > 1,
                     audioTracks = listOf(MediaTrack("a1", "日语", "jpn"), MediaTrack("a2", "评论音轨", "jpn")),
                     selectedAudioTrackId = "a1",

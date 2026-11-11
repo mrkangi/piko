@@ -117,7 +117,6 @@ fun MobilePlayerControls(
     showFullscreenToggle: Boolean = true,
     modifier: Modifier = Modifier,
     isFullscreen: Boolean = false,
-    isLandscapeVideo: Boolean? = null,
     playlist: List<PlaylistEntry> = emptyList(),
     currentFileId: String = "",
     hasPrevious: Boolean = false,
@@ -168,6 +167,11 @@ fun MobilePlayerControls(
         errorMessage = errorMessage,
         onSpeedChange = onSpeedChange,
     )
+    // 底栏在宽窄之间来回时锚在栏上的浮层会失去锚点：宽屏的倍速浮窗在窄屏收进了「更多」，
+    // 窄屏的「更多」在宽屏不再存在。状态留着会让控件一直不自动收起
+    LaunchedEffect(compactWidth) {
+        if (compactWidth) ui.isSpeedPopupOpen = false else ui.isMoreMenuOpen = false
+    }
     SideEffect {
         ui.currentPositionMillis = positionMillis
         ui.currentDurationMillis = durationMillis
@@ -356,11 +360,6 @@ fun MobilePlayerControls(
                         onDismiss = { ui.showResumeTip = false },
                     )
                 }
-                FullscreenPromptButton(
-                    visible = showFullscreenToggle && !isFullscreen && !ui.isLocked && !isLandscape && isLandscapeVideo == true &&
-                        errorMessage == null && !ui.isEditingCropRegion && !isSeeking,
-                    onClick = onToggleFullscreen,
-                )
                 RestoreCropPromptButton(
                     visible = chromeVisible && !isSeeking && aspectRatio == PlayerAspectRatio.RegionCrop &&
                         errorMessage == null && !vrEnabled,
@@ -460,6 +459,11 @@ fun MobilePlayerControls(
                         onSpeedPopupOpenChange = {
                             ui.interacted()
                             ui.isSpeedPopupOpen = it
+                        },
+                        isMoreMenuOpen = ui.isMoreMenuOpen,
+                        onMoreMenuOpenChange = {
+                            ui.interacted()
+                            ui.isMoreMenuOpen = it
                         },
                         onSpeedChange = {
                             ui.interacted()

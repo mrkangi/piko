@@ -81,6 +81,8 @@ internal class PlayerControlsUiState(
     var isEditingCropRegion by mutableStateOf(false)
     var aspectBeforeEdit by mutableStateOf<PlayerAspectRatio?>(null)
     var isSpeedPopupOpen by mutableStateOf(false)
+    /** 窄屏底栏的「更多」，打开时控件不能自动收起。 */
+    var isMoreMenuOpen by mutableStateOf(false)
     var mouseMoveCount by mutableIntStateOf(0)
     var isMouseIdle by mutableStateOf(false)
     var interactionCount by mutableIntStateOf(0)
@@ -356,7 +358,7 @@ internal class PlayerControlsUiState(
         errorMessage: String?,
         isHoveringControls: Boolean,
     ): Boolean = !isPlaying || isScrubbing || isDraggingVolume || openSheet != null ||
-        isSpeedPopupOpen || errorMessage != null || isHoveringControls || isEditingCropRegion
+        isSpeedPopupOpen || isMoreMenuOpen || errorMessage != null || isHoveringControls || isEditingCropRegion
 
     fun computeHudIndicator(durationMillis: Long): CenterIndicator? {
         val gesture = activeGesture ?: keyVolume?.let { PlayerGesture.Adjust(VerticalAdjust.Volume, it) }

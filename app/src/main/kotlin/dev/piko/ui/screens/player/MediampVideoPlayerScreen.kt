@@ -508,7 +508,6 @@ fun MediampVideoPlayerScreen(
                 },
                 isFullscreen = isFullscreen,
                 showFullscreenToggle = !standaloneWindow,
-                isLandscapeVideo = state.isLandscapeVideo,
                 playlist = state.playlist,
                 currentFileId = state.fileId,
                 hasPrevious = state.previousEntry != null,

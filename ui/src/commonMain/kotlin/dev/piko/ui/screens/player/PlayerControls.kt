@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
@@ -68,12 +69,15 @@ import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -121,6 +125,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.wrapContentWidth
 import dev.piko.ui.components.MorphContainer
+import dev.piko.ui.components.PikoDropdownMenu
+import dev.piko.ui.components.menuItemShape
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.unit.IntOffset
@@ -571,6 +577,9 @@ internal fun PlayerBottomBar(
     vrMode: VrModeState? = null,
     /** 底栏一键开关 VR。 */
     onVrToggle: (() -> Unit)? = null,
+    /** 窄屏底栏的「更多」，见 [PlayerMoreMenu]。 */
+    isMoreMenuOpen: Boolean = false,
+    onMoreMenuOpenChange: (Boolean) -> Unit = {},
     onToggleFullscreen: () -> Unit,
     /** 独立窗口的面板尺寸由系统窗口管理器决定，不给全屏键。 */
     showFullscreenToggle: Boolean = true,
@@ -623,12 +632,11 @@ internal fun PlayerBottomBar(
                     PlayerIconButton(icon = Icons.Filled.SkipNext, label = tr("下一集", "Next episode", "次のエピソード", "다음 에피소드", "下一集"), onClick = onNext, enabled = hasNext)
                     Spacer(Modifier.width(8.dp))
                 }
-                // 照 YouTube 放在换集之后、时间之前，右边一组的位置不变
-                if (volume != null) {
+                // 照 YouTube 放在换集之后、时间之前，右边一组的位置不变。窄屏收进「更多」：
+                // 静音键也要占一格，加了 VR 之后一行放不下
+                if (volume != null && !compactWidth) {
                     PlayerVolumeControl(
                         volume = volume,
-                        // 窄窗口只留静音键，滚轮在键上照样能调
-                        showSlider = !compactWidth,
                         onVolumeChange = onVolumeChange,
                         onToggleMute = onToggleMute,
                         onDraggingChange = onVolumeDraggingChange,
@@ -639,50 +647,77 @@ internal fun PlayerBottomBar(
                     text = formatTime(shownPosition),
                     style = TimeTextStyle(),
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = " / ${formatTime(durationMillis)}",
                     style = TimeTextStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
-            if (playbackSpeed != null) {
-                // 浮层锚在这个 Box 上，出现在按钮正上方
-                Box {
-                    PlayerChipButton(
-                        text = formatSpeed(playbackSpeed),
-                        onClick = { onSpeedPopupOpenChange(!isSpeedPopupOpen) },
-                        modifier = Modifier.semantics { contentDescription = tr("倍速 ${formatSpeed(playbackSpeed)}", "Speed ${formatSpeed(playbackSpeed)}", "再生速度 ${formatSpeed(playbackSpeed)}", "재생 속도 ${formatSpeed(playbackSpeed)}", "倍速 ${formatSpeed(playbackSpeed)}") },
-                    )
-                    if (isSpeedPopupOpen) {
-                        SpeedPopup(
+            if (compactWidth) {
+                // 窄屏只把最常用的两枚留在栏内，其余进「更多」：360dp 竖屏里时间、
+                // 倍速、选集、VR、旋转、全屏同时排一行会把时间挤到换行
+                if (playbackSpeed != null || showEpisodes || (vrMode != null && onVrToggle != null) || volume != null) {
+                    Box {
+                        PlayerIconButton(
+                            icon = Icons.Filled.MoreVert,
+                            label = tr("更多", "More", "その他", "더 보기", "更多"),
+                            onClick = { onMoreMenuOpenChange(true) },
+                            // VR 开着时入口藏进菜单，按开启态高亮，免得看不出正在生效
+                            active = vrMode?.enabled == true,
+                        )
+                        PlayerMoreMenu(
+                            expanded = isMoreMenuOpen,
+                            onDismiss = { onMoreMenuOpenChange(false) },
                             playbackSpeed = playbackSpeed,
                             onSpeedChange = onSpeedChange,
-                            onDismiss = { onSpeedPopupOpenChange(false) },
+                            showEpisodes = showEpisodes,
+                            onEpisodesClick = onEpisodesClick,
+                            vrMode = vrMode,
+                            onVrToggle = onVrToggle,
+                            volume = volume,
+                            onToggleMute = onToggleMute,
                         )
                     }
                 }
-            }
-            if (showEpisodes) {
-                // 窄窗口只留图标，名字在提示里：带字的这一格约 80dp，省下的地方让旋转按钮常驻，
-                // 360dp 的手机竖屏里时间、倍速、选集、旋转、全屏才排得下
-                if (compactWidth) {
-                    PlayerIconButton(icon = Icons.Outlined.VideoLibrary, label = tr("选集", "Playlist", "再生リスト", "재생 목록", "選集"), onClick = onEpisodesClick)
-                } else {
+            } else {
+                if (playbackSpeed != null) {
+                    // 浮层锚在这个 Box 上，出现在按钮正上方
+                    Box {
+                        PlayerChipButton(
+                            text = formatSpeed(playbackSpeed),
+                            onClick = { onSpeedPopupOpenChange(!isSpeedPopupOpen) },
+                            modifier = Modifier.semantics { contentDescription = tr("倍速 ${formatSpeed(playbackSpeed)}", "Speed ${formatSpeed(playbackSpeed)}", "再生速度 ${formatSpeed(playbackSpeed)}", "재생 속도 ${formatSpeed(playbackSpeed)}", "倍速 ${formatSpeed(playbackSpeed)}") },
+                        )
+                        if (isSpeedPopupOpen) {
+                            SpeedPopup(
+                                playbackSpeed = playbackSpeed,
+                                onSpeedChange = onSpeedChange,
+                                onDismiss = { onSpeedPopupOpenChange(false) },
+                            )
+                        }
+                    }
+                }
+                if (showEpisodes) {
                     PlayerChipButton(text = tr("选集", "Playlist", "再生リスト", "재생 목록", "選集"), icon = Icons.Outlined.VideoLibrary, onClick = onEpisodesClick)
                 }
-            }
-            // VR 原先只藏在播放设置里；看 VR 片时这是最常用的开关，放到拇指够得到的底栏。
-            // 开启后按钮高亮，再点一次退出，和底部「退出 VR」胶囊功能一致。
-            if (vrMode != null && onVrToggle != null) {
-                PlayerIconButton(
-                    icon = Icons.Filled.ViewInAr,
-                    label = if (vrMode.enabled) tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR") else tr("开启 VR 视角", "Turn on VR view", "VR ビューをオン", "VR 시점 켜기", "開啟 VR 視角"),
-                    onClick = onVrToggle,
-                    active = vrMode.enabled,
-                )
+                // VR 原先只藏在播放设置里；看 VR 片时这是最常用的开关，放到拇指够得到的底栏。
+                // 开启后按钮高亮，再点一次退出，和底部「退出 VR」胶囊功能一致。
+                if (vrMode != null && onVrToggle != null) {
+                    PlayerIconButton(
+                        icon = Icons.Filled.ViewInAr,
+                        label = if (vrMode.enabled) tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR") else tr("开启 VR 视角", "Turn on VR view", "VR ビューをオン", "VR 시점 켜기", "開啟 VR 視角"),
+                        onClick = onVrToggle,
+                        active = vrMode.enabled,
+                    )
+                }
             }
             // 一次转 90 度，与 R 键相同。原先在播放设置里列四个角度，要转画面得先开面板，
             // 桌面上转了窗口还跟着对调，这一步该是顺手就点的
@@ -700,6 +735,157 @@ internal fun PlayerBottomBar(
     }
 }
 
+/** 窄屏「更多」里的一项。 */
+private class PlayerMoreAction(
+    val icon: ImageVector,
+    val label: String,
+    val value: String? = null,
+    val checked: Boolean = false,
+    /** 倍速要换到第二级，菜单保持打开。 */
+    val keepMenuOpen: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/** 菜单第二级里滑块那一行的宽度，够放下 0.5×–3.5× 又不超出菜单的最大宽度。 */
+private val SpeedMenuWidth = 264.dp
+
+/**
+ * 窄屏底栏的「更多」：竖屏一行放不下的倍速、选集、VR 与静音都收在这里，栏内只留旋转与全屏。
+ *
+ * 倍速是唯一有第二级的项：菜单里换成滑块，不另叠一层 Popup——两层弹层同帧切换时焦点与
+ * 外部点击的先后不好保证，还会闪一下。返回靠第一行的箭头，退出菜单靠点外面。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun PlayerMoreMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    playbackSpeed: Float?,
+    onSpeedChange: (Float) -> Unit,
+    showEpisodes: Boolean,
+    onEpisodesClick: () -> Unit,
+    vrMode: VrModeState?,
+    onVrToggle: (() -> Unit)?,
+    volume: Float?,
+    onToggleMute: () -> Unit,
+) {
+    var showSpeed by remember { mutableStateOf(false) }
+    // 收起时回到第一级：下次打开不该停在上次的滑块上
+    LaunchedEffect(expanded) {
+        if (!expanded) showSpeed = false
+    }
+
+    PikoDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (showSpeed) {
+            DropdownMenuItem(
+                text = { Text(tr("倍速", "Speed", "再生速度", "재생 속도", "倍速")) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                shape = menuItemShape(0, 1),
+                onClick = { showSpeed = false },
+            )
+            Row(
+                modifier = Modifier.width(SpeedMenuWidth).padding(start = 8.dp, end = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = formatSpeed(playbackSpeed ?: 1f),
+                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(onClickLabel = tr("恢复 1x", "Reset to 1x", "1倍速に戻す", "1배속으로 복원", "還原為 1x")) { onSpeedChange(1f) }
+                        .widthIn(min = 56.dp)
+                        .padding(vertical = 12.dp),
+                )
+                Box(Modifier.weight(1f)) {
+                    SpeedSlider(playbackSpeed ?: 1f, onSpeedChange)
+                }
+            }
+        } else {
+            val actions = buildList {
+                if (playbackSpeed != null) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Outlined.Speed,
+                            label = tr("倍速", "Speed", "再生速度", "재생 속도", "倍速"),
+                            value = formatSpeed(playbackSpeed),
+                            keepMenuOpen = true,
+                            onClick = { showSpeed = true },
+                        ),
+                    )
+                }
+                if (showEpisodes) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Outlined.VideoLibrary,
+                            label = tr("选集", "Playlist", "再生リスト", "재생 목록", "選集"),
+                            onClick = onEpisodesClick,
+                        ),
+                    )
+                }
+                if (vrMode != null && onVrToggle != null) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Filled.ViewInAr,
+                            label = if (vrMode.enabled) {
+                                tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR")
+                            } else {
+                                tr("开启 VR 视角", "Turn on VR view", "VR ビューをオン", "VR 시점 켜기", "開啟 VR 視角")
+                            },
+                            checked = vrMode.enabled,
+                            onClick = onVrToggle,
+                        ),
+                    )
+                }
+                if (volume != null) {
+                    val muted = volume <= 0f
+                    add(
+                        PlayerMoreAction(
+                            icon = if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                            label = if (muted) tr("取消静音", "Unmute", "ミュートを解除", "음소거 해제", "取消靜音") else tr("静音", "Mute", "ミュート", "음소거", "靜音"),
+                            onClick = onToggleMute,
+                        ),
+                    )
+                }
+            }
+            actions.forEachIndexed { index, action ->
+                DropdownMenuItem(
+                    text = { Text(action.label) },
+                    leadingIcon = { Icon(action.icon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    trailingIcon = when {
+                        action.value != null -> {
+                            {
+                                Text(
+                                    text = action.value,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        action.checked -> {
+                            {
+                                Icon(
+                                    imageVector = Icons.Outlined.Check,
+                                    contentDescription = tr("当前", "Current", "現在", "현재", "目前"),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        else -> null
+                    },
+                    shape = menuItemShape(index, actions.size),
+                    onClick = {
+                        if (!action.keepMenuOpen) onDismiss()
+                        action.onClick()
+                    },
+                )
+            }
+        }
+    }
+}
+
 /**
  * 桌面底栏的音量：静音键加一条常驻的横向滑块，键与滑块上的滚轮都调音量。
  *
@@ -710,7 +896,6 @@ internal fun PlayerBottomBar(
 @Composable
 private fun PlayerVolumeControl(
     volume: Float,
-    showSlider: Boolean,
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onDraggingChange: (Boolean) -> Unit,
@@ -746,10 +931,8 @@ private fun PlayerVolumeControl(
             onClick = onToggleMute,
             shortcut = "M",
         )
-        if (showSlider) {
-            Spacer(Modifier.width(4.dp))
-            PlayerVolumeSlider(volume = volume, onVolumeChange = onVolumeChange, onDraggingChange = onDraggingChange)
-        }
+        Spacer(Modifier.width(4.dp))
+        PlayerVolumeSlider(volume = volume, onVolumeChange = onVolumeChange, onDraggingChange = onDraggingChange)
     }
 }
 
