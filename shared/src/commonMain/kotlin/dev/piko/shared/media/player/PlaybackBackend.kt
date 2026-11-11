@@ -299,6 +299,17 @@ data class VrModeState(
         fovDegrees = DEFAULT_FOV_DEGREES,
     )
 
+    /**
+     * 在播放页底栏一键开关 VR。开启时按文件名猜投影并回正视角，
+     * 与设置面板里的开关走同一条路径，避免两处行为不一致。
+     */
+    fun toggled(title: String): VrModeState =
+        if (enabled) {
+            copy(enabled = false)
+        } else {
+            copy(enabled = true, projection = guessProjection(title)).resetView()
+        }
+
     companion object {
         const val DEFAULT_FOV_DEGREES = 105f
         const val MIN_FOV_DEGREES = 40f

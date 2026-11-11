@@ -788,18 +788,9 @@ internal fun PlayerSettingsPanel(
                     ToggleButton(
                         checked = vrMode.enabled,
                         onCheckedChange = { enabled ->
-                            onVrModeChange(
-                                if (enabled) {
-                                    vrMode.copy(
-                                        enabled = true,
-                                        // 第一次开时按文件名猜一个，猜不中再改
-                                        projection = if (vrMode.enabled) vrMode.projection
-                                        else VrModeState.guessProjection(title.orEmpty()),
-                                    ).resetView()
-                                } else {
-                                    vrMode.copy(enabled = false)
-                                },
-                            )
+                            if (enabled != vrMode.enabled) {
+                                onVrModeChange(vrMode.toggled(title.orEmpty()))
+                            }
                         },
                     ) {
                         Text(if (vrMode.enabled) tr("关闭", "Off", "オフ", "끔", "關閉") else tr("开启", "On", "オン", "켬", "開啟"))

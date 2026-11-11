@@ -50,6 +50,24 @@ class VrModeStateTest {
     }
 
     @Test
+    fun togglingOnGuessesProjectionResetsViewAndTogglingOffKeepsIt() {
+        val moved = VrModeState(
+            projection = VrProjection.Equirectangular360,
+            yawRadians = 0.8f,
+            pitchRadians = 0.3f,
+            fovDegrees = 60f,
+        )
+        val on = moved.toggled("clip_180_sbs.mp4")
+        assertTrue(on.enabled)
+        assertEquals(VrProjection.DualHalfEquirectangular180, on.projection)
+        assertTrue(on.isDefaultView)
+
+        val off = on.toggled("clip_180_sbs.mp4")
+        assertFalse(off.enabled)
+        assertEquals(on.projection, off.projection)
+    }
+
+    @Test
     fun shaderEncodesParametersIntoRgba8TextureWithoutParamDirectives() {
         val mode = VrModeState(
             enabled = true,
