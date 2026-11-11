@@ -36,6 +36,7 @@ jobs:
     outputs:
       name: ${{ steps.derive.outputs.name }}
       code: ${{ steps.derive.outputs.code }}
+      base: ${{ steps.derive.outputs.base }}
       title: ${{ steps.derive.outputs.title }}
     steps:
       - name: Derive version
@@ -81,6 +82,7 @@ jobs:
           fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "code=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "title=${title:-$name}" >> "$GITHUB_OUTPUT"
 
   android:
@@ -152,7 +154,8 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.name }}
+      # MSI/DMG 的版本号必须是纯数字：后缀只用于文件名，不写进包内版本
+      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.base }}
       VERSION: ${{ needs.version.outputs.name }}
     steps:
       - uses: actions/checkout@v5
@@ -203,7 +206,7 @@ jobs:
     needs: version
     runs-on: macos-15
     env:
-      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.name }}
+      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.base }}
       VERSION: ${{ needs.version.outputs.name }}
     steps:
       - uses: actions/checkout@v5
@@ -246,7 +249,7 @@ jobs:
     needs: version
     runs-on: ubuntu-24.04
     env:
-      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.name }}
+      ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.base }}
       VERSION: ${{ needs.version.outputs.name }}
     steps:
       - uses: actions/checkout@v5
@@ -277,7 +280,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp desktopApp/build/compose/binaries/main-release/appimage/piko-linux-x64-"$VERSION".* dist/
+          # 包内版本是纯数字的基座版本，文件名才带测试后缀
+          src=$(ls desktopApp/build/compose/binaries/main-release/appimage/piko-linux-x64-*.AppImage | head -n 1)
+          cp "$src" "dist/piko-linux-x64-$VERSION.AppImage"
+          if [ -f "$src.zsync" ]; then cp "$src.zsync" "dist/piko-linux-x64-$VERSION.AppImage.zsync"; fi
           ls -lh dist
           test -x "dist/piko-linux-x64-$VERSION.AppImage"
 
