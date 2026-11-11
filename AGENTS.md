@@ -16,6 +16,8 @@ Piko 是 PikPak 的第三方跨平台客户端。Android、Windows、macOS 与 L
 | `cli/AGENTS.md` | 开发用命令行工具 `piko-cli` |
 | `shots/AGENTS.md` | 无头截图与自适应交互回归工具 `:shots` |
 
+跨模块的实现细节与踩坑记录另见 `docs/development/vr-playback.md`（VR 播放、mpv 用户着色器与拖动视角）与 `docs/development/local-build-notes.md`（特定开发机的镜像、JDK 25 与 SDK 复合构建限制，CI 不受影响）。
+
 ## 常用命令
 
 ```bash

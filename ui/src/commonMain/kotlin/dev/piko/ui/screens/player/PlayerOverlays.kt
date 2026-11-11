@@ -130,6 +130,70 @@ internal fun RestoreCropPromptButton(
 }
 
 /**
+ * 开了 VR 之后底部的一排快捷操作：当前投影格式、回正视角、退出。
+ *
+ * 拖动画面转视角是隐式操作，界面上留一个常驻的退出入口，免得用户以为退不出去；
+ * 视角偏离正前方时才出现「回正」，平时不占地方。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun VrViewPromptRow(
+    visible: Boolean,
+    canReset: Boolean,
+    projectionLabel: String,
+    onReset: () -> Unit,
+    onExit: () -> Unit,
+) {
+    val motion = MaterialTheme.motionScheme
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(motion.defaultEffectsSpec()) + slideInVertically(motion.defaultSpatialSpec()) { it / 2 },
+        exit = fadeOut(motion.fastEffectsSpec()) + slideOutVertically(motion.fastSpatialSpec()) { it / 2 },
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (projectionLabel.isNotEmpty()) {
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = playerContainerColor(),
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) {
+                    Text(
+                        text = projectionLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            if (canReset) {
+                FilledTonalButton(
+                    onClick = onReset,
+                    shapes = ButtonDefaults.shapes(),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = playerContainerColor(),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                ) {
+                    Text(tr("回正视角", "Recenter view", "視点をリセット", "시점 초기화", "視角回正"))
+                }
+            }
+            FilledTonalButton(
+                onClick = onExit,
+                shapes = ButtonDefaults.shapes(),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = playerContainerColor(),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Text(tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR"))
+            }
+        }
+    }
+}
+
+/**
  * 续播提示：「从 xx 继续播放」，附带「从头播放」。
  *
  * 形式上就是一条带操作的 Snackbar：短暂、不打断播放、只有一个操作，

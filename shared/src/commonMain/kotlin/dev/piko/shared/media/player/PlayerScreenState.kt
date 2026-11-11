@@ -87,6 +87,12 @@ class PlayerScreenState(
     /** 可切换的解码方式；空表示这个后端不支持在播放中改，播放页不显示入口。 */
     val decodeModeOptions: List<VideoDecodeMode> get() = backend.decodeModeOptions
 
+    /** VR 视角。后端不支持时恒为关闭，播放页不显示入口。 */
+    var vrMode by mutableStateOf(VrModeState())
+        private set
+
+    val supportsVrMode: Boolean get() = backend.supportsVrMode
+
     /** 退避重连或换源途中。期间不报错，否则每次重连都会闪一次失败卡片。 */
     var isRecovering by mutableStateOf(false)
         private set
@@ -449,6 +455,28 @@ class PlayerScreenState(
 
     fun setCropRegion(region: VideoCropRegion?) = backend.setCropRegion(region)
 
+    /** 应用 VR 视角。第一次开启时先退出框选填充，免得 mpv 的缩放叠在球面投影上。 */
+    fun updateVrMode(mode: VrModeState) {
+        if (!supportsVrMode) return
+        val next = mode.normalized()
+        if (next == vrMode) return
+        if (next.enabled && !vrMode.enabled) {
+            if (cropRegion != null) backend.setCropRegion(null)
+            if (aspectRatio == PlayerAspectRatio.RegionCrop) backend.setAspectRatio(PlayerAspectRatio.Fit)
+        }
+        vrMode = next
+        backend.setVrMode(next)
+    }
+
+    /**
+     * 拖动画面转视角。指针事件一帧可能来好几次，增量在状态持有者里同步累加，
+     * 不等重组，免得同一帧里的几次位移都以旧朝向为起点、只留下最后一次。
+     */
+    fun panVr(deltaYawRadians: Float, deltaPitchRadians: Float) =
+        updateVrMode(vrMode.panned(deltaYawRadians, deltaPitchRadians))
+
+    fun zoomVr(scale: Float) = updateVrMode(vrMode.zoomed(scale))
+
     /** 只对当前文件生效，不动设置页的默认值。切档要重新打开文件，必有一瞬黑帧。 */
     fun selectDecodeMode(mode: VideoDecodeMode) {
         if (mode == decodeMode) return
@@ -520,6 +548,12 @@ class PlayerScreenState(
         lastKnownPositionMillis = 0L
         manualSubtitles = emptyList()
         pendingManualTitle = null
+        // 换片后视角回到正前方：上一集停在什么角度，对下一集多半没有意义
+        if (vrMode.enabled) {
+            val reset = vrMode.resetView()
+            vrMode = reset
+            backend.setVrMode(reset)
+        }
         resetRecovery()
         reload()
     }

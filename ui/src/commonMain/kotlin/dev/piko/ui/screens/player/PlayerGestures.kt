@@ -4,6 +4,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.input.pointer.PointerEventPass
+import kotlin.math.PI
 
 /**
  * 竖滑手势与上下方向键调节的一路电平，取值 0 到 1。由平台实现：Android 的亮度是窗口属性、
@@ -86,6 +88,11 @@ internal fun PlayerGestureLayer(
     modifier: Modifier = Modifier,
     // 为 true 时两侧的单点也交给 onDoubleTap，不等第二下：双击进退之后，读数还在就接着点
     seekTapActive: () -> Boolean = { false },
+    // VR 开启时单指/鼠标拖动改为转视角，双指捏合缩放视野，横滑进退与竖滑亮度音量让位
+    vrModeEnabled: Boolean = false,
+    vrFovDegrees: () -> Float = { 105f },
+    onVrPan: (deltaYawRadians: Float, deltaPitchRadians: Float) -> Unit = { _, _ -> },
+    onVrZoom: (scale: Float) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
     // pointerInput 只以 isLocked 为 key，其余入参走 rememberUpdatedState，
@@ -100,12 +107,17 @@ internal fun PlayerGestureLayer(
     val seekTapActive by rememberUpdatedState(seekTapActive)
     val brightnessControl by rememberUpdatedState(brightness)
     val volumeControl by rememberUpdatedState(volume)
+    val readVrFov by rememberUpdatedState(vrFovDegrees)
+    val panVr by rememberUpdatedState(onVrPan)
+    val zoomVr by rememberUpdatedState(onVrZoom)
 
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
     var dragTotal by remember { mutableStateOf(Offset.Zero) }
     var dragOrigin by remember { mutableStateOf(Offset.Zero) }
     var adjustBaseValue by remember { mutableFloatStateOf(0f) }
     var boosting by remember { mutableStateOf(false) }
+    // 长按加速时手指多半会挪动，那段位移不算转视角
+    val boostingNow by rememberUpdatedState(boosting)
 
     // 系统返回手势占着的左右两条：从这里起手的拖动交给系统，不当作进退、调音量亮度。
     // 三键导航与桌面上宽度为 0，不受影响。点按不在此列：系统只拦从边缘起手的滑动
@@ -198,8 +210,22 @@ internal fun PlayerGestureLayer(
                     pressX = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).position.x
                 }
             }
-            .pointerInput(isLocked) {
-                if (isLocked) return@pointerInput
+            // VR 视角：拖动画面转视角，双指捏合缩放。位移换算成角度与画面宽度的比例，
+            // 拉近时同样的手指数走得更细，拉远时一转就是一大片
+            .pointerInput(vrModeEnabled) {
+                if (!vrModeEnabled) return@pointerInput
+                detectTransformGestures { _, pan, zoom, _ ->
+                    if (boostingNow) return@detectTransformGestures
+                    if (pan != Offset.Zero) {
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        val fovRadians = (readVrFov() * PI / 180.0).toFloat()
+                        panVr(pan.x / width * fovRadians, pan.y / width * fovRadians)
+                    }
+                    if (zoom != 1f) zoomVr(zoom)
+                }
+            }
+            .pointerInput(isLocked, vrModeEnabled) {
+                if (isLocked || vrModeEnabled) return@pointerInput
                 // 方向只判一次；竖滑而平台没有对应电平时，这次拖动整个忽略
                 var directionDecided = false
                 // 从系统返回手势区起手的这次拖动整个不理会，也不消费，系统照常接走

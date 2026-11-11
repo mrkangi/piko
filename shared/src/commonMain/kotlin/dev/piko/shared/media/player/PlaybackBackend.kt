@@ -1,6 +1,7 @@
 package dev.piko.shared.media.player
 
 import kotlinx.coroutines.flow.Flow
+import kotlin.math.abs
 
 /**
  * 播放后端的最小接口：共用的 [PlayerScreenState] 只通过它控制播放器。
@@ -121,6 +122,18 @@ interface PlaybackBackend {
     /** 切换解码方式，下一次 [open] 生效。不支持的后端忽略。 */
     fun setDecodeMode(mode: VideoDecodeMode) = Unit
 
+    /** 为 true 时播放页给出 VR 视角入口，见 [VrModeState]。 */
+    val supportsVrMode: Boolean get() = false
+
+    /** 当前 VR 视角。不支持的后端恒为关闭。 */
+    val vrMode: VrModeState get() = VrModeState()
+
+    /**
+     * 应用 VR 视角。开启时在 mpv 上挂 360°/180° 反投影着色器，视角只改着色器参数，
+     * 不动解码与画面队列；关闭时卸载着色器并把画面比例还原成当前所选。
+     */
+    fun setVrMode(mode: VrModeState) = Unit
+
     fun stop()
 
     /**
@@ -213,4 +226,119 @@ data class VideoCropRegion(
     val height: Float get() = (safeBottom - safeTop).coerceIn(0.05f, 1f)
     val centerX: Float get() = ((safeLeft + safeRight) * 0.5f).coerceIn(0f, 1f)
     val centerY: Float get() = ((safeTop + safeBottom) * 0.5f).coerceIn(0f, 1f)
+}
+
+/** VR 片源的投影格式。只列常见几种，够覆盖实拍 VR 与全景视频。 */
+enum class VrProjection(val isStereo: Boolean) {
+    /** 360° 单目等距柱状，最常见的全景视频。 */
+    Equirectangular360(isStereo = false),
+
+    /** 180° 左右双鱼眼，VR180 实拍最常见的格式：2:1 画面左右各一个圆。 */
+    DualFisheye180(isStereo = true),
+
+    /** 180° 左右半宽等距柱状，VR180 的另一种常见封装。 */
+    DualHalfEquirectangular180(isStereo = true),
+
+    /** 180° 单目等距柱状。 */
+    HalfEquirectangular180(isStereo = false),
+
+    /** 360° 上下双目等距柱状。 */
+    DualVertEquirectangular360(isStereo = true),
+}
+
+/**
+ * 双眼片源里取哪只眼看。手机与电脑都是平面屏幕，默认只取左眼，画面干净没有重影；
+ * 双眼用于给 VR 盒子或 3D 显示器输出左右并排。
+ */
+enum class VrEye { Left, Right, Both }
+
+/**
+ * VR 视角：输入的投影格式、相机朝向与视野。
+ *
+ * 角度均为弧度，[fovDegrees] 与 [fisheyeFovDegrees] 用角度便于界面显示。所有取值都在
+ * [normalized] 里限幅，模拟拖动时不会因为累加越界让画面翻面。
+ */
+data class VrModeState(
+    val enabled: Boolean = false,
+    val projection: VrProjection = VrProjection.DualFisheye180,
+    val eye: VrEye = VrEye.Left,
+    val yawRadians: Float = 0f,
+    val pitchRadians: Float = 0f,
+    val rollRadians: Float = 0f,
+    val fovDegrees: Float = DEFAULT_FOV_DEGREES,
+    val fisheyeFovDegrees: Float = DEFAULT_FISHEYE_FOV_DEGREES,
+) {
+    val isDefaultView: Boolean
+        get() = abs(yawRadians) < VIEW_EPSILON && abs(pitchRadians) < VIEW_EPSILON &&
+            abs(rollRadians) < VIEW_EPSILON && abs(fovDegrees - DEFAULT_FOV_DEGREES) < 0.5f
+
+    fun normalized(): VrModeState = copy(
+        yawRadians = normalizeAngle(yawRadians),
+        pitchRadians = pitchRadians.coerceIn(-HALF_PI, HALF_PI),
+        rollRadians = normalizeAngle(rollRadians),
+        fovDegrees = fovDegrees.coerceIn(MIN_FOV_DEGREES, MAX_FOV_DEGREES),
+        fisheyeFovDegrees = fisheyeFovDegrees.coerceIn(MIN_FISHEYE_FOV_DEGREES, MAX_FISHEYE_FOV_DEGREES),
+    )
+
+    /** 拖动画面转视角。正的水平位移看向左边，正的垂直位移看向上方，与抓住画面拖动的手感一致。 */
+    fun panned(deltaYawRadians: Float, deltaPitchRadians: Float): VrModeState =
+        copy(
+            yawRadians = normalizeAngle(yawRadians + deltaYawRadians),
+            pitchRadians = (pitchRadians + deltaPitchRadians).coerceIn(-HALF_PI, HALF_PI),
+        )
+
+    /** 缩放视野。[scale] 大于 1 是拉近。 */
+    fun zoomed(scale: Float): VrModeState =
+        if (!scale.isFinite() || scale <= 0f) this
+        else copy(fovDegrees = (fovDegrees / scale).coerceIn(MIN_FOV_DEGREES, MAX_FOV_DEGREES))
+
+    fun resetView(): VrModeState = copy(
+        yawRadians = 0f,
+        pitchRadians = 0f,
+        rollRadians = 0f,
+        fovDegrees = DEFAULT_FOV_DEGREES,
+    )
+
+    companion object {
+        const val DEFAULT_FOV_DEGREES = 105f
+        const val MIN_FOV_DEGREES = 40f
+        const val MAX_FOV_DEGREES = 150f
+        const val DEFAULT_FISHEYE_FOV_DEGREES = 180f
+        const val MIN_FISHEYE_FOV_DEGREES = 150f
+        const val MAX_FISHEYE_FOV_DEGREES = 210f
+
+        private const val PI = 3.1415927f
+        private const val HALF_PI = PI / 2f
+        private const val TWO_PI = PI * 2f
+        private const val VIEW_EPSILON = 0.005f
+
+        private fun normalizeAngle(angle: Float): Float {
+            if (!angle.isFinite()) return 0f
+            var value = angle % TWO_PI
+            if (value > PI) value -= TWO_PI
+            if (value < -PI) value += TWO_PI
+            return value
+        }
+
+        /**
+         * 按文件名猜投影格式，省得用户每次都要先打开设置选一遍。猜不中改一下即可，
+         * 这里只处理最常见的几种标记。
+         */
+        fun guessProjection(fileName: String): VrProjection {
+            val name = fileName.lowercase()
+            val fisheye = "fisheye" in name || "_fs" in name || "-fs" in name || "鱼眼" in name || "魚眼" in name
+            val sideBySide = "sbs" in name || "side-by-side" in name || "sidebyside" in name ||
+                "_lr" in name || "-lr" in name || "left-right" in name
+            val topBottom = "_tb" in name || "-tb" in name || "top-bottom" in name ||
+                "over-under" in name || "_ou" in name || "-ou" in name
+            return when {
+                "360" in name && (topBottom || "3d" in name) -> VrProjection.DualVertEquirectangular360
+                "360" in name -> VrProjection.Equirectangular360
+                fisheye -> VrProjection.DualFisheye180
+                sideBySide -> VrProjection.DualHalfEquirectangular180
+                "180" in name -> VrProjection.DualFisheye180
+                else -> VrProjection.DualFisheye180
+            }
+        }
+    }
 }

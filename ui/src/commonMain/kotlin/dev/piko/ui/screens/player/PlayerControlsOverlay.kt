@@ -37,6 +37,10 @@ import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -57,6 +61,7 @@ import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.VideoCropRegion
 import dev.piko.shared.media.player.VideoDecodeMode
+import dev.piko.shared.media.player.VrModeState
 import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.SheetAction
 import io.github.nihildigit.pikpak.FileStat
@@ -64,6 +69,7 @@ import kotlin.math.abs
 
 private val HUD_TOP_PADDING = 88.dp
 private val COMPACT_WIDTH = 600.dp
+private const val WHEEL_ZOOM_STEP = 1.06f
 private const val SUBTITLE_LABEL_MAX_LENGTH = 16
 private val PLAIN_EPISODE = Regex("""[0-9]+(\.[0-9]+)?""")
 
@@ -83,6 +89,12 @@ fun MobilePlayerControls(
     bufferedPositionMillis: Long,
     playbackSpeed: Float?,
     aspectRatio: PlayerAspectRatio?,
+    vrMode: VrModeState? = null,
+    onVrModeChange: (VrModeState) -> Unit = {},
+    /** 拖动画面转视角的增量；由状态持有者同步累加，见 PlayerScreenState.panVr。 */
+    onVrPan: (deltaYawRadians: Float, deltaPitchRadians: Float) -> Unit = { _, _ -> },
+    /** 视野缩放倍数，大于 1 是拉近。 */
+    onVrZoom: (scale: Float) -> Unit = {},
     decodeMode: VideoDecodeMode? = null,
     onDecodeModeChange: ((VideoDecodeMode) -> Unit)? = null,
     cropRegion: VideoCropRegion? = null,
@@ -187,6 +199,11 @@ fun MobilePlayerControls(
     val hudIndicator = ui.computeHudIndicator(durationMillis)
     val centerIndicator = ui.flashIndicator
     val seekPreviewMillis = (ui.activeGesture as? PlayerGesture.Seek)?.targetMillis(durationMillis) ?: ui.settledSeekMillis
+    val vr = vrMode
+    val vrEnabled = vr?.enabled == true
+    // 滚轮处理挂在不会随视角变化重建的 pointerInput 里，读最新的值要靠 rememberUpdatedState
+    val currentVrMode by rememberUpdatedState(vrMode)
+    val currentOnVrZoom by rememberUpdatedState(onVrZoom)
 
     val chromeVisible = ui.controlsVisible && !ui.isLocked && !ui.isEditingCropRegion
     val bottomBarVisible = (chromeVisible || seekPreviewMillis != null) && !ui.isEditingCropRegion
@@ -217,18 +234,25 @@ fun MobilePlayerControls(
                 .fillMaxSize()
                 .onSizeChanged { viewportSize = it }
                 .onPreviewKeyEvent { event ->
-                    ui.handleKey(
-                        event = event,
-                        onPlayPause = onPlayPause,
-                        onSeek = onSeek,
-                        onSpeedChange = onSpeedChange,
-                        onAspectRatioChange = onAspectRatioChange,
-                        onToggleFullscreen = onToggleFullscreen,
-                        onRotationChange = onRotationChange,
-                        onSelectSubtitleTrack = onSelectSubtitleTrack,
-                        onPrevious = onPrevious,
-                        onNext = onNext,
-                    )
+                    // VR 模式下 R 是「回正视角」，不再是画面旋转
+                    if (vrEnabled && !ui.isEditingCropRegion && event.type == KeyEventType.KeyDown && event.key == Key.R) {
+                        vrMode?.let { onVrModeChange(it.resetView()) }
+                        ui.interacted()
+                        true
+                    } else {
+                        ui.handleKey(
+                            event = event,
+                            onPlayPause = onPlayPause,
+                            onSeek = onSeek,
+                            onSpeedChange = onSpeedChange,
+                            onAspectRatioChange = onAspectRatioChange,
+                            onToggleFullscreen = onToggleFullscreen,
+                            onRotationChange = onRotationChange,
+                            onSelectSubtitleTrack = onSelectSubtitleTrack,
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                        )
+                    }
                 }
                 .focusRequester(focusRequester)
                 .then(if (!pointerSource.isTouchLike) Modifier.focusTarget() else Modifier)
@@ -292,6 +316,10 @@ fun MobilePlayerControls(
                 },
                 seekTapActive = { ui.doubleTapVisible && ui.tapSeekRound && pointerSource.isTouchLike },
                 onSpeedBoost = { active -> if (active) ui.startBoost(onSpeedChange) else ui.endBoost(onSpeedChange) },
+                vrModeEnabled = vrEnabled,
+                vrFovDegrees = { vr?.fovDegrees ?: VrModeState.DEFAULT_FOV_DEGREES },
+                onVrPan = onVrPan,
+                onVrZoom = onVrZoom,
                 modifier = Modifier.pointerInput(ui.isLocked, ui.isEditingCropRegion) {
                     if (ui.isLocked || ui.isEditingCropRegion) return@pointerInput
                     awaitPointerEventScope {
@@ -301,7 +329,13 @@ fun MobilePlayerControls(
                             val change = event.changes.firstOrNull() ?: continue
                             val dy = change.scrollDelta.y
                             if (dy == 0f) continue
-                            ui.stepVolume(if (dy < 0f) VOLUME_KEY_STEP else -VOLUME_KEY_STEP)
+                            val current = currentVrMode
+                            if (current?.enabled == true) {
+                                // 滚轮一格约 6% 的视野，向上滚是拉近
+                                currentOnVrZoom(if (dy < 0f) WHEEL_ZOOM_STEP else 1f / WHEEL_ZOOM_STEP)
+                            } else {
+                                ui.stepVolume(if (dy < 0f) VOLUME_KEY_STEP else -VOLUME_KEY_STEP)
+                            }
                             change.consume()
                         }
                     }
@@ -328,10 +362,24 @@ fun MobilePlayerControls(
                     onClick = onToggleFullscreen,
                 )
                 RestoreCropPromptButton(
-                    visible = chromeVisible && !isSeeking && aspectRatio == PlayerAspectRatio.RegionCrop && errorMessage == null,
+                    visible = chromeVisible && !isSeeking && aspectRatio == PlayerAspectRatio.RegionCrop &&
+                        errorMessage == null && !vrEnabled,
                     onClick = {
                         ui.interacted()
                         onCropRegionChange(null)
+                    },
+                )
+                VrViewPromptRow(
+                    visible = chromeVisible && !isSeeking && vrEnabled && errorMessage == null,
+                    canReset = vrMode?.isDefaultView == false,
+                    projectionLabel = vrMode?.projection?.label.orEmpty(),
+                    onReset = {
+                        ui.interacted()
+                        vrMode?.let { onVrModeChange(it.resetView()) }
+                    },
+                    onExit = {
+                        ui.interacted()
+                        vrMode?.let { onVrModeChange(it.copy(enabled = false)) }
                     },
                 )
             }
@@ -361,7 +409,8 @@ fun MobilePlayerControls(
                             ui.openSheet = PlayerSheet.Settings
                         }.takeIf {
                             hasTracksEntry || fileActions.isNotEmpty() || playbackSpeed != null ||
-                                qualityOptions.isNotEmpty() || aspectRatio != null || onSeekStepChange != null
+                                qualityOptions.isNotEmpty() || aspectRatio != null || onSeekStepChange != null ||
+                                vrMode != null
                         },
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -528,7 +577,9 @@ fun MobilePlayerControls(
                 playbackSpeed = playbackSpeed,
                 qualityOptions = qualityOptions,
                 currentQuality = currentQuality,
-                aspectRatio = aspectRatio,
+                // VR 的透视投影按窗口铺满，画面比例与框选填充此时都没有意义，整节先藏起来
+                aspectRatio = if (vrEnabled) null else aspectRatio,
+                vrMode = vrMode,
                 decodeMode = decodeMode,
                 onDecodeModeChange = onDecodeModeChange,
                 seekStepSeconds = seekStepSeconds,
@@ -543,6 +594,7 @@ fun MobilePlayerControls(
                 onSpeedChange = onSpeedChange,
                 onQualityChange = onQualityChange,
                 onAspectRatioChange = onAspectRatioChange,
+                onVrModeChange = onVrModeChange,
                 onBeginCropEdit = { ui.beginCropEdit(aspectRatio, onAspectRatioChange) },
                 onSeekStepChange = onSeekStepChange,
                 onLongPressSpeedChange = onLongPressSpeedChange,
