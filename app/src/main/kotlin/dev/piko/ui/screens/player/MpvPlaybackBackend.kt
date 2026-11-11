@@ -18,12 +18,14 @@ import dev.piko.shared.log.PikoLog
 import dev.piko.shared.media.player.ExternalSubtitle
 import dev.piko.shared.media.player.MPV_SUBTITLE_LANGUAGES
 import dev.piko.shared.media.player.MediaTrack
+import dev.piko.shared.media.player.MpvVrShader
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.shared.media.player.VideoCropRegion
+import dev.piko.shared.media.player.VrModeState
 import dev.piko.shared.media.player.mpvSubtitleAddCommands
 import dev.piko.shared.media.player.mpvSubtitleSelectCommand
 import dev.piko.shared.media.player.readMpvTracks
@@ -88,6 +90,16 @@ internal class MpvPlaybackBackend(
         private set
     private var currentVolume by mutableFloatStateOf(1f)
     override val volume: Float get() = currentVolume
+
+    // VR 着色器在 config-dir 下，init 里写好；写不进去就不给入口
+    @Volatile private var vrShaderPath: String? = null
+    override val supportsVrMode: Boolean get() = !preview && !headless && vrShaderPath != null
+    private var currentVrMode by mutableStateOf(VrModeState())
+    override val vrMode: VrModeState get() = currentVrMode
+    // 以下三个只在 mpv-calls 线程上读写
+    private var vrShaderLoaded = false
+    @Volatile private var pendingVrMode: VrModeState? = null
+    @Volatile private var vrApplyQueued = false
 
     override var audioTracks by mutableStateOf<List<MediaTrack>>(emptyList())
         private set
@@ -154,6 +166,7 @@ internal class MpvPlaybackBackend(
 
     init {
         val configDir = MpvConfig.prepare(context)
+        vrShaderPath = runCatching { MpvVrShader.writeTo(configDir).absolutePath }.getOrNull()
         // 读取 config-dir 下的 fonts.conf 需要 config=yes；目录里没有 mpv.conf，不会读到别的配置
         mpv.setOptionString("config", "yes")
         mpv.setOptionString("config-dir", configDir.absolutePath)
@@ -375,23 +388,28 @@ internal class MpvPlaybackBackend(
                 }
 
                 PlayerAspectRatio.RegionCrop -> {
-                    val vAspect = videoAspect?.takeIf { it.isFinite() && it > 0f } ?: (16f / 9f)
-                    val cAspect = region.safeContainerAspect.takeIf { it > 0f } ?: vAspect
-                    val fitW = if (cAspect > vAspect) vAspect / cAspect else 1f
-                    val fitH = if (cAspect > vAspect) 1f else cAspect / vAspect
-                    val scale = maxOf(1f / (fitW * region.width), 1f / (fitH * region.height))
-                    val zoom = ln(scale.toDouble()) / ln(2.0)
-                    val panX = (0.5f - region.centerX).toDouble()
-                    val panY = (0.5f - region.centerY).toDouble()
-                    mpv.setPropertyString("keepaspect", "yes")
-                    mpv.setPropertyDouble("panscan", 0.0)
-                    mpv.setPropertyDouble("video-zoom", zoom)
-                    mpv.setPropertyDouble("video-pan-x", panX)
-                    mpv.setPropertyDouble("video-pan-y", panY)
+                    applyRegionCropOnMpv(region)
                 }
             }
         }
         currentAspectRatio = mode
+    }
+
+    /** 框选填充的缩放与平移。只在 mpv-calls 线程上调用。 */
+    private fun applyRegionCropOnMpv(region: VideoCropRegion) {
+        val vAspect = videoAspect?.takeIf { it.isFinite() && it > 0f } ?: (16f / 9f)
+        val cAspect = region.safeContainerAspect.takeIf { it > 0f } ?: vAspect
+        val fitW = if (cAspect > vAspect) vAspect / cAspect else 1f
+        val fitH = if (cAspect > vAspect) 1f else cAspect / vAspect
+        val scale = maxOf(1f / (fitW * region.width), 1f / (fitH * region.height))
+        val zoom = ln(scale.toDouble()) / ln(2.0)
+        val panX = (0.5f - region.centerX).toDouble()
+        val panY = (0.5f - region.centerY).toDouble()
+        mpv.setPropertyString("keepaspect", "yes")
+        mpv.setPropertyDouble("panscan", 0.0)
+        mpv.setPropertyDouble("video-zoom", zoom)
+        mpv.setPropertyDouble("video-pan-x", panX)
+        mpv.setPropertyDouble("video-pan-y", panY)
     }
 
     override fun setCropRegion(region: VideoCropRegion?) {
@@ -401,6 +419,55 @@ internal class MpvPlaybackBackend(
             setAspectRatio(PlayerAspectRatio.RegionCrop)
         } else if (currentAspectRatio == PlayerAspectRatio.RegionCrop) {
             setAspectRatio(PlayerAspectRatio.Fit)
+        }
+    }
+
+    override fun setVrMode(mode: VrModeState) {
+        if (!supportsVrMode || released) return
+        val next = mode.normalized()
+        if (next == currentVrMode) return
+        currentVrMode = next
+        // 拖动时每个触摸点都来一次，队列里只留最新的一份：mpv 那边读到的永远是最新的视角
+        pendingVrMode = next
+        if (vrApplyQueued) return
+        vrApplyQueued = true
+        onMpv {
+            vrApplyQueued = false
+            val target = pendingVrMode ?: return@onMpv
+            pendingVrMode = null
+            applyVrMode(target)
+        }
+    }
+
+    /** 只在 mpv-calls 线程上调用。 */
+    private fun applyVrMode(mode: VrModeState) {
+        if (destroyed || released) return
+        val path = vrShaderPath ?: return
+        if (mode.enabled) {
+            // 透视投影按窗口的实际宽高比算，画面要铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉
+            mpv.setPropertyString("keepaspect", "no")
+            mpv.setPropertyDouble("panscan", 0.0)
+            mpv.setPropertyDouble("video-zoom", 0.0)
+            mpv.setPropertyDouble("video-pan-x", 0.0)
+            mpv.setPropertyDouble("video-pan-y", 0.0)
+            // 先写参数再挂着色器：挂上的那一刻就按当前视角取景，不会闪一帧默认朝向
+            mpv.setPropertyString("glsl-shader-opts", MpvVrShader.optionsOf(mode))
+            if (!vrShaderLoaded) {
+                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "append", path))
+                vrShaderLoaded = true
+            }
+        } else {
+            if (vrShaderLoaded) {
+                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "remove", path))
+                vrShaderLoaded = false
+            }
+            mpv.setPropertyString("glsl-shader-opts", "")
+            if (currentAspectRatio == PlayerAspectRatio.RegionCrop) {
+                currentCropRegion?.let(::applyRegionCropOnMpv)
+            } else {
+                mpv.setPropertyString("keepaspect", if (currentAspectRatio == PlayerAspectRatio.Stretch) "no" else "yes")
+                mpv.setPropertyDouble("panscan", if (currentAspectRatio == PlayerAspectRatio.Crop) 1.0 else 0.0)
+            }
         }
     }
 

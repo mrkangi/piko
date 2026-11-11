@@ -92,6 +92,9 @@ import dev.piko.shared.media.player.MediaTrack
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.shared.media.player.PlaylistEntry
+import dev.piko.shared.media.player.VrEye
+import dev.piko.shared.media.player.VrModeState
+import dev.piko.shared.media.player.VrProjection
 import dev.piko.shared.media.player.preferredVersion
 import dev.piko.shared.media.player.trackDisplayName
 import dev.piko.ui.components.ListSpoilerBlur
@@ -682,6 +685,7 @@ internal fun SpeedSlider(playbackSpeed: Float, onSpeedChange: (Float) -> Unit) {
  * 都是单选，用连接式按钮组；倍速另有铺满的滑块，当前值写在小节标题的右端，不占滑块的宽度。
  * 步长与长按倍速放在这里而不是应用的设置页：要调它的时候人正在看片、刚觉得一步太大。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun PlayerSettingsPanel(
     playbackSpeed: Float?,
@@ -691,6 +695,9 @@ internal fun PlayerSettingsPanel(
     onQualityChange: (String) -> Unit,
     aspectRatio: PlayerAspectRatio?,
     onAspectRatioChange: (PlayerAspectRatio) -> Unit,
+    /** VR 视角；后端不支持时为 null，整节隐藏。 */
+    vrMode: VrModeState? = null,
+    onVrModeChange: (VrModeState) -> Unit = {},
     modifier: Modifier = Modifier,
     /** 当前文件的解码方式；后端不支持在播放中切换时为 null，整节隐藏。 */
     decodeMode: VideoDecodeMode? = null,
@@ -766,6 +773,74 @@ internal fun PlayerSettingsPanel(
                     optionLabel = { it.label },
                     onSelect = onAspectRatioChange,
                 )
+            }
+        }
+        if (vrMode != null) {
+            SettingsSection(
+                tr("VR 视角", "VR view", "VR ビュー", "VR 시점", "VR 視角"),
+                trailing = if (vrMode.enabled) vrMode.projection.label else null,
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ToggleButton(
+                        checked = vrMode.enabled,
+                        onCheckedChange = { enabled ->
+                            onVrModeChange(
+                                if (enabled) {
+                                    vrMode.copy(
+                                        enabled = true,
+                                        // 第一次开时按文件名猜一个，猜不中再改
+                                        projection = if (vrMode.enabled) vrMode.projection
+                                        else VrModeState.guessProjection(title.orEmpty()),
+                                    ).resetView()
+                                } else {
+                                    vrMode.copy(enabled = false)
+                                },
+                            )
+                        },
+                    ) {
+                        Text(if (vrMode.enabled) tr("关闭", "Off", "オフ", "끔", "關閉") else tr("开启", "On", "オン", "켬", "開啟"))
+                    }
+                    if (vrMode.enabled) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = tr("拖动画面转视角", "Drag the picture to look around", "画面をドラッグして視点を移動", "화면을 드래그해 시점 이동", "拖曳畫面轉視角"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                if (vrMode.enabled) {
+                    Spacer(Modifier.height(12.dp))
+                    ChoiceGroup(
+                        options = VrProjection.entries,
+                        isSelected = { it == vrMode.projection },
+                        optionLabel = { it.label },
+                        onSelect = { onVrModeChange(vrMode.copy(projection = it).resetView()) },
+                    )
+                    if (vrMode.projection.isStereo) {
+                        Spacer(Modifier.height(8.dp))
+                        ChoiceGroup(
+                            options = VrEye.entries,
+                            isSelected = { it == vrMode.eye },
+                            optionLabel = { it.label },
+                            onSelect = { onVrModeChange(vrMode.copy(eye = it)) },
+                        )
+                    }
+                    if (vrMode.projection == VrProjection.DualFisheye180) {
+                        Spacer(Modifier.height(8.dp))
+                        ChoiceGroup(
+                            options = listOf(180f, 190f, 200f),
+                            isSelected = { abs(it - vrMode.fisheyeFovDegrees) < 0.5f },
+                            optionLabel = { "${it.toInt()}°" },
+                            onSelect = { onVrModeChange(vrMode.copy(fisheyeFovDegrees = it)) },
+                        )
+                    }
+                }
             }
         }
         // 只改这一个文件，不动设置页的默认值；切档会重开当前文件，黑一瞬
@@ -1024,6 +1099,27 @@ internal val VideoDecodeMode.label: String
         VideoDecodeMode.Auto -> tr("自动", "Auto", "自動", "자동", "自動")
         VideoDecodeMode.Compatible -> tr("兼容", "Compatible", "互換", "호환", "相容")
         VideoDecodeMode.Software -> tr("软件", "Software", "ソフトウェア", "소프트웨어", "軟體")
+    }
+
+internal val VrProjection.label: String
+    get() = when (this) {
+        VrProjection.Equirectangular360 ->
+            tr("360° 全景", "360° panorama", "360° パノラマ", "360° 파노라마", "360° 全景")
+        VrProjection.DualFisheye180 ->
+            tr("180° 鱼眼", "180° fisheye", "180° 魚眼", "180° 어안", "180° 魚眼")
+        VrProjection.DualHalfEquirectangular180 ->
+            tr("180° 左右", "180° side-by-side", "180° 左右", "180° 좌우", "180° 左右")
+        VrProjection.HalfEquirectangular180 ->
+            tr("180° 单目", "180° mono", "180° 単眼", "180° 단안", "180° 單眼")
+        VrProjection.DualVertEquirectangular360 ->
+            tr("360° 上下", "360° top-bottom", "360° 上下", "360° 상하", "360° 上下")
+    }
+
+internal val VrEye.label: String
+    get() = when (this) {
+        VrEye.Left -> tr("左眼", "Left eye", "左目", "왼쪽 눈", "左眼")
+        VrEye.Right -> tr("右眼", "Right eye", "右目", "오른쪽 눈", "右眼")
+        VrEye.Both -> tr("双眼", "Both eyes", "両目", "양쪽 눈", "雙眼")
     }
 
 // 设置面板的倍速选项，[ ] 键也按这几档换

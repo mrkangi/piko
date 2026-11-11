@@ -45,6 +45,7 @@ import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.VideoCropRegion
 import dev.piko.shared.media.player.VideoDecodeMode
+import dev.piko.shared.media.player.VrModeState
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.i18n.stringResource
 import dev.piko.ui.resources.Res
@@ -70,6 +71,7 @@ internal fun PlayerSheetsOverlay(
     qualityOptions: List<String>,
     currentQuality: String?,
     aspectRatio: PlayerAspectRatio?,
+    vrMode: VrModeState?,
     decodeMode: VideoDecodeMode?,
     seekStepSeconds: Int,
     longPressSpeed: Float,
@@ -83,6 +85,7 @@ internal fun PlayerSheetsOverlay(
     onSpeedChange: (Float) -> Unit,
     onQualityChange: (String) -> Unit,
     onAspectRatioChange: (PlayerAspectRatio) -> Unit,
+    onVrModeChange: (VrModeState) -> Unit,
     onDecodeModeChange: ((VideoDecodeMode) -> Unit)?,
     onBeginCropEdit: () -> Unit,
     onSeekStepChange: ((Int) -> Unit)?,
@@ -131,6 +134,8 @@ internal fun PlayerSheetsOverlay(
                     onQualityChange(it)
                 },
                 aspectRatio = aspectRatio,
+                vrMode = vrMode,
+                onVrModeChange = onVrModeChange,
                 onAspectRatioChange = { mode ->
                     if (mode == PlayerAspectRatio.RegionCrop) onBeginCropEdit()
                     else onAspectRatioChange(mode)

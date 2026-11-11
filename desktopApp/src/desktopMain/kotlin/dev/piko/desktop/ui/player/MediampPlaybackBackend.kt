@@ -9,15 +9,18 @@ import dev.piko.desktop.LinuxDesktop
 import dev.piko.desktop.isLinux
 import dev.piko.desktop.isMacOs
 import dev.piko.shared.log.PikoLog
+import dev.piko.shared.PikoHome
 import dev.piko.shared.media.player.ExternalSubtitle
 import dev.piko.shared.media.player.MPV_SUBTITLE_LANGUAGES
 import dev.piko.shared.media.player.MediaTrack
 import dev.piko.shared.media.player.MpvTrackSnapshot
+import dev.piko.shared.media.player.MpvVrShader
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.VideoCropRegion
+import dev.piko.shared.media.player.VrModeState
 import kotlin.math.ln
 import dev.piko.shared.media.player.mpvSubtitleAddCommands
 import dev.piko.shared.media.player.mpvSubtitleSelectCommand
@@ -59,7 +62,7 @@ import java.io.File
 internal class MediampPlaybackBackend(
     val player: MediampPlayer,
     private val scope: CoroutineScope,
-    preview: Boolean = false,
+    private val preview: Boolean = false,
     // 见 VideoPreviewSupport.rememberPreviewBackend
     private val keyframeStart: Boolean = false,
     /** 设置里的「硬件解码」，见 PikoUserPreferences.hardwareDecodingFlow。 */
@@ -73,6 +76,17 @@ internal class MediampPlaybackBackend(
     private val audioFeature = player.features[AudioLevelController.Key]
     private val metadataFeature = player.features[MediaMetadata.Key]
     private val mpv: MPVHandle? = mpvHandleOf(player)
+
+    // 着色器放在缓存目录，与日志、图片缓存同一层。写不进去就不给 VR 入口
+    private val vrShaderFile: File? = if (preview) {
+        null
+    } else {
+        runCatching { MpvVrShader.writeTo(PikoHome.root.resolve("cache/mpv").toFile()) }.getOrNull()
+    }
+    override val supportsVrMode: Boolean get() = mpv != null && vrShaderFile != null
+    private var currentVrMode by mutableStateOf(VrModeState())
+    override val vrMode: VrModeState get() = currentVrMode
+    private var vrShaderLoaded = false
 
     override var positionMillis by mutableLongStateOf(0L)
         private set
@@ -459,6 +473,35 @@ internal class MediampPlaybackBackend(
             setAspectRatio(PlayerAspectRatio.Fit)
         } else {
             resetMpvCropZoom()
+        }
+    }
+
+    override fun setVrMode(mode: VrModeState) {
+        if (closing || !supportsVrMode) return
+        val next = mode.normalized()
+        if (next == currentVrMode) return
+        currentVrMode = next
+        val handle = mpv ?: return
+        val path = vrShaderFile?.absolutePath ?: return
+        if (next.enabled) {
+            // 透视投影按窗口实际宽高比算，画面铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉
+            handle.setPropertyString("keepaspect", "no")
+            handle.setPropertyString("panscan", "0.0")
+            resetMpvCropZoom()
+            // 先写参数再挂着色器，挂上的那一刻就是当前视角
+            handle.setPropertyString("glsl-shader-opts", MpvVrShader.optionsOf(next))
+            if (!vrShaderLoaded) {
+                handle.command("no-osd", "change-list", "glsl-shaders", "append", path)
+                vrShaderLoaded = true
+            }
+        } else {
+            if (vrShaderLoaded) {
+                handle.command("no-osd", "change-list", "glsl-shaders", "remove", path)
+                vrShaderLoaded = false
+            }
+            handle.setPropertyString("glsl-shader-opts", "")
+            // 让 MediaMP 按当前所选重新下发 keepaspect、panscan 与框选缩放
+            setAspectRatio(currentAspectRatio ?: PlayerAspectRatio.Fit)
         }
     }
 
