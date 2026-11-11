@@ -482,7 +482,7 @@ fun TransfersScreen(
                                 TransfersPhase.CONTENT -> HorizontalPager(
                                     state = pagerState,
                                     userScrollEnabled = LocalPointerSource.current.isTouchLike,
-                                    key = { tabs[it] },
+                                    key = { tabs[it].saveKey },
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .pageFocusTarget(listFocus)

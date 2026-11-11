@@ -13,15 +13,19 @@ import dev.piko.shared.state.TransfersState
  */
 internal sealed interface TransferTab {
     val label: String
+    /** Pager 会把 item key 注册进 SaveableStateHolder，必须是 Bundle 可存类型。 */
+    val saveKey: String
     fun icon(selected: Boolean): ImageVector
 
     data class Kind(val kind: TransferKind) : TransferTab {
         override val label: String get() = kind.label
+        override val saveKey: String get() = kind.name
         override fun icon(selected: Boolean): ImageVector = kind.icon(selected)
     }
 
     data object Remote : TransferTab {
         override val label: String get() = tr("远程", "Remote", "リモート", "원격", "遠端")
+        override val saveKey: String get() = "remote"
         override fun icon(selected: Boolean): ImageVector = Icons.Outlined.DevicesOther
     }
 }
