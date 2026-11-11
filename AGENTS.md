@@ -33,7 +33,8 @@ Piko 是 PikPak 的第三方跨平台客户端。Android、Windows、macOS 与 L
 ./gradlew :desktopApp:createReleaseDistributable  # 构建桌面 Release 镜像（ProGuard + AOT 训练），暴露 keep 规则遗漏
 gh workflow run test.yml -f desktop=true          # 手动触发全量 CI 测试（含 Windows、macOS、Linux 安装与更新冒烟）
 gh workflow run release.yml -f version=9.9.9      # 发版演练：完整执行测试、构建与产物汇总，不创建 Release
-git tag test-20261111-vr && git push origin test-20261111-vr  # 日常 test 包：四平台打包并自动建 Pre-release
+git tag test-20261111-vr && git push origin test-20261111-vr  # 日常 test 包：默认只打 Android 并自动建 Pre-release
+git tag test-20261111-vr-desktop && git push origin test-20261111-vr-desktop  # 同上，额外包含 Windows x64 / macOS / Linux
 gh workflow run build.yml -f version=9.9.9 -f suffix=vr        # 只出产物、不建 Release，产物在 Actions Artifacts
 ```
 

@@ -8,7 +8,7 @@
 | 用途 | 触发方式 | 工作流 | 产物去向 |
 | --- | --- | --- | --- |
 | 正式发版 | 推 `vMAJOR.MINOR.PATCH` tag | `release.yml` | 草稿 Release，人工核对后公开 |
-| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，带全平台安装包 |
+| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包 |
 | 只拿产物 | 手动 `workflow_dispatch` | `build.yml` | Actions Artifacts，保留 7 天 |
 | 全量测试 | push / PR / 手动 | `test.yml` | 无安装包，只有结论 |
 | 本机调试 | 本地 Gradle | — | `app/build/outputs/...` |
@@ -18,14 +18,25 @@ Release 标记为 Pre-release，不会进入应用内更新的 `/releases/latest
 
 ## 1. 用 git 打 test 包（推荐）
 
-一条命令，四个平台并行打包，完成后自动创建 Pre-release：
+一条命令，打包完成后自动创建 Pre-release：
 
 ```bash
 git tag test-20261111-vr
 git push origin test-20261111-vr
 ```
 
-tag 约定 `test-<日期>-<说明>`：
+tag 约定 `test-<日期>-<说明>`。**默认只打 Android**，因为绝大多数验证都在手机 / Quest 上；
+桌面端（Windows x64、macOS、Linux）只在 tag 里带 `desktop` 时才一起构建：
+
+```bash
+git tag test-20261111-vr-desktop   # Android + 桌面三平台
+git push origin test-20261111-vr-desktop
+```
+
+只出 Android 时整轮通常 6～8 分钟；带桌面端则取决于 runner 排队情况。Windows arm64
+不再构建（`windows-11-arm` runner 慢且暂无人使用）。
+
+其他约定：
 
 - 版本号 = 基座 `9.9.9` + tag 后缀 → `9.9.9-20261111-vr`（基座可用手动触发时的
   `version` 输入改，见下一节）。
@@ -40,9 +51,9 @@ tag 约定 `test-<日期>-<说明>`：
 | 平台 | 文件 |
 | --- | --- |
 | Android | `piko-<版本>-arm64-v8a.apk`、`-armeabi-v7a.apk`、`-x86_64.apk`、`-universal.apk`、`-mapping.txt` |
-| Windows | `piko-windows-x64-<版本>.7z` / `.msi`，`piko-windows-arm64-<版本>.7z` / `.msi` |
-| macOS | `piko-macos-arm64-<版本>.dmg` |
-| Linux | `piko-linux-x64-<版本>.AppImage` |
+| Windows（tag 带 `desktop`） | `piko-windows-x64-<版本>.7z` / `.msi` |
+| macOS（tag 带 `desktop`） | `piko-macos-arm64-<版本>.dmg` |
+| Linux（tag 带 `desktop`） | `piko-linux-x64-<版本>.AppImage` |
 | 校验 | `SHA256SUMS.txt` |
 
 Quest / 手机装 Android 的 `arm64-v8a` 或 `universal` 即可。
@@ -60,11 +71,11 @@ gh release delete test-20261111-vr --cleanup-tag
 
 ## 2. 只出产物、不建 Release
 
-只想拿某个平台、或先确认能编过：
+只想拿某个平台、或先确认能编过（`platforms` 可选 `android` / `desktop` / `all`）：
 
 ```bash
 gh workflow run build.yml --ref feature/remote-download \
-  -f version=9.9.9 -f suffix=vr
+  -f version=9.9.9 -f suffix=vr -f platforms=android
 gh run watch
 gh run download <run-id> -D dist
 ```
