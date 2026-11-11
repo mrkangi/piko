@@ -37,6 +37,8 @@ gh workflow run release.yml -f version=9.9.9      # 发版演练：完整执行�
 
 修改 `shared` 或 `ui` 后必须同时执行 `:app:compileDebugKotlin` 与 `:desktopApp:compileKotlinDesktop` 验证双端编译：`ui` 在桌面端与 Android 端链接的 Material 3 版本不同（详见 `desktopApp/AGENTS.md`），同一处 API 调用可能仅在其中一端编译失败。
 
+当前 Orca 开发容器的 JDK/SDK 路径、Gradle 镜像、pikpak-kotlin 复合构建以及近期远程下载/应用锁改动踩过的坑，统一记录在 `docs/development/agent-pitfalls.md`；换机器或升级工具链后先核对该文件。
+
 应用版本号读取环境变量 `PIKO_VERSION_NAME` 与 `PIKO_VERSION_CODE`，本地未设置时自动回退至默认值，无需额外配置。
 
 ## 与 pikpak-kotlin SDK 的协同

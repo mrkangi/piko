@@ -14,6 +14,7 @@ import dev.piko.ui.adaptive.FormFactor
 import dev.piko.ui.theme.MotionStyle
 import dev.piko.ui.theme.PikoMotionScale
 import dev.piko.update.AppUpdateService
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -297,19 +298,44 @@ sealed interface PinVerification {
     data class Blocked(val secondsRemaining: Int) : PinVerification
 }
 
+/** 应用退到后台后多久重新上锁。 */
+enum class AppLockTimeout(val millis: Long?) {
+    NEVER(null),
+    IMMEDIATELY(0L),
+    ONE_MINUTE(60_000L),
+    FIVE_MINUTES(5 * 60_000L),
+    FIFTEEN_MINUTES(15 * 60_000L),
+}
+
+private object AppLockDefaults {
+    val falseFlow = MutableStateFlow(false)
+    val timeoutFlow = MutableStateFlow(AppLockTimeout.NEVER)
+}
+
 /**
- * 应用锁。锁定的含义是：冷启动恢复上次登录的账号后，必须先输入 4 位 PIN 才能进入主界面。
- * 同一进程内手动登录、以及切到后台再回来都不重新上锁。
+ * 应用锁。默认在冷启动恢复上次登录的账号后要求输入 PIN；开启自动锁定后，应用退到后台
+ * 超过设定的时间也会重新上锁。同一进程内手动登录不补锁。
  */
 interface AppLock {
     val configured: StateFlow<Boolean>
     val locked: StateFlow<Boolean>
     val recentsMaskEnabled: StateFlow<Boolean>
+    val biometricAvailable: StateFlow<Boolean> get() = AppLockDefaults.falseFlow
+    val biometricEnabled: StateFlow<Boolean> get() = AppLockDefaults.falseFlow
+    val autoLockTimeout: StateFlow<AppLockTimeout> get() = AppLockDefaults.timeoutFlow
 
     suspend fun setPin(pin: String)
     suspend fun clearPin()
     suspend fun verifyPin(pin: String): PinVerification
     suspend fun setRecentsMaskEnabled(enabled: Boolean)
+    suspend fun setBiometricEnabled(enabled: Boolean) {}
+    suspend fun setAutoLockTimeout(timeout: AppLockTimeout) {}
+
+    /** 立即回到锁屏；没有设置 PIN 时什么也不做。 */
+    fun lockNow() {}
+
+    /** 调起系统生物识别；不可用、未开启或用户取消时返回 false。 */
+    suspend fun authenticateBiometric(): Boolean = false
 
     /**
      * 启动恢复结束时调用一次。[hasAccount] 为 true 时按 PIN 配置上锁；
