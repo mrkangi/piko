@@ -253,7 +253,7 @@ fun main(args: Array<String>) {
         }
         val videoPlayer = remember {
             VideoPlayerHost.Detached(
-                open = { players += it },
+                open = { players += it; true },
                 openClipFeed = {
                     clipFeed = it
                     clipFeedRaises++

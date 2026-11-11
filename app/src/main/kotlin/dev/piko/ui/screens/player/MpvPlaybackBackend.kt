@@ -61,6 +61,8 @@ internal class MpvPlaybackBackend(
     private val hardwareDecoding: Boolean = true,
     /** 设置里的「兼容硬解」：直接用 mediacodec-copy，见 PikoUserPreferences.compatibleHardwareDecodingFlow。 */
     compatibleHardwareDecoding: Boolean = false,
+    /** 多窗口同时播放：每路少囤一些，3 路加起来不把堆和显存顶满。 */
+    private val reducedCache: Boolean = false,
 ) : PlaybackBackend, MPVLib.EventObserver, MPVLib.LogObserver {
 
     private val mpv: MPVLib = MPVLib.create(context) ?: error(tr("libmpv 初始化失败", "libmpv initialization failed", "libmpvの初期化に失敗しました", "libmpv 초기화 실패", "libmpv 初始化失敗"))
@@ -199,8 +201,8 @@ internal class MpvPlaybackBackend(
             mpv.setOptionString("demuxer-max-bytes", "${8 * MIB}")
             mpv.setOptionString("demuxer-max-back-bytes", "${4 * MIB}")
         } else {
-            mpv.setOptionString("demuxer-max-bytes", "${48 * MIB}")
-            mpv.setOptionString("demuxer-max-back-bytes", "${16 * MIB}")
+            mpv.setOptionString("demuxer-max-bytes", "${(if (reducedCache) 24 else 48) * MIB}")
+            mpv.setOptionString("demuxer-max-back-bytes", "${(if (reducedCache) 8 else 16) * MIB}")
             // 卡顿后重新攒够 2 秒才继续，避免在供流边缘反复 loading→播一秒→loading
             mpv.setOptionString("cache-pause-wait", "2")
         }

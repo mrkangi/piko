@@ -457,7 +457,7 @@ class AppScene private constructor(
                 // 信息流的独立窗口不画，只记开没开着：应用内据此收起侧栏，弹出后的样子也能截
                 val feedWindow = mutableStateOf(false)
                 VideoPlayerHost.Detached(
-                    open = {},
+                    open = { true },
                     openClipFeed = { feedWindow.value = true },
                     isClipFeedOpen = { feedWindow.value },
                     closeClipFeed = { feedWindow.value = false },

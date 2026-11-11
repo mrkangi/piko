@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Minimize
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.PowerSettingsNew
@@ -155,6 +156,7 @@ fun SettingsScreen(
 ) {
     val services = LocalPikoServices.current
     val platform = LocalPikoPlatform.current
+    val appLock = platform.appLock
     val sessionManager = services.preferences
     val isSpoilerBlurEnabled by sessionManager.spoilerBlurFlow.collectAsStateWithLifecycle(initialValue = true)
     val isHeuristicFilterEnabled by sessionManager.heuristicFilterFlow.collectAsStateWithLifecycle(initialValue = true)
@@ -471,6 +473,22 @@ fun SettingsScreen(
                                 onClick = { showPlaybackQuality = true },
                                 trailingIcon = null,
                             )
+                            platform.multiWindowPlayer?.let { toggle ->
+                                val enabled by toggle.enabled.collectAsState()
+                                SettingsSwitchRow(
+                                    icon = Icons.Outlined.OpenInNew,
+                                    title = tr("多窗口播放", "Multi-window playback", "マルチウィンドウ再生", "다중 창 재생", "多視窗播放"),
+                                    supporting = tr(
+                                        "每个视频在独立窗口中播放，最多同时 3 个；可在空间里自由拖动与缩放。适合 Quest 等支持多窗口的设备",
+                                        "Play each video in its own window, up to 3 at a time, freely movable and resizable in space. Suited to multi-window devices such as Quest",
+                                        "各動画を独立したウィンドウで最大 3 つ同時に再生します。空間内で自由に移動・サイズ変更できます。Quest などマルチウィンドウ対応機器向けです",
+                                        "각 동영상을 독립 창에서 최대 3개까지 동시에 재생합니다. 공간에서 자유롭게 이동하고 크기를 조절할 수 있습니다. Quest 등 다중 창 지원 기기에 적합합니다",
+                                        "每個影片在獨立視窗中播放，最多同時 3 個；可在空間裡自由拖動與縮放。適合 Quest 等支援多視窗的裝置",
+                                    ),
+                                    checked = enabled,
+                                    onCheckedChange = toggle::set,
+                                )
+                            }
                             SettingsSwitchRow(
                                 icon = Icons.Outlined.Memory,
                                 title = tr("硬件解码", "Hardware decoding", "ハードウェアデコード", "하드웨어 디코딩", "硬體解碼"),
@@ -714,6 +732,7 @@ fun SettingsScreen(
                                 )
                             }
                         }
+                        if (appLock != null) AppLockSettings(appLock)
                     }
 
                     if (showAbout) {

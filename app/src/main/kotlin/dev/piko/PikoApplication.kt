@@ -9,6 +9,7 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import dev.piko.data.auth.AndroidPikoSessionStore
+import dev.piko.data.auth.AndroidAppLock
 import dev.piko.data.auth.SessionManager
 import dev.piko.data.repository.DriveRepository
 import dev.piko.download.AndroidPikoDownloadStorage
@@ -47,6 +48,7 @@ import dev.piko.shared.memory.MemoryTrim
 import dev.piko.shared.memory.PikoMemoryGovernor
 import dev.piko.shared.memory.cacheBudget
 import dev.piko.shared.net.PikoProxySelector
+import dev.piko.shared.state.launchOnAccountLeave
 import dev.piko.shared.state.InstantSession
 import dev.piko.shared.upload.PikoUploadCoordinator
 import dev.piko.ui.PikoServices
@@ -79,6 +81,10 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
         private set
 
     lateinit var platform: AndroidPikoPlatform
+        private set
+
+    /** Android 本机的应用锁与多任务遮罩，不参与桌面端与设置同步。 */
+    internal lateinit var appLock: AndroidAppLock
         private set
 
     // 以下几项是 services 的别名：播放器与下载服务还在 app 模块里，经这里取用
@@ -236,6 +242,10 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                 if (enabled) RemoteDownloadService.start(this@PikoApplication) else RemoteDownloadService.stop(this@PikoApplication)
             }
         }
+        // 独立播放窗口不在主界面之下，换号或退出登录时要一起关掉：它们放的是上一个账号的文件
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launchOnAccountLeave(clientManager) {
+            MultiWindowPlayerCoordinator.closeAll()
+        }
         appScope.launch {
             services.lanShareSettings.flow.map { it.enabled }.distinctUntilChanged().collect { enabled ->
                 if (enabled) AndroidLanShareService.start(this@PikoApplication) else AndroidLanShareService.stop(this@PikoApplication)
@@ -253,7 +263,8 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
         }
         val motionScale = PikoMotionScale().apply { followSystemAnimatorScale(this@PikoApplication) }
         appScope.launch { sessionManager.reduceMotionFlow.collect { motionScale.appReduced = it } }
-        platform = AndroidPikoPlatform(this, { appUpdater }, motionScale)
+        appLock = AndroidAppLock(sessionManager, appScope)
+        platform = AndroidPikoPlatform(this, { appUpdater }, motionScale, appLock, sessionManager, appScope)
         val notifier = WorkResultNotifier(this, services, appScope).also { it.start() }
         appScope.launch {
             sessionManager.appLanguageFlow.collect { lang ->

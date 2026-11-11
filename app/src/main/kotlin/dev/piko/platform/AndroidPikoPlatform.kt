@@ -46,8 +46,10 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import dev.piko.BuildConfig
 import dev.piko.data.auth.AppLanguage
+import dev.piko.data.auth.SessionManager
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.ui.LocalPikoServices
+import dev.piko.ui.platform.AppLock
 import dev.piko.ui.platform.BackgroundTransferAccess
 import dev.piko.ui.platform.DownloadLocationPicker
 import kotlinx.coroutines.flow.first
@@ -57,6 +59,7 @@ import dev.piko.ui.platform.LandscapeLock
 import dev.piko.ui.platform.LinkAssociation
 import dev.piko.ui.platform.LocalFileActions
 import dev.piko.ui.platform.PikoPlatform
+import dev.piko.ui.platform.PlatformToggle
 import dev.piko.ui.platform.PreviewBackend
 import dev.piko.ui.platform.UploadPicker
 import dev.piko.ui.platform.VideoPreviewSupport
@@ -68,6 +71,10 @@ import dev.piko.ui.screens.player.MpvVideoSurface
 import dev.piko.ui.screens.player.findActivity
 import dev.piko.update.AppUpdateService
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -92,6 +99,9 @@ class AndroidPikoPlatform(
     private val context: Context,
     updater: () -> AppUpdateService,
     override val motionScale: PikoMotionScale,
+    override val appLock: AppLock,
+    private val sessionManager: SessionManager,
+    private val scope: CoroutineScope,
 ) : PikoPlatform {
     override val appVersion: String = BuildConfig.VERSION_NAME
 
@@ -119,6 +129,18 @@ class AndroidPikoPlatform(
     }
 
     override val supportsBlur: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    override val multiWindowPlayer: PlatformToggle = object : PlatformToggle {
+        override val enabled: StateFlow<Boolean> = sessionManager.multiWindowPlayerFlow.stateIn(
+            scope,
+            SharingStarted.Eagerly,
+            MultiWindowSupport.defaultEnabled(context),
+        )
+
+        override fun set(enabled: Boolean) {
+            scope.launch { sessionManager.setMultiWindowPlayer(enabled) }
+        }
+    }
 
     override fun openUrl(url: String) {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))

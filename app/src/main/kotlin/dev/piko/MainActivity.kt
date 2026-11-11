@@ -13,6 +13,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -47,13 +48,16 @@ import dev.piko.ui.PikoServices
 import dev.piko.ui.hasBackgroundWork
 import dev.piko.ui.fileWorkChanges
 import dev.piko.ui.VideoPlayerHost
+import dev.piko.ui.navigation.Screen
 import dev.piko.ui.screens.player.MediampVideoPlayerScreen
 import dev.piko.ui.theme.appearanceFlow
 import dev.piko.ui.theme.isDark
 import dev.piko.platform.installMotionScale
 import dev.piko.util.PikPakAppLink
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -70,10 +74,14 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : ComponentActivity() {
 
+    private var recentsMaskEnabled = true
+    private var recentsMaskJob: Job? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val systemLocale = android.content.res.Resources.getSystem().configuration.locales.get(0) ?: Locale.getDefault()
         PikoLocale.bindSystemLocale(systemLocale.toLanguageTag())
         super.onCreate(savedInstanceState)
+        installRecentsPrivacyMask()
         val initialLanguage = runBlocking { PikoApplication.instance.sessionManager.appLanguageFlow.first() }
         applyLanguage(PikoLocale.resolve(initialLanguage))
         PikoLocale.apply(initialLanguage)
@@ -86,22 +94,34 @@ class MainActivity : ComponentActivity() {
         val appearanceFlow = app.sessionManager.appearanceFlow(app.platform.supportsDynamicColor)
         // 同步读一次再 setContent：异步给初值的话，首帧按系统取色画出来，随即跳成用户选的主题
         val initialAppearance = runBlocking { appearanceFlow.first() }
-        // 播放器仍在 app 模块，以应用内覆盖层的方式交给共享主界面
-        val videoPlayer = VideoPlayerHost.InApp { screen, onClose ->
-            MediampVideoPlayerScreen(
-                initialFileId = screen.fileId,
-                initialFileName = screen.fileName,
-                initialLocalPath = screen.localPath,
-                initialStartMillis = screen.startMillis,
-                onBackClick = onClose,
-            )
-        }
-
         // 设置里的「减少动画」经这一份缩放生效，见 PikoMotionScale
         installMotionScale(app.platform.motionScale, lifecycle)
         setContent {
             val appearance by appearanceFlow.collectAsStateWithLifecycle(initialAppearance)
             val darkTheme = appearance.isDark()
+            // Quest 等设备默认开多窗口：每个视频一个独立系统任务，系统把它显示成可拖拽的面板。
+            // 手机上默认关，仍是应用内压栈播放；开关改了立刻生效，下一次点视频就换宿主。
+            val multiWindow by (app.platform.multiWindowPlayer?.enabled ?: emptyFlow())
+                .collectAsStateWithLifecycle(initialValue = false)
+            val videoPlayer = remember(multiWindow) {
+                val content: @Composable (Screen.VideoPlayer, () -> Unit) -> Unit = { screen, onClose ->
+                    MediampVideoPlayerScreen(
+                        initialFileId = screen.fileId,
+                        initialFileName = screen.fileName,
+                        initialLocalPath = screen.localPath,
+                        initialStartMillis = screen.startMillis,
+                        onBackClick = onClose,
+                    )
+                }
+                if (multiWindow) {
+                    VideoPlayerHost.Detached(
+                        open = { request -> MultiWindowPlayerCoordinator.open(this, request) },
+                        inAppContent = content,
+                    )
+                } else {
+                    VideoPlayerHost.InApp(content)
+                }
+            }
             // 系统栏图标的深浅默认看系统的夜间模式。应用强制浅色而系统是深色时，状态栏会是
             // 浅色图标压在浅色背景上，所以改为按应用实际的深浅判断。导航栏遮罩沿用库的默认值
             DisposableEffect(darkTheme) {
@@ -137,6 +157,22 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         PikoApplication.instance.restoreTransportMemoryBudget()
+        // API 33 起由 setRecentsScreenshotEnabled 常驻生效，旧版本只在后台加安全标志
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && recentsMaskEnabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    override fun onDestroy() {
+        recentsMaskJob?.cancel()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -175,6 +211,32 @@ class MainActivity : ComponentActivity() {
         if (!link.isNullOrBlank()) {
             // 名为磁力，实际收的是添加链接面板的输入：面板自己分辨磁力、下载地址与分享链接
             PikoApplication.instance.instantMagnetRepository.onIncomingMagnet(link)
+        }
+    }
+
+    /**
+     * 最近任务里的隐私遮罩。Android 13 起系统提供只影响任务快照的开关；更早的版本没有这个开关，
+     * 退到后台时加 FLAG_SECURE，回到前台立即清除，避免影响应用内截图。
+     */
+    private fun installRecentsPrivacyMask() {
+        val appLock = PikoApplication.instance.appLock
+        recentsMaskEnabled = appLock.recentsMaskEnabled.value
+        applyRecentsScreenshotSetting()
+        recentsMaskJob = PikoApplication.instance.appScope.launch {
+            appLock.recentsMaskEnabled.collect { enabled ->
+                withContext(Dispatchers.Main) {
+                    recentsMaskEnabled = enabled
+                    applyRecentsScreenshotSetting()
+                }
+            }
+        }
+    }
+
+    private fun applyRecentsScreenshotSetting() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setRecentsScreenshotEnabled(!recentsMaskEnabled)
+        } else if (!recentsMaskEnabled) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
 

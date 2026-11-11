@@ -150,11 +150,20 @@ sealed interface VideoPlayerHost {
         val content: @Composable (request: Screen.VideoPlayer, onClose: () -> Unit) -> Unit,
     ) : VideoPlayerHost
 
+    /**
+     * 独立窗口播放。桌面端每个请求开一个窗口；Android 在 Quest 这类多窗口设备上
+     * 把每个视频放进独立任务面板（最多 3 个）。
+     *
+     * [open] 返回 false 表示这次没开成独立窗口（例如用户关掉了多窗口播放），
+     * 主界面随即把视频压进应用内播放页，由 [inAppContent] 渲染。
+     * 信息流弹窗只有桌面端有，Android 传 null，界面据此不显示「弹出信息流」。
+     */
     class Detached(
-        val open: (VideoPlayerRequest) -> Unit,
-        val openClipFeed: (ClipFeedLinks) -> Unit,
-        val isClipFeedOpen: () -> Boolean,
-        val closeClipFeed: () -> Unit,
+        val open: (VideoPlayerRequest) -> Boolean,
+        val openClipFeed: ((ClipFeedLinks) -> Unit)? = null,
+        val isClipFeedOpen: (() -> Boolean)? = null,
+        val closeClipFeed: (() -> Unit)? = null,
+        val inAppContent: (@Composable (request: Screen.VideoPlayer, onClose: () -> Unit) -> Unit)? = null,
     ) : VideoPlayerHost
 }
 
@@ -340,13 +349,17 @@ fun PikoMainScaffold(
         val localPath = localTask?.destinationPath?.takeIf(localFiles::exists)
         when (videoPlayer) {
             is VideoPlayerHost.InApp -> backStack.add(Screen.VideoPlayer(file.id, file.name, localPath, startMillis))
-            is VideoPlayerHost.Detached -> videoPlayer.open(VideoPlayerRequest(file.id, file.name, localPath, playlist, startMillis))
+            is VideoPlayerHost.Detached -> if (!videoPlayer.open(VideoPlayerRequest(file.id, file.name, localPath, playlist, startMillis))) {
+                backStack.add(Screen.VideoPlayer(file.id, file.name, localPath, startMillis))
+            }
         }
     }
     fun playLocal(fileId: String, fileName: String, localPath: String?) {
         when (videoPlayer) {
             is VideoPlayerHost.InApp -> backStack.add(Screen.VideoPlayer(fileId, fileName, localPath))
-            is VideoPlayerHost.Detached -> videoPlayer.open(VideoPlayerRequest(fileId, fileName, localPath))
+            is VideoPlayerHost.Detached -> if (!videoPlayer.open(VideoPlayerRequest(fileId, fileName, localPath))) {
+                backStack.add(Screen.VideoPlayer(fileId, fileName, localPath))
+            }
         }
     }
 
@@ -498,15 +511,17 @@ fun PikoMainScaffold(
         }
     }
     fun popOutFeed() {
-        detachedHost?.openClipFeed(
+        detachedHost?.openClipFeed?.invoke(
             ClipFeedLinks(
                 playFull = ::playFromFeed,
                 locate = ::locateFromFeed,
-                dock = { detachedHost.closeClipFeed() },
+                dock = { detachedHost.closeClipFeed?.invoke() },
                 close = ::requestCloseFeed,
             ),
         )
     }
+    // 只有桌面端的信息流能弹成独立窗口；Android 多窗口只接管播放器
+    val popOutFeedAction: (() -> Unit)? = if (detachedHost?.openClipFeed != null) ::popOutFeed else null
     fun resumeFeed() {
         val detour = workspaceModel.feed.resume() ?: return
         fileWorkspace.returnTo(detour)
@@ -639,7 +654,7 @@ fun PikoMainScaffold(
                         onPlayFromFeed = ::playFromFeed,
                         onLocateFromFeed = ::locateFromFeed,
                         onToggleFullscreen = if (panelFits) ({ workspaceModel.feed.fullscreen = !workspaceModel.feed.fullscreen }) else null,
-                        onPopOut = detachedHost?.let { ::popOutFeed },
+                        onPopOut = popOutFeedAction,
                     )
                 }
             },
@@ -909,7 +924,7 @@ fun PikoMainScaffold(
                                             onPlayFromFeed = ::playFromFeed,
                                             onLocateFromFeed = ::locateFromFeed,
                                             onToggleFeedFullscreen = if (panelFits) ({ workspaceModel.feed.fullscreen = !workspaceModel.feed.fullscreen }) else null,
-                                            onPopOutFeed = detachedHost?.let { ::popOutFeed },
+                                            onPopOutFeed = popOutFeedAction,
                                             onCreateImportFromTransfers = {
                                                 ClipboardLinkDetection.session.handled(it)
                                                 openAddLinkWithConfirm(it)
@@ -992,7 +1007,9 @@ fun PikoMainScaffold(
                                     }
                                     entry<Screen.WebDav> { WebDavScreen(onBackClick = ::popBack) }
                                     entry<Screen.VideoPlayer> { screen ->
-                                        (videoPlayer as? VideoPlayerHost.InApp)?.content?.invoke(screen, ::popBack)
+                                        val content = (videoPlayer as? VideoPlayerHost.InApp)?.content
+                                            ?: (videoPlayer as? VideoPlayerHost.Detached)?.inAppContent
+                                        content?.invoke(screen, ::popBack)
                                     }
                                 },
                             )

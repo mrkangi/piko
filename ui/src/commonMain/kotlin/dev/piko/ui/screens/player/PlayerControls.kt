@@ -566,6 +566,8 @@ internal fun PlayerBottomBar(
     /** 顺时针转 90 度；后端不能旋转时为 null，不给按钮。 */
     onRotate: (() -> Unit)?,
     onToggleFullscreen: () -> Unit,
+    /** 独立窗口的面板尺寸由系统窗口管理器决定，不给全屏键。 */
+    showFullscreenToggle: Boolean = true,
     modifier: Modifier = Modifier,
     onScrubbingChange: (Boolean) -> Unit = {},
     /** 当前音量，0 即静音；为 null 时不给音量键与滑块（移动端，或平台没有可调的音量）。 */
@@ -671,11 +673,13 @@ internal fun PlayerBottomBar(
             if (onRotate != null) {
                 PlayerIconButton(icon = Icons.Filled.Rotate90DegreesCw, label = tr("顺时针旋转 90 度", "Rotate 90° clockwise", "右に90度回転", "시계 방향으로 90도 회전", "順時針旋轉 90 度"), onClick = onRotate)
             }
-            PlayerIconButton(
-                icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                label = if (isFullscreen) tr("退出全屏", "Exit fullscreen", "全画面を終了", "전체 화면 종료", "結束全螢幕") else tr("全屏", "Fullscreen", "全画面", "전체 화면", "全螢幕"),
-                onClick = onToggleFullscreen,
-            )
+            if (showFullscreenToggle) {
+                PlayerIconButton(
+                    icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                    label = if (isFullscreen) tr("退出全屏", "Exit fullscreen", "全画面を終了", "전체 화면 종료", "結束全螢幕") else tr("全屏", "Fullscreen", "全画面", "전체 화면", "全螢幕"),
+                    onClick = onToggleFullscreen,
+                )
+            }
         }
     }
 }

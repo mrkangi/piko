@@ -126,6 +126,49 @@
             </intent-filter>
         </activity>
 
+        <!-- 独立多窗口播放：每个槽位单独一个 taskAffinity，系统（Quest 的 Horizon OS、
+             Android 自由窗口）会把它们显示成可以各自拖动缩放的窗口。固定 3 个槽位即上限，
+             第 4 个视频复用最早失去焦点的槽位，不新建任务。 -->
+        <activity
+            android:name=".PlayerSlot0Activity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="${applicationId}.player.slot0"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboardHidden">
+            <layout
+                android:defaultWidth="1024dp"
+                android:defaultHeight="576dp"
+                android:minWidth="480dp"
+                android:minHeight="270dp" />
+        </activity>
+        <activity
+            android:name=".PlayerSlot1Activity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="${applicationId}.player.slot1"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboardHidden">
+            <layout
+                android:defaultWidth="1024dp"
+                android:defaultHeight="576dp"
+                android:minWidth="480dp"
+                android:minHeight="270dp" />
+        </activity>
+        <activity
+            android:name=".PlayerSlot2Activity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="${applicationId}.player.slot2"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboardHidden">
+            <layout
+                android:defaultWidth="1024dp"
+                android:defaultHeight="576dp"
+                android:minWidth="480dp"
+                android:minHeight="270dp" />
+        </activity>
+
         <service
             android:name=".download.PikoDownloadService"
             android:exported="false"

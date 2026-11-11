@@ -86,6 +86,10 @@ fun MediampVideoPlayerScreen(
     initialStartMillis: Long? = null,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 独立窗口（Quest 多面板、自由窗口）：尺寸与位置交给系统，不再强制转屏或抢占音频焦点。 */
+    standaloneWindow: Boolean = false,
+    /** 本窗口是否持有系统媒体控制。多窗口时只有当前聚焦的窗口建通知，避免几条通知打架。 */
+    ownsSystemMediaControls: Boolean = true,
 ) {
     val app = PikoApplication.instance
     val context = LocalContext.current
@@ -103,6 +107,7 @@ fun MediampVideoPlayerScreen(
             context.applicationContext,
             hardwareDecoding = hardwareDecoding,
             compatibleHardwareDecoding = compatibleHardwareDecoding,
+            reducedCache = standaloneWindow,
         )
     }
     val state = remember(initialFileId) {
@@ -138,13 +143,15 @@ fun MediampVideoPlayerScreen(
 
     // 全屏时屏幕方向跟着片子走：横片横屏，竖片竖屏。与桌面端转画面时窗口横竖对调是同一件事
     fun enterFullscreen(landscapeVideo: Boolean) {
+        // 独立窗口的宽高由用户在空间里拖，不再动 Activity 的方向
+        if (standaloneWindow) return
         isFullscreen = true
         if (landscapeVideo) orientationController.setLandscape() else orientationController.setPortraitFullscreen()
     }
 
     fun exitFullscreen() {
         isFullscreen = false
-        orientationController.resetOrientation()
+        if (!standaloneWindow) orientationController.resetOrientation()
     }
     val brightness = rememberWindowBrightness()
     val mediaVolume = rememberMediaVolume()
@@ -230,14 +237,16 @@ fun MediampVideoPlayerScreen(
             }
             .build()
     }
-    LaunchedEffect(audioManager, audioFocusRequest, state.isPlaying, state.isImage) {
-        if (!state.isImage && state.isPlaying) {
+    // 多窗口默认混音：各窗口都不申请独占焦点，几路声音一起出，用户不想听就自己暂停或调音量。
+    // 单窗口仍按原来的方式申请焦点，蓝牙耳机按键与来电打断照旧。
+    LaunchedEffect(audioManager, audioFocusRequest, state.isPlaying, state.isImage, standaloneWindow) {
+        if (!standaloneWindow && !state.isImage && state.isPlaying) {
             runCatching { audioManager?.requestAudioFocus(audioFocusRequest) }
         }
     }
-    DisposableEffect(audioManager, audioFocusRequest) {
+    DisposableEffect(audioManager, audioFocusRequest, standaloneWindow) {
         onDispose {
-            runCatching { audioManager?.abandonAudioFocusRequest(audioFocusRequest) }
+            if (!standaloneWindow) runCatching { audioManager?.abandonAudioFocusRequest(audioFocusRequest) }
         }
     }
 
@@ -319,12 +328,21 @@ fun MediampVideoPlayerScreen(
             isActive = true
         }
     }
+    // 关闭的可能是没拿到焦点的那个窗口，别把当前持有者的通知一起取消
+    val ownsMediaControlsNow by androidx.compose.runtime.rememberUpdatedState(ownsSystemMediaControls)
     DisposableEffect(mediaSession) {
         onDispose {
-            runCatching { notificationManager.cancel(MEDIA_NOTIFICATION_ID) }
-            mediaSession.isActive = false
+            if (ownsMediaControlsNow) {
+                runCatching { notificationManager.cancel(MEDIA_NOTIFICATION_ID) }
+                mediaSession.isActive = false
+            }
             mediaSession.release()
         }
+    }
+    // 多窗口同时播放时，系统媒体会话与通知只由当前聚焦的窗口持有：
+    // 焦点换到另一个面板后，上一个窗口的交出去，下一窗口用同一条通知 ID 覆盖成自己的内容
+    LaunchedEffect(mediaSession, ownsSystemMediaControls) {
+        mediaSession.isActive = ownsSystemMediaControls
     }
     val artistLabel = remember(state.currentEntry, state.title) {
         state.currentEntry?.sectionLabel?.takeIf { it.isNotBlank() && it != state.title } ?: "Piko"
@@ -344,8 +362,8 @@ fun MediampVideoPlayerScreen(
             runCatching { notificationManager.cancel(MEDIA_NOTIFICATION_ID) }
         }
     }
-    LaunchedEffect(mediaSession, state.title, artistLabel, state.isPlaying, state.isImage) {
-        if (!state.isImage && state.title.isNotEmpty()) {
+    LaunchedEffect(mediaSession, state.title, artistLabel, state.isPlaying, state.isImage, ownsSystemMediaControls) {
+        if (ownsSystemMediaControls && !state.isImage && state.title.isNotEmpty()) {
             val hasPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                 ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             if (hasPermission) {
@@ -371,7 +389,7 @@ fun MediampVideoPlayerScreen(
             }
         }
     }
-    LaunchedEffect(mediaSession, state) {
+    LaunchedEffect(mediaSession, state, ownsSystemMediaControls) {
         snapshotFlow {
             Triple(
                 state.isPlaying,
@@ -386,7 +404,7 @@ fun MediampVideoPlayerScreen(
             val (playing, loading, posSeconds) = playInfo
             val (speed, navFlags, isImg) = extraInfo
             val (hasPrev, hasNext) = navFlags
-            if (!isImg) {
+            if (ownsSystemMediaControls && !isImg) {
                 var actions = PlaybackState.ACTION_PLAY or
                     PlaybackState.ACTION_PAUSE or
                     PlaybackState.ACTION_PLAY_PAUSE or
@@ -467,8 +485,13 @@ fun MediampVideoPlayerScreen(
                 onRestartFromBeginning = state::restartFromBeginning,
                 onBack = leave,
                 // 比例还没拿到时按横片进，与原先一律横屏全屏相同
-                onToggleFullscreen = { if (isFullscreen) exitFullscreen() else enterFullscreen(state.isLandscapeVideo != false) },
+                onToggleFullscreen = {
+                    if (!standaloneWindow) {
+                        if (isFullscreen) exitFullscreen() else enterFullscreen(state.isLandscapeVideo != false)
+                    }
+                },
                 isFullscreen = isFullscreen,
+                showFullscreenToggle = !standaloneWindow,
                 isLandscapeVideo = state.isLandscapeVideo,
                 playlist = state.playlist,
                 currentFileId = state.fileId,

@@ -101,6 +101,8 @@ fun MobilePlayerControls(
     onRestartFromBeginning: () -> Unit,
     onBack: () -> Unit,
     onToggleFullscreen: () -> Unit,
+    /** 独立窗口里窗口尺寸归系统管，不给全屏键。 */
+    showFullscreenToggle: Boolean = true,
     modifier: Modifier = Modifier,
     isFullscreen: Boolean = false,
     isLandscapeVideo: Boolean? = null,
@@ -321,7 +323,7 @@ fun MobilePlayerControls(
                     )
                 }
                 FullscreenPromptButton(
-                    visible = !isFullscreen && !ui.isLocked && !isLandscape && isLandscapeVideo == true &&
+                    visible = showFullscreenToggle && !isFullscreen && !ui.isLocked && !isLandscape && isLandscapeVideo == true &&
                         errorMessage == null && !ui.isEditingCropRegion && !isSeeking,
                     onClick = onToggleFullscreen,
                 )
@@ -421,6 +423,7 @@ fun MobilePlayerControls(
                                 onRotationChange((degrees + 90) % 360)
                             }
                         },
+                        showFullscreenToggle = showFullscreenToggle,
                         onToggleFullscreen = {
                             ui.interacted()
                             onToggleFullscreen()

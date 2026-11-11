@@ -20,11 +20,13 @@ import dev.piko.ui.platform.LocalPikoPlatform
 import dev.piko.ui.platform.PikoPlatform
 import dev.piko.ui.screens.archive.ArchiveExtractHost
 import dev.piko.ui.screens.auth.LoginScreen
+import dev.piko.ui.screens.lock.AppLockScreen
 import dev.piko.ui.screens.upload.UploadRequestHost
 import dev.piko.ui.theme.Appearance
 import dev.piko.ui.theme.LocalPikoMotion
 import dev.piko.ui.theme.PikoTheme
 import dev.piko.update.StartupUpdatePrompt
+import kotlinx.coroutines.flow.MutableStateFlow
 
 val LocalAppLanguage = staticCompositionLocalOf { AppLanguage.ZH_CN }
 
@@ -64,11 +66,20 @@ fun PikoApp(
                 val isInitializing by clientManager.isInitializing.collectAsStateWithLifecycle()
                 val addingAccount by clientManager.addingAccount.collectAsStateWithLifecycle()
                 val account = currentClient?.account
+                val appLock = platform.appLock
+                val lockedFlow = remember(appLock) { appLock?.locked ?: MutableStateFlow(false) }
+                val appLocked by lockedFlow.collectAsStateWithLifecycle(initialValue = lockedFlow.value)
+
+                // 启动恢复完成后只决定一次：恢复出账号才上锁，停在登录页说明这次是手动登录
+                LaunchedEffect(isInitializing, account, appLock) {
+                    if (!isInitializing) appLock?.onStartupRestored(account != null)
+                }
 
                 Crossfade(
                     targetState = when {
                         isInitializing -> AppState.Initializing
                         account == null || addingAccount -> AppState.Login(adding = account != null)
+                        appLocked -> AppState.Locked(account)
                         else -> AppState.Main(account)
                     },
                     animationSpec = LocalPikoMotion.current.stateCrossfade,
@@ -80,19 +91,22 @@ fun PikoApp(
                         // 登录成功后 currentClient 变为非空，根状态随之切到 Main，不需要回调。
                         // 加账号时当前账号不退出，取消即回到它
                         is AppState.Login -> LoginScreen(onCancel = if (state.adding) clientManager::cancelAddingAccount else null)
+                        is AppState.Locked -> appLock?.let { AppLockScreen(it) } ?: FullScreenLoading()
                         // 按账号区分：换号时整个主界面重建，各页的记忆状态（滚动、展开、选中）不带到另一个账号。
                         // 退出登录后 currentClient 变空，根状态自动回到 Login
                         is AppState.Main -> PikoMainScaffold(account = state.account, onLogout = {}, videoPlayer = videoPlayer)
                     }
                 }
                 // 解压的密码框放在网盘页之外：离开网盘页后，加密包仍要能问到密码
-                if (currentClient != null) {
+                if (currentClient != null && !appLocked) {
                     ArchiveExtractHost(services.archiveExtractSession)
                     UploadRequestHost(services.uploadManager, services.saveTargets.context)
                 }
                 // 放在根状态之外：登录前后切换时弹窗不跟着重建
-                platform.updater?.let { updater ->
-                    StartupUpdatePrompt(updater = updater, preferences = services.preferences)
+                if (!appLocked) {
+                    platform.updater?.let { updater ->
+                        StartupUpdatePrompt(updater = updater, preferences = services.preferences)
+                    }
                 }
             }
         }
@@ -103,6 +117,8 @@ private sealed interface AppState {
     data object Initializing : AppState
 
     data class Login(val adding: Boolean) : AppState
+
+    data class Locked(val account: String) : AppState
 
     data class Main(val account: String) : AppState
 }

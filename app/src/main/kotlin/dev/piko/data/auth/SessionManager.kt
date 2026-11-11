@@ -109,6 +109,7 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
         val HARDWARE_DECODING = booleanPreferencesKey("hardware_decoding")
         val COMPATIBLE_HARDWARE_DECODING = booleanPreferencesKey("compatible_hardware_decoding")
+        val MULTI_WINDOW_PLAYER = booleanPreferencesKey("multi_window_player")
         val PLAYBACK_MAX_HEIGHT = intPreferencesKey("playback_max_height")
         // 不沿用开发期的 download_max_height：那时它只是对话框的默认选中，存过的值换到新语义就成了「不再询问」
         val DOWNLOAD_MAX_HEIGHT = intPreferencesKey("download_default_max_height")
@@ -155,6 +156,9 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val IGNORED_UPDATE_VERSION = stringPreferencesKey("ignored_update_version")
         val METATUBE_URL = stringPreferencesKey("metatube_url")
         val METATUBE_TOKEN = stringPreferencesKey("metatube_token")
+        // 设备本地的应用锁，不跨设备同步，也不进入 PikoSettingsSync
+        val APP_PIN_HASH = stringPreferencesKey("app_pin_hash")
+        val RECENTS_MASK_ENABLED = booleanPreferencesKey("recents_mask_enabled")
     }
 
     /**
@@ -203,6 +207,26 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         }
     }
 
+    /** 应用锁 PIN 的 PBKDF2 摘要；null 表示没有开启应用锁。仅 Android 使用。 */
+    val appPinHashFlow: Flow<String?> = preference { it[PreferencesKeys.APP_PIN_HASH] }
+
+    suspend fun appPinHash(): String? = context.dataStore.data.first()[PreferencesKeys.APP_PIN_HASH]
+
+    suspend fun setAppPinHash(stored: String?) {
+        context.dataStore.edit { preferences ->
+            if (stored == null) preferences.remove(PreferencesKeys.APP_PIN_HASH) else preferences[PreferencesKeys.APP_PIN_HASH] = stored
+        }
+    }
+
+    /** 多任务列表是否隐藏应用画面，默认开启。仅 Android 使用。 */
+    val recentsMaskFlow: Flow<Boolean> = preference { it[PreferencesKeys.RECENTS_MASK_ENABLED] ?: true }
+
+    suspend fun setRecentsMaskEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.RECENTS_MASK_ENABLED] = enabled
+        }
+    }
+
     override val autoCheckUpdatesFlow: Flow<Boolean> = preference { it[PreferencesKeys.AUTO_CHECK_UPDATES] ?: true }
 
     override suspend fun setAutoCheckUpdates(enabled: Boolean) {
@@ -241,6 +265,20 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     override suspend fun setCompatibleHardwareDecoding(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.COMPATIBLE_HARDWARE_DECODING] = enabled
+        }
+    }
+
+    /**
+     * 每个视频开一个独立窗口，最多 3 个。默认在 Quest 这类头显上打开，其余设备默认应用内播放。
+     * 每台设备各自的，不同步：手机与头显的窗口能力不一样。
+     */
+    val multiWindowPlayerFlow: Flow<Boolean> = preference {
+        it[PreferencesKeys.MULTI_WINDOW_PLAYER] ?: dev.piko.platform.MultiWindowSupport.defaultEnabled(context)
+    }
+
+    suspend fun setMultiWindowPlayer(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.MULTI_WINDOW_PLAYER] = enabled
         }
     }
 

@@ -46,6 +46,12 @@ interface PikoPlatform {
     /** 当前设备的登录启动能力；开发启动器和不支持的平台不提供。 */
     val launchAtStartup: LaunchAtStartup? get() = null
 
+    /**
+     * 播放时每个视频开一个独立窗口（最多 3 个）。Android 在 Quest 这类多窗口设备上提供；
+     * 桌面端本来就是独立窗口，不需要这个开关。
+     */
+    val multiWindowPlayer: PlatformToggle? get() = null
+
     /** 仅在系统托盘可用时提供。 */
     val closeToTray: PlatformToggle? get() = null
 
@@ -119,6 +125,12 @@ interface PikoPlatform {
 
     /** 后台不受限运行（Android 电池优化白名单），桌面端为 null。 */
     val backgroundTransferAccess: BackgroundTransferAccess? get() = null
+
+    /**
+     * 设备本地的应用锁与多任务遮罩。桌面端没有这项能力，保持为 null；设置页据此隐藏入口。
+     * PIN 与遮罩开关都只存在本机，不随账号或设置同步。
+     */
+    val appLock: AppLock? get() = null
 
     /** 当前是否尚未在系统「默认打开」中添加 PikPak 分享与跳转域名，用于「我的」页提醒卡片。 */
     suspend fun needsAppLinkPrompt(): Boolean = false
@@ -276,6 +288,34 @@ interface LandscapeLock {
 interface BackgroundTransferAccess {
     fun isUnrestricted(): Boolean
     fun requestUnrestricted()
+}
+
+/** [AppLock.verifyPin] 的结果。等待中的秒数用于锁屏显示倒计时，不影响已解锁的会话。 */
+sealed interface PinVerification {
+    data object Verified : PinVerification
+    data object Incorrect : PinVerification
+    data class Blocked(val secondsRemaining: Int) : PinVerification
+}
+
+/**
+ * 应用锁。锁定的含义是：冷启动恢复上次登录的账号后，必须先输入 4 位 PIN 才能进入主界面。
+ * 同一进程内手动登录、以及切到后台再回来都不重新上锁。
+ */
+interface AppLock {
+    val configured: StateFlow<Boolean>
+    val locked: StateFlow<Boolean>
+    val recentsMaskEnabled: StateFlow<Boolean>
+
+    suspend fun setPin(pin: String)
+    suspend fun clearPin()
+    suspend fun verifyPin(pin: String): PinVerification
+    suspend fun setRecentsMaskEnabled(enabled: Boolean)
+
+    /**
+     * 启动恢复结束时调用一次。[hasAccount] 为 true 时按 PIN 配置上锁；
+     * 冷启动停在登录页说明本次是手动登录，后续进入主界面不再补锁。
+     */
+    fun onStartupRestored(hasAccount: Boolean)
 }
 
 fun interface ExternalVideoPlayer {
