@@ -33,6 +33,8 @@ Piko 是 PikPak 的第三方跨平台客户端。Android、Windows、macOS 与 L
 ./gradlew :desktopApp:createReleaseDistributable  # 构建桌面 Release 镜像（ProGuard + AOT 训练），暴露 keep 规则遗漏
 gh workflow run test.yml -f desktop=true          # 手动触发全量 CI 测试（含 Windows、macOS、Linux 安装与更新冒烟）
 gh workflow run release.yml -f version=9.9.9      # 发版演练：完整执行测试、构建与产物汇总，不创建 Release
+git tag test-20261111-vr && git push origin test-20261111-vr  # 日常 test 包：四平台打包并自动建 Pre-release
+gh workflow run build.yml -f version=9.9.9 -f suffix=vr        # 只出产物、不建 Release，产物在 Actions Artifacts
 ```
 
 `./gradlew :desktopApp:run` 直接从 `build/classes` 加载类文件；桌面开发版运行期间若重新编译其已加载的模块，运行中的进程会在下一次类加载时抛出 `NoClassDefFoundError`。重新编译前须先终止桌面开发版进程，编译完成后可在后台重新启动 `:desktopApp:run`；关闭用户系统中已安装的正式版 Piko 前仍须先征得用户确认。
@@ -40,6 +42,8 @@ gh workflow run release.yml -f version=9.9.9      # 发版演练：完整执行�
 修改 `shared` 或 `ui` 后必须同时执行 `:app:compileDebugKotlin` 与 `:desktopApp:compileKotlinDesktop` 验证双端编译：`ui` 在桌面端与 Android 端链接的 Material 3 版本不同（详见 `desktopApp/AGENTS.md`），同一处 API 调用可能仅在其中一端编译失败。
 
 当前 Orca 开发容器的 JDK/SDK 路径、Gradle 镜像、pikpak-kotlin 复合构建以及近期远程下载/应用锁改动踩过的坑，统一记录在 `docs/development/agent-pitfalls.md`；换机器或升级工具链后先核对该文件。
+
+正式发版、test 包、手动构建、产物命名以及 Actions 422 的处置方式见 `docs/development/packaging.md`。
 
 应用版本号读取环境变量 `PIKO_VERSION_NAME` 与 `PIKO_VERSION_CODE`，本地未设置时自动回退至默认值，无需额外配置。
 
