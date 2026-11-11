@@ -2,9 +2,11 @@ package dev.piko.ui.screens.player
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,14 +15,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalHapticFeedback
 import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.hypot
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemGestures
@@ -28,6 +36,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.input.pointer.PointerEventPass
 import kotlin.math.PI
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * 竖滑手势与上下方向键调节的一路电平，取值 0 到 1。由平台实现：Android 的亮度是窗口属性、
@@ -110,6 +120,8 @@ internal fun PlayerGestureLayer(
     val readVrFov by rememberUpdatedState(vrFovDegrees)
     val panVr by rememberUpdatedState(onVrPan)
     val zoomVr by rememberUpdatedState(onVrZoom)
+    val flingScope = rememberCoroutineScope()
+    var vrFlingJob by remember { mutableStateOf<Job?>(null) }
 
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
     var dragTotal by remember { mutableStateOf(Offset.Zero) }
@@ -212,16 +224,83 @@ internal fun PlayerGestureLayer(
             }
             // VR 视角：拖动画面转视角，双指捏合缩放。位移换算成角度与画面宽度的比例，
             // 拉近时同样的手指数走得更细，拉远时一转就是一大片
-            .pointerInput(vrModeEnabled) {
-                if (!vrModeEnabled) return@pointerInput
-                detectTransformGestures { _, pan, zoom, _ ->
-                    if (boostingNow) return@detectTransformGestures
-                    if (pan != Offset.Zero) {
-                        val width = size.width.toFloat().coerceAtLeast(1f)
-                        val fovRadians = (readVrFov() * PI / 180.0).toFloat()
-                        panVr(pan.x / width * fovRadians, pan.y / width * fovRadians)
+            .pointerInput(isLocked, vrModeEnabled) {
+                if (isLocked || !vrModeEnabled) {
+                    vrFlingJob?.cancel()
+                    return@pointerInput
+                }
+                awaitEachGesture {
+                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                    vrFlingJob?.cancel()
+                    if (pressX < edgeLeft || pressX > size.width - edgeRight) return@awaitEachGesture
+                    val velocityTracker = VelocityTracker()
+                    velocityTracker.addPosition(firstDown.uptimeMillis, firstDown.position)
+                    var pastSlop = false
+                    var panMotion = Offset.Zero
+                    var zoomMotion = 1f
+                    var hadMultiTouch = false
+                    val touchSlop = viewConfiguration.touchSlop
+
+                    do {
+                        val event = awaitPointerEvent()
+                        if (boostingNow) break
+                        val pressedCount = event.changes.count { it.pressed }
+                        if (pressedCount >= 2) hadMultiTouch = true
+                        if (pressedCount == 0) break
+
+                        val zoomChange = event.calculateZoom()
+                        val panChange = event.calculatePan()
+                        if (!pastSlop) {
+                            zoomMotion *= zoomChange
+                            panMotion += panChange
+                            val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                            val zoomDistance = abs(1f - zoomMotion) * centroidSize
+                            if (pressedCount >= 2 || zoomDistance > touchSlop || panMotion.getDistance() > touchSlop) {
+                                pastSlop = true
+                            }
+                        }
+                        if (pastSlop) {
+                            if (panChange != Offset.Zero) {
+                                val width = size.width.toFloat().coerceAtLeast(1f)
+                                val fovRadians = (readVrFov() * PI / 180.0).toFloat()
+                                panVr(panChange.x / width * fovRadians, panChange.y / width * fovRadians)
+                            }
+                            if (zoomChange != 1f) zoomVr(zoomChange)
+                            event.changes.forEach { change ->
+                                if (pressedCount == 1 && !hadMultiTouch) {
+                                    velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                }
+                                if (change.positionChanged()) change.consume()
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+
+                    // 借鉴 MD360Player4Android 的 MDTouchHelper 惯性阻尼：单指快速拨动松手后平滑滑行，再按即停
+                    if (pastSlop && !hadMultiTouch && !boostingNow) {
+                        val velocity = velocityTracker.calculateVelocity()
+                        val speedPxPerSec = hypot(velocity.x, velocity.y)
+                        if (speedPxPerSec >= VR_FLING_MIN_VELOCITY_PX_PER_SEC) {
+                            val width = size.width.toFloat().coerceAtLeast(1f)
+                            var vx = velocity.x.coerceIn(-VR_FLING_MAX_VELOCITY_PX_PER_SEC, VR_FLING_MAX_VELOCITY_PX_PER_SEC)
+                            var vy = velocity.y.coerceIn(-VR_FLING_MAX_VELOCITY_PX_PER_SEC, VR_FLING_MAX_VELOCITY_PX_PER_SEC)
+                            vrFlingJob = flingScope.launch {
+                                var lastNanos = 0L
+                                while (hypot(vx, vy) > VR_FLING_STOP_VELOCITY_PX_PER_SEC) {
+                                    val dtSeconds = withFrameNanos { now ->
+                                        val dt = if (lastNanos == 0L) 0f else ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                                        lastNanos = now
+                                        dt
+                                    }
+                                    if (dtSeconds <= 0f) continue
+                                    val fovRadians = (readVrFov() * PI / 180.0).toFloat()
+                                    panVr((vx * dtSeconds) / width * fovRadians, (vy * dtSeconds) / width * fovRadians)
+                                    val decay = exp(-VR_FLING_DAMPING * dtSeconds)
+                                    vx *= decay
+                                    vy *= decay
+                                }
+                            }
+                        }
                     }
-                    if (zoom != 1f) zoomVr(zoom)
                 }
             }
             .pointerInput(isLocked, vrModeEnabled) {
@@ -319,3 +398,9 @@ private val SEEK_CANCEL_DISTANCE = 144.dp
 
 // 竖向划过手势层高度的 75% 对应亮度或音量的全量程
 private const val ADJUST_TRAVEL_RATIO = 0.75f
+
+// VR 视角惯性滑行参数（参考 MD360Player4Android MDFlingConfig 的阻尼手感）
+private const val VR_FLING_MIN_VELOCITY_PX_PER_SEC = 180f
+private const val VR_FLING_MAX_VELOCITY_PX_PER_SEC = 6_000f
+private const val VR_FLING_STOP_VELOCITY_PX_PER_SEC = 25f
+private const val VR_FLING_DAMPING = 7.5f

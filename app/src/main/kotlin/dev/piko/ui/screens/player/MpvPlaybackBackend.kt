@@ -18,7 +18,7 @@ import dev.piko.shared.log.PikoLog
 import dev.piko.shared.media.player.ExternalSubtitle
 import dev.piko.shared.media.player.MPV_SUBTITLE_LANGUAGES
 import dev.piko.shared.media.player.MediaTrack
-import dev.piko.shared.media.player.MpvVrShader
+import dev.piko.shared.media.player.MpvVrShaderSession
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
@@ -92,8 +92,8 @@ internal class MpvPlaybackBackend(
     override val volume: Float get() = currentVolume
 
     // VR 着色器在 config-dir 下，init 里写好；写不进去就不给入口
-    @Volatile private var vrShaderPath: String? = null
-    override val supportsVrMode: Boolean get() = !preview && !headless && vrShaderPath != null
+    @Volatile private var vrShaderSession: MpvVrShaderSession? = null
+    override val supportsVrMode: Boolean get() = !preview && !headless && vrShaderSession?.isAvailable == true
     private var currentVrMode by mutableStateOf(VrModeState())
     override val vrMode: VrModeState get() = currentVrMode
     // 以下三个只在 mpv-calls 线程上读写
@@ -166,13 +166,14 @@ internal class MpvPlaybackBackend(
 
     init {
         val configDir = MpvConfig.prepare(context)
-        vrShaderPath = runCatching { MpvVrShader.writeTo(configDir).absolutePath }.getOrNull()
+        vrShaderSession = if (preview || headless) null else MpvVrShaderSession(configDir)
         // 读取 config-dir 下的 fonts.conf 需要 config=yes；目录里没有 mpv.conf，不会读到别的配置
         mpv.setOptionString("config", "yes")
         mpv.setOptionString("config-dir", configDir.absolutePath)
         mpv.setOptionString("vo", if (headless) "null" else VIDEO_OUTPUT)
         mpv.setOptionString("gpu-context", "android")
         mpv.setOptionString("opengl-es", "yes")
+        mpv.setOptionString("gpu-dumb-mode", "no")
         // 零拷贝的 mediacodec 走 AImageReader 与 vo=gpu 互通；不支持的编码（wmv3、rv40 等）
         // 自动落回软解，这正是换 mpv 的目的
         mpv.setOptionString("hwdec", hwdecPropertyOf(currentDecodeMode))
@@ -442,26 +443,23 @@ internal class MpvPlaybackBackend(
     /** 只在 mpv-calls 线程上调用。 */
     private fun applyVrMode(mode: VrModeState) {
         if (destroyed || released) return
-        val path = vrShaderPath ?: return
+        val session = vrShaderSession ?: return
         if (mode.enabled) {
+            val path = session.writeNext(mode) ?: return
             // 透视投影按窗口的实际宽高比算，画面要铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉
             mpv.setPropertyString("keepaspect", "no")
             mpv.setPropertyDouble("panscan", 0.0)
             mpv.setPropertyDouble("video-zoom", 0.0)
             mpv.setPropertyDouble("video-pan-x", 0.0)
             mpv.setPropertyDouble("video-pan-y", 0.0)
-            // 先写参数再挂着色器：挂上的那一刻就按当前视角取景，不会闪一帧默认朝向
-            mpv.setPropertyString("glsl-shader-opts", MpvVrShader.optionsOf(mode))
-            if (!vrShaderLoaded) {
-                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "append", path))
-                vrShaderLoaded = true
-            }
+            mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "set", path))
+            vrShaderLoaded = true
         } else {
             if (vrShaderLoaded) {
-                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "remove", path))
+                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "clr", ""))
                 vrShaderLoaded = false
             }
-            mpv.setPropertyString("glsl-shader-opts", "")
+            session.clear()
             if (currentAspectRatio == PlayerAspectRatio.RegionCrop) {
                 currentCropRegion?.let(::applyRegionCropOnMpv)
             } else {
@@ -711,6 +709,7 @@ internal class MpvPlaybackBackend(
             try {
                 destroyed = true
                 mpv.destroy()
+                vrShaderSession?.clear()
             } finally {
                 destroyCompleted.complete(Unit)
             }

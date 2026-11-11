@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Subtitles
@@ -155,6 +156,7 @@ import java.math.RoundingMode
 import java.util.Locale
 import kotlin.math.abs
 import dev.piko.data.auth.PlayerGestureDefaults
+import dev.piko.shared.media.player.VrModeState
 import kotlin.math.roundToInt
 
 /**
@@ -565,6 +567,10 @@ internal fun PlayerBottomBar(
     onEpisodesClick: () -> Unit,
     /** 顺时针转 90 度；后端不能旋转时为 null，不给按钮。 */
     onRotate: (() -> Unit)?,
+    /** VR 视角；后端不支持时为 null，整枚快捷按钮隐藏。 */
+    vrMode: VrModeState? = null,
+    /** 底栏一键开关 VR。 */
+    onVrToggle: (() -> Unit)? = null,
     onToggleFullscreen: () -> Unit,
     /** 独立窗口的面板尺寸由系统窗口管理器决定，不给全屏键。 */
     showFullscreenToggle: Boolean = true,
@@ -667,6 +673,16 @@ internal fun PlayerBottomBar(
                 } else {
                     PlayerChipButton(text = tr("选集", "Playlist", "再生リスト", "재생 목록", "選集"), icon = Icons.Outlined.VideoLibrary, onClick = onEpisodesClick)
                 }
+            }
+            // VR 原先只藏在播放设置里；看 VR 片时这是最常用的开关，放到拇指够得到的底栏。
+            // 开启后按钮高亮，再点一次退出，和底部「退出 VR」胶囊功能一致。
+            if (vrMode != null && onVrToggle != null) {
+                PlayerIconButton(
+                    icon = Icons.Filled.ViewInAr,
+                    label = if (vrMode.enabled) tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR") else tr("开启 VR 视角", "Turn on VR view", "VR ビューをオン", "VR 시점 켜기", "開啟 VR 視角"),
+                    onClick = onVrToggle,
+                    active = vrMode.enabled,
+                )
             }
             // 一次转 90 度，与 R 键相同。原先在播放设置里列四个角度，要转画面得先开面板，
             // 桌面上转了窗口还跟着对调，这一步该是顺手就点的
@@ -1198,9 +1214,9 @@ internal fun playerContainerColor(): Color =
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun playerIconButtonColors(): IconButtonColors = IconButtonDefaults.filledTonalIconButtonColors(
-    containerColor = playerContainerColor(),
-    contentColor = MaterialTheme.colorScheme.onSurface,
+private fun playerIconButtonColors(active: Boolean = false): IconButtonColors = IconButtonDefaults.filledTonalIconButtonColors(
+    containerColor = if (active) MaterialTheme.colorScheme.primary else playerContainerColor(),
+    contentColor = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
     disabledContainerColor = playerContainerColor().copy(alpha = CONTAINER_ALPHA / 2),
     disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = DISABLED_CONTENT_ALPHA),
 )
@@ -1219,6 +1235,8 @@ internal fun PlayerIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** 开关类按钮的开启态：换成填充色，屏幕上能一眼看出 VR 正在生效。 */
+    active: Boolean = false,
     containerSize: DpSize? = null,
     iconSize: Dp = 24.dp,
     shapes: IconButtonShapes = IconButtonDefaults.shapes(),
@@ -1237,7 +1255,7 @@ internal fun PlayerIconButton(
         FilledTonalIconButton(
             onClick = onClick,
             shapes = shapes,
-            colors = playerIconButtonColors(),
+            colors = playerIconButtonColors(active),
             enabled = enabled,
             modifier = (if (containerSize != null) Modifier.size(containerSize) else Modifier).handCursor(enabled),
         ) {

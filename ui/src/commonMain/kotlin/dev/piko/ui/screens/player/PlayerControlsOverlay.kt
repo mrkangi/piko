@@ -466,6 +466,13 @@ fun MobilePlayerControls(
                             onSpeedChange(it)
                         },
                         onEpisodesClick = { ui.openSheet = PlayerSheet.Episodes },
+                        vrMode = vr,
+                        onVrToggle = vr?.let { current ->
+                            {
+                                ui.interacted()
+                                onVrModeChange(current.toggled(title))
+                            }
+                        },
                         onRotate = rotationDegrees?.let { degrees ->
                             {
                                 ui.interacted()
