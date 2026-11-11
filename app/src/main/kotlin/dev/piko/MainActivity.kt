@@ -14,7 +14,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -36,6 +35,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.fragment.app.FragmentActivity
 import dev.piko.ui.adaptive.isHeightCompact
 import dev.piko.ui.screens.player.findActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,7 +72,7 @@ import kotlinx.coroutines.withContext
  * - Android Lifecycle: android-docs-mirror/pages/develop/ui/compose/lifecycle.md
  * - Material 3 Motion: m3-material-mirror/pages/styles/motion.md
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private var recentsMaskEnabled = true
     private var recentsMaskJob: Job? = null

@@ -75,12 +75,20 @@ internal fun TaskKindFilter(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
     compact: Boolean = false,
+    selectedTab: TransferTab = TransferTab.Kind(state.filter),
+    remoteCount: Int = 0,
+    onSelectTab: (TransferTab) -> Unit = { tab ->
+        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
+    },
 ) {
-    val kinds = TransferKind.entries
+    val tabs = transferTabs
     if (compact) {
         CompactTaskTabStrip(
             state = state,
-            kinds = kinds,
+            tabs = tabs,
+            selectedTab = selectedTab,
+            remoteCount = remoteCount,
+            onSelectTab = onSelectTab,
             modifier = modifier.padding(contentPadding),
         )
         return
@@ -92,20 +100,20 @@ internal fun TaskKindFilter(
         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        kinds.forEachIndexed { index, kind ->
-            val selected = state.filter == kind
-            val count = state.counts[kind] ?: 0
-            val label = if (count > 0) "${kind.label} $count" else kind.label
+        tabs.forEachIndexed { index, tab ->
+            val selected = tab == selectedTab
+            val count = tab.count(state, remoteCount)
+            val label = if (count > 0) "${tab.label} $count" else tab.label
             TonalToggleButton(
                 checked = selected,
-                onCheckedChange = { if (!selected) state.changeFilter(kind) },
-                shapes = connectedToggleShapes(index, kinds.size),
+                onCheckedChange = { if (!selected) onSelectTab(tab) },
+                shapes = connectedToggleShapes(index, tabs.size),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                 modifier = Modifier.heightIn(min = 36.dp),
             ) {
                 if (selected) {
                     Icon(
-                        imageVector = kind.icon(true),
+                        imageVector = tab.icon(true),
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
@@ -126,7 +134,10 @@ internal fun TaskKindFilter(
 @Composable
 private fun CompactTaskTabStrip(
     state: TransfersState,
-    kinds: List<TransferKind>,
+    tabs: List<TransferTab>,
+    selectedTab: TransferTab,
+    remoteCount: Int,
+    onSelectTab: (TransferTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -138,9 +149,9 @@ private fun CompactTaskTabStrip(
                 .padding(horizontal = 8.dp)
                 .selectableGroup(),
         ) {
-            kinds.forEach { kind ->
-                val selected = state.filter == kind
-                val count = state.counts[kind] ?: 0
+            tabs.forEach { tab ->
+                val selected = tab == selectedTab
+                val count = tab.count(state, remoteCount)
                 val textColor = if (selected) colors.primary else colors.onSurfaceVariant
                 Column(
                     modifier = Modifier
@@ -149,7 +160,7 @@ private fun CompactTaskTabStrip(
                         .selectable(
                             selected = selected,
                             role = Role.Tab,
-                            onClick = { if (!selected) state.changeFilter(kind) },
+                            onClick = { if (!selected) onSelectTab(tab) },
                         )
                         .padding(horizontal = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -160,7 +171,7 @@ private fun CompactTaskTabStrip(
                         horizontalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            text = kind.label,
+                            text = tab.label,
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             color = textColor,

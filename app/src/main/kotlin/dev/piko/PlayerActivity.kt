@@ -3,10 +3,12 @@ package dev.piko
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
+import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -15,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.fragment.app.FragmentActivity
 import dev.piko.shared.i18n.PikoLocale
 import dev.piko.ui.LocalAppLanguage
 import dev.piko.ui.LocalPikoServices
@@ -23,13 +26,18 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.PointerSource
 import dev.piko.ui.components.trackPointerSource
 import dev.piko.ui.platform.LocalPikoPlatform
+import dev.piko.ui.screens.lock.AppLockScreen
 import dev.piko.ui.screens.player.MediampVideoPlayerScreen
 import dev.piko.ui.theme.appearanceFlow
 import dev.piko.ui.theme.PikoTheme
 import dev.piko.platform.installMotionScale
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 /**
  * 独立的多窗口播放器。每个槽位（[PlayerSlot0Activity] 等）在清单里各有独立的
@@ -39,11 +47,13 @@ import kotlinx.coroutines.runBlocking
  * 槽位复用时（最多 3 个窗口都已存在，再点第 4 个视频）系统走 [onNewIntent]，
  * 当前窗口原地换片，用户在空间里摆好的位置和大小保持不变。
  */
-open class PlayerActivity : ComponentActivity() {
+open class PlayerActivity : FragmentActivity() {
 
     protected open val slotIndex: Int get() = 0
 
     private var requestState by mutableStateOf<VideoPlayerRequest?>(null)
+    private var recentsMaskEnabled = true
+    private var recentsMaskJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val systemLocale = Resources.getSystem().configuration.locales.get(0) ?: Locale.getDefault()
@@ -52,6 +62,7 @@ open class PlayerActivity : ComponentActivity() {
         val app = PikoApplication.instance
         PikoLocale.apply(runBlocking { app.sessionManager.appLanguageFlow.first() })
         enableEdgeToEdge()
+        installRecentsPrivacyMask()
 
         val request = requestOf(intent)
         if (request == null) {
@@ -72,6 +83,9 @@ open class PlayerActivity : ComponentActivity() {
             PikoLocale.apply(appLanguage)
             val effectiveLanguage by PikoLocale.effectiveLanguageState
             val focusedSlot by MultiWindowPlayerCoordinator.focusedSlot.collectAsStateWithLifecycle()
+            val appLock = app.platform.appLock
+            val lockedFlow = remember(appLock) { appLock.locked }
+            val locked by lockedFlow.collectAsStateWithLifecycle(initialValue = lockedFlow.value)
             // 播放窗口是独立的组合树，主窗口根部的输入来源追踪管不到这里
             val pointerSource = remember { PointerSource() }
             app.platform.ProvideLocalizedEnvironment(effectiveLanguage) {
@@ -82,20 +96,29 @@ open class PlayerActivity : ComponentActivity() {
                     LocalPointerSource provides pointerSource,
                 ) {
                     PikoTheme(appearance = appearance) {
-                        val request = requestState ?: return@PikoTheme
-                        // 换片时整棵播放器重建：后端、取流会话与续播都从新文件重新开始
-                        key(request.fileId, request.startMillis) {
-                            MediampVideoPlayerScreen(
-                                initialFileId = request.fileId,
-                                initialFileName = request.fileName,
-                                initialLocalPath = request.localPath,
-                                initialStartMillis = request.startMillis,
-                                onBackClick = ::closeWindow,
-                                standaloneWindow = true,
-                                // 多个窗口同时出声，但系统媒体通知只由当前聚焦的那个窗口持有
-                                ownsSystemMediaControls = focusedSlot == NO_FOCUSED_WINDOW || focusedSlot == slotIndex,
-                                modifier = Modifier.trackPointerSource(pointerSource),
-                            )
+                        androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                            val request = requestState
+                            if (request != null) {
+                                // 换片时整棵播放器重建：后端、取流会话与续播都从新文件重新开始
+                                key(request.fileId, request.startMillis) {
+                                    MediampVideoPlayerScreen(
+                                        initialFileId = request.fileId,
+                                        initialFileName = request.fileName,
+                                        initialLocalPath = request.localPath,
+                                        initialStartMillis = request.startMillis,
+                                        onBackClick = ::closeWindow,
+                                        standaloneWindow = true,
+                                        // 多个窗口同时出声，但系统媒体通知只由当前聚焦的那个窗口持有
+                                        ownsSystemMediaControls = !locked &&
+                                            (focusedSlot == NO_FOCUSED_WINDOW || focusedSlot == slotIndex),
+                                        paused = locked,
+                                        modifier = Modifier.trackPointerSource(pointerSource),
+                                    )
+                                }
+                            }
+                            if (locked) {
+                                AppLockScreen(appLock, Modifier.fillMaxSize())
+                            }
                         }
                     }
                 }
@@ -114,6 +137,16 @@ open class PlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         PikoApplication.instance.restoreTransportMemoryBudget()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && recentsMaskEnabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -122,8 +155,31 @@ open class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        recentsMaskJob?.cancel()
         MultiWindowPlayerCoordinator.detach(slotIndex, this)
         super.onDestroy()
+    }
+
+    private fun installRecentsPrivacyMask() {
+        val appLock = PikoApplication.instance.appLock
+        recentsMaskEnabled = appLock.recentsMaskEnabled.value
+        applyRecentsScreenshotSetting()
+        recentsMaskJob = PikoApplication.instance.appScope.launch {
+            appLock.recentsMaskEnabled.collect { enabled ->
+                withContext(Dispatchers.Main) {
+                    recentsMaskEnabled = enabled
+                    applyRecentsScreenshotSetting()
+                }
+            }
+        }
+    }
+
+    private fun applyRecentsScreenshotSetting() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setRecentsScreenshotEnabled(!recentsMaskEnabled)
+        } else if (!recentsMaskEnabled) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     private fun closeWindow() {

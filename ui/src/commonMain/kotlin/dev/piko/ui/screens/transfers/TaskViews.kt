@@ -39,6 +39,11 @@ internal fun RowScope.TaskIslandHeader(
     selectedCount: Int,
     actions: List<SheetAction>,
     inlineFilter: Boolean = true,
+    selectedTab: TransferTab = TransferTab.Kind(state.filter),
+    remoteCount: Int = 0,
+    onSelectTab: (TransferTab) -> Unit = { tab ->
+        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
+    },
 ) {
     if (selectedCount > 0) {
         TooltipIconButton(Icons.Outlined.Close, tr("取消选择", "Deselect", "選択を解除", "선택 해제", "取消選取"), state::clearSelection)
@@ -46,7 +51,12 @@ internal fun RowScope.TaskIslandHeader(
     IslandTitle(if (selectedCount > 0) tr("已选 $selectedCount 项", "${enCount(selectedCount, "item", "items")} selected", "$selectedCount 項目を選択中", "${selectedCount}개 선택됨", "已選 $selectedCount 項") else tr("任务", "Tasks", "タスク", "작업", "任務"))
     if (inlineFilter) {
         Spacer(Modifier.width(8.dp))
-        TaskKindFilter(state)
+        TaskKindFilter(
+            state = state,
+            selectedTab = selectedTab,
+            remoteCount = remoteCount,
+            onSelectTab = onSelectTab,
+        )
     }
     IslandHeaderSpace()
     if (inlineFilter && selectedCount == 0 && (state.downloadSpeed > 0 || state.uploadSpeed > 0 || state.downloadEtaSeconds != null)) {
@@ -77,7 +87,14 @@ internal fun RowScope.TaskIslandHeader(
 }
 
 @Composable
-internal fun TaskIslandSubHeader(state: TransfersState) {
+internal fun TaskIslandSubHeader(
+    state: TransfersState,
+    selectedTab: TransferTab = TransferTab.Kind(state.filter),
+    remoteCount: Int = 0,
+    onSelectTab: (TransferTab) -> Unit = { tab ->
+        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
+    },
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -89,6 +106,9 @@ internal fun TaskIslandSubHeader(state: TransfersState) {
         TaskKindFilter(
             state = state,
             compact = true,
+            selectedTab = selectedTab,
+            remoteCount = remoteCount,
+            onSelectTab = onSelectTab,
             modifier = Modifier.weight(1f),
         )
         if (state.downloadSpeed > 0 || state.uploadSpeed > 0 || state.downloadEtaSeconds != null) {

@@ -1,8 +1,11 @@
 package dev.piko
 
 import android.app.Application
+import android.app.Activity
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
+import androidx.fragment.app.FragmentActivity
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -108,6 +111,9 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
     }
 
     @Volatile
+    private var currentActivity: FragmentActivity? = null
+
+    @Volatile
     private var initializedImageLoader: ImageLoader? = null
 
     fun restoreTransportMemoryBudget() {
@@ -150,6 +156,24 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         instance = this
         installLog()
+        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: Activity) {
+                if (activity is FragmentActivity) currentActivity = activity
+            }
+
+            override fun onActivityPaused(activity: Activity) {
+                if (activity === currentActivity) currentActivity = null
+            }
+
+            override fun onActivityDestroyed(activity: Activity) {
+                if (activity === currentActivity) currentActivity = null
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityStopped(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        })
 
         sessionManager = SessionManager(this)
         // 先于进程级服务与系统通知渠道初始化语言绑定，确保无 Activity 唤起或冷启动时通知渠道按用户语言注册
@@ -263,7 +287,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
         }
         val motionScale = PikoMotionScale().apply { followSystemAnimatorScale(this@PikoApplication) }
         appScope.launch { sessionManager.reduceMotionFlow.collect { motionScale.appReduced = it } }
-        appLock = AndroidAppLock(sessionManager, appScope)
+        appLock = AndroidAppLock(this, sessionManager, { currentActivity }, appScope)
         platform = AndroidPikoPlatform(this, { appUpdater }, motionScale, appLock, sessionManager, appScope)
         val notifier = WorkResultNotifier(this, services, appScope).also { it.start() }
         appScope.launch {

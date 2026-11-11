@@ -20,10 +20,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Backspace
+import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.piko.shared.i18n.tr
 import dev.piko.ui.components.PikoBrandIcons
 import dev.piko.ui.platform.AppLock
@@ -48,8 +51,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 冷启动恢复账号后的应用锁屏。只有输入正确的 4 位 PIN 才会离开这一页；
- * 切后台再回来不会重新进入，见 [AppLock] 的锁定语义。
+ * 冷启动恢复账号或自动锁定后的应用锁屏。PIN 是最终回退，开启生物识别时默认先弹系统认证。
  */
 @Composable
 fun AppLockScreen(appLock: AppLock, modifier: Modifier = Modifier) {
@@ -59,10 +61,36 @@ fun AppLockScreen(appLock: AppLock, modifier: Modifier = Modifier) {
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var verifying by remember { mutableStateOf(false) }
+    var biometricBusy by remember { mutableStateOf(false) }
+    var biometricPrompted by remember { mutableStateOf(false) }
     var blockedSeconds by remember { mutableIntStateOf(0) }
+    val biometricAvailable by appLock.biometricAvailable.collectAsStateWithLifecycle(
+        initialValue = appLock.biometricAvailable.value,
+    )
+    val biometricEnabled by appLock.biometricEnabled.collectAsStateWithLifecycle(
+        initialValue = appLock.biometricEnabled.value,
+    )
+
+    val requestBiometric: () -> Unit = {
+        if (!biometricBusy && !verifying && blockedSeconds == 0 && biometricAvailable && biometricEnabled) {
+            biometricBusy = true
+            error = null
+            scope.launch {
+                appLock.authenticateBiometric()
+                biometricBusy = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!biometricPrompted && biometricAvailable && biometricEnabled) {
+            biometricPrompted = true
+            requestBiometric()
+        }
+    }
 
     val submit: (String) -> Unit = { candidate ->
-        if (!verifying && blockedSeconds == 0 && candidate.length == 4) {
+        if (!verifying && !biometricBusy && blockedSeconds == 0 && candidate.length == 4) {
             verifying = true
             error = null
             scope.launch {
@@ -82,7 +110,7 @@ fun AppLockScreen(appLock: AppLock, modifier: Modifier = Modifier) {
         }
     }
     val press: (Char) -> Unit = { digit ->
-        if (!verifying && blockedSeconds == 0 && pin.length < 4) {
+        if (!verifying && !biometricBusy && blockedSeconds == 0 && pin.length < 4) {
             error = null
             val next = pin + digit
             pin = next
@@ -135,6 +163,22 @@ fun AppLockScreen(appLock: AppLock, modifier: Modifier = Modifier) {
                     )
                     Spacer(Modifier.height(24.dp))
                     PinDots(filled = pin.length)
+                    if (biometricAvailable && biometricEnabled) {
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = requestBiometric, enabled = !verifying && !biometricBusy && blockedSeconds == 0) {
+                            Icon(Icons.Outlined.Fingerprint, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                tr(
+                                    "使用指纹或面容解锁",
+                                    "Unlock with biometrics",
+                                    "生体認証でロック解除",
+                                    "생체 인증으로 잠금 해제",
+                                    "使用生物辨識解鎖",
+                                ),
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                     Box(modifier = Modifier.height(24.dp), contentAlignment = Alignment.Center) {
                         val message = if (blockedSeconds > 0) {
@@ -157,8 +201,8 @@ fun AppLockScreen(appLock: AppLock, modifier: Modifier = Modifier) {
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    Keypad(keySize = keySize, enabled = !verifying && blockedSeconds == 0, onDigit = press, onDelete = {
-                        if (!verifying) {
+                    Keypad(keySize = keySize, enabled = !verifying && !biometricBusy && blockedSeconds == 0, onDigit = press, onDelete = {
+                        if (!verifying && !biometricBusy) {
                             pin = pin.dropLast(1)
                             error = null
                         }

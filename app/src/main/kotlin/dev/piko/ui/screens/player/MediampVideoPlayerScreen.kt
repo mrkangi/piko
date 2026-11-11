@@ -90,6 +90,8 @@ fun MediampVideoPlayerScreen(
     standaloneWindow: Boolean = false,
     /** 本窗口是否持有系统媒体控制。多窗口时只有当前聚焦的窗口建通知，避免几条通知打架。 */
     ownsSystemMediaControls: Boolean = true,
+    /** 应用锁或多窗口锁定期间暂停播放；画面仍保留在组合里，解锁后可继续。 */
+    paused: Boolean = false,
 ) {
     val app = PikoApplication.instance
     val context = LocalContext.current
@@ -133,6 +135,16 @@ fun MediampVideoPlayerScreen(
     }
     DisposableEffect(backend) {
         onDispose { backend.release() }
+    }
+    var resumeAfterLock by remember { mutableStateOf(false) }
+    LaunchedEffect(paused) {
+        if (paused) {
+            resumeAfterLock = state.isPlaying
+            state.pause()
+        } else if (resumeAfterLock) {
+            resumeAfterLock = false
+            state.play()
+        }
     }
 
     // 是否处于主动开启的沉浸全屏。原先把 isLandscape 当全屏只适合手机：平板本来就是横屏，或手机开启自动旋转后

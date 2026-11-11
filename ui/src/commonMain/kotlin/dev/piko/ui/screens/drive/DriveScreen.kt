@@ -97,7 +97,7 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.LocalShowExtensions
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PanelAnchor
-import dev.piko.ui.components.RemoteDownloadDialog
+import dev.piko.ui.components.RemoteSendDialog
 import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.SmbMountDialog
@@ -1008,7 +1008,7 @@ private fun DriveScreenContent(
         onUnmountJellyfin = events.onUnmountJellyfinServer,
     )
     remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
-        RemoteDownloadDialog(files = targets, onDismiss = { remoteDownloadTargets = null })
+        RemoteSendDialog(files = targets, onDismiss = { remoteDownloadTargets = null })
     }
     if (showLanShare) {
         LanShareDialog(onDismiss = { showLanShare = false })

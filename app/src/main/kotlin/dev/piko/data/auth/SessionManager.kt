@@ -159,6 +159,8 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         // 设备本地的应用锁，不跨设备同步，也不进入 PikoSettingsSync
         val APP_PIN_HASH = stringPreferencesKey("app_pin_hash")
         val RECENTS_MASK_ENABLED = booleanPreferencesKey("recents_mask_enabled")
+        val APP_LOCK_TIMEOUT = stringPreferencesKey("app_lock_timeout")
+        val APP_LOCK_BIOMETRIC_ENABLED = booleanPreferencesKey("app_lock_biometric_enabled")
     }
 
     /**
@@ -224,6 +226,30 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     suspend fun setRecentsMaskEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.RECENTS_MASK_ENABLED] = enabled
+        }
+    }
+
+    /** 退到后台后重新上锁的等待时间；默认保持旧行为，只在冷启动时上锁。 */
+    val appLockTimeoutFlow: Flow<dev.piko.ui.platform.AppLockTimeout> = preference { preferences ->
+        preferences[PreferencesKeys.APP_LOCK_TIMEOUT]
+            ?.let { name -> runCatching { dev.piko.ui.platform.AppLockTimeout.valueOf(name) }.getOrNull() }
+            ?: dev.piko.ui.platform.AppLockTimeout.NEVER
+    }
+
+    suspend fun setAppLockTimeout(timeout: dev.piko.ui.platform.AppLockTimeout) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.APP_LOCK_TIMEOUT] = timeout.name
+        }
+    }
+
+    /** 是否允许用系统生物识别解锁应用锁。 */
+    val appLockBiometricEnabledFlow: Flow<Boolean> = preference { preferences ->
+        preferences[PreferencesKeys.APP_LOCK_BIOMETRIC_ENABLED] ?: false
+    }
+
+    suspend fun setAppLockBiometricEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.APP_LOCK_BIOMETRIC_ENABLED] = enabled
         }
     }
 
