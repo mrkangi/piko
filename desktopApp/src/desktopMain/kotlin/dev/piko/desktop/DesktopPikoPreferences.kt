@@ -106,6 +106,12 @@ class DesktopPikoPreferences(
         settings.set("jellyfin.servers", serialized)
         jellyfinServers.value = serialized
     }
+    private val plexAccounts = MutableStateFlow(settings.get("plex.accounts"))
+    override val plexAccountsFlow: Flow<String> = plexAccounts.asStateFlow()
+    override suspend fun savePlexAccounts(serialized: String) {
+        settings.set("plex.accounts", serialized)
+        plexAccounts.value = serialized
+    }
 
     private val lanShareSettings = MutableStateFlow(settings.get("lan.share.settings"))
     override val lanShareSettingsFlow: Flow<String> = lanShareSettings.asStateFlow()

@@ -571,6 +571,24 @@ internal class DriveViewModel(
         }
     }
 
+    fun removePlexServer(mountId: String) {
+        viewModelScope.launch {
+            driveRepo.plex?.removeServer(mountId)
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
+            )
+        }
+    }
+
+    fun removePlexAccount(accountUuid: String) {
+        viewModelScope.launch {
+            driveRepo.plex?.removeAccount(accountUuid)
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
+            )
+        }
+    }
+
     fun revealLocalInFileManager(fileId: String) {
         launchLocalAction {
             val resolved = driveRepo.localMounts.resolve(fileId)?.takeUnless { it.startsWith("content://") }

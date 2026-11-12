@@ -54,6 +54,7 @@ import dev.piko.ui.components.SkeletonBlock
 import dev.piko.ui.components.SkeletonTextLine
 import io.github.nihildigit.pikpak.FileStat
 import dev.piko.shared.data.jellyfinPlaybackFraction
+import dev.piko.shared.data.plexPlaybackFraction
 import dev.piko.ui.components.*
 
 /**
@@ -143,7 +144,7 @@ internal fun PosterCard(
                 .locateHighlight(isHighlighted, coverShape),
         ) {
             FileArtwork(item.visual, FileArtworkFormat.Poster, isSpoilerBlurred, Modifier.fillMaxSize())
-            file.jellyfinPlaybackFraction?.let { progress ->
+            (file.jellyfinPlaybackFraction ?: file.plexPlaybackFraction)?.let { progress ->
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)

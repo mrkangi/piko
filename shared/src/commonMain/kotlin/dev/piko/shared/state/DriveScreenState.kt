@@ -318,8 +318,10 @@ class DriveScreenState(
     val isDevicePlace: Boolean by derivedStateOf { dev.piko.shared.data.DeviceLocation.isDevice(activeFolderId) }
     val isLanPlace: Boolean by derivedStateOf { dev.piko.shared.data.LanLocation.isLan(activeFolderId) }
     val isJellyfinPlace: Boolean by derivedStateOf { dev.piko.shared.data.JellyfinLocation.isJellyfin(activeFolderId) }
+    val isPlexPlace: Boolean by derivedStateOf { dev.piko.shared.data.PlexLocation.isPlex(activeFolderId) }
     val isVirtualPlace: Boolean by derivedStateOf {
-        isLocalPlace || isDevicePlace || isLanPlace || isJellyfinPlace || libraryView != null || archiveView != null || importPreviewView != null
+        isLocalPlace || isDevicePlace || isLanPlace || isJellyfinPlace || isPlexPlace ||
+            libraryView != null || archiveView != null || importPreviewView != null
     }
 
     /**
@@ -1400,19 +1402,22 @@ class DriveScreenState(
         DriveLibrary.RECENT -> driveRepo.recentlyAdded().map(::eventListing)
         DriveLibrary.HISTORY -> coroutineScope {
             val jellyfinDeferred = async { driveRepo.jellyfinPlayHistory().getOrDefault(emptyList()) }
+            val plexDeferred = async { driveRepo.plexPlayHistory().getOrDefault(emptyList()) }
             val remote = driveRepo.playHistory()
             val jellyfin = jellyfinDeferred.await()
+            val plex = plexDeferred.await()
+            val mediaServer = jellyfin + plex
             remote.map { page ->
                 val listing = eventListing(page)
-                if (jellyfin.isEmpty()) listing
+                if (mediaServer.isEmpty()) listing
                 else {
-                    val combined = jellyfin.map { it to it.params["last_played"].orEmpty() } +
+                    val combined = mediaServer.map { it to it.params["last_played"].orEmpty() } +
                         listing.files.map { it to listing.events[it.id]?.updatedTime.orEmpty() }
                     LibraryListing(combined.sortedByDescending { it.second }.map { it.first }, listing.events)
                 }
             }.recoverCatching { error ->
-                if (jellyfin.isEmpty()) throw error
-                LibraryListing(jellyfin, emptyMap())
+                if (mediaServer.isEmpty()) throw error
+                LibraryListing(mediaServer, emptyMap())
             }
         }
         DriveLibrary.DUPLICATES -> error("${library.title}的内容来自会话，不经网络")
@@ -1511,8 +1516,8 @@ class DriveScreenState(
 
     /** 清空播放历史。服务端没有撤销，官方客户端里的历史一起没了，由界面先确认。 */
     fun clearPlayHistory() {
-        if (files.any { dev.piko.shared.data.JellyfinLocation.isJellyfin(it.id) }) {
-            _messages.tryEmit(tr("Jellyfin 的播放记录需在服务器端清除", "Jellyfin playback history must be cleared on the server", "Jellyfin の再生履歴はサーバー側で削除してください", "Jellyfin 재생 기록은 서버에서 삭제해야 합니다", "Jellyfin 的播放記錄需在伺服器端清除"))
+        if (files.any { dev.piko.shared.data.JellyfinLocation.isJellyfin(it.id) || dev.piko.shared.data.PlexLocation.isPlex(it.id) }) {
+            _messages.tryEmit(tr("媒体服务器的播放记录需在服务器端清除", "Media server playback history must be cleared on the server", "メディアサーバーの再生履歴はサーバー側で削除してください", "미디어 서버 재생 기록은 서버에서 삭제해야 합니다", "媒體伺服器的播放記錄需在伺服器端清除"))
         }
         submitHistoryAction(HistoryEditCommand.ClearPlay)
     }

@@ -89,6 +89,10 @@ interface PikoUserPreferences {
     val jellyfinServersFlow: Flow<String> get() = flowOf("")
     suspend fun saveJellyfinServers(serialized: String) {}
 
+    /** 本设备的 Plex 账号与服务器列表；访问令牌在平台机密存储，不在这里。 */
+    val plexAccountsFlow: Flow<String> get() = flowOf("")
+    suspend fun savePlexAccounts(serialized: String) {}
+
     /** 瀑布流是否一并展示图片，默认开启。 */
     val galleryShowImagesFlow: Flow<Boolean> get() = flowOf(true)
     suspend fun setGalleryShowImages(show: Boolean) {}

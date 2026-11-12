@@ -157,6 +157,7 @@ open class PikoDriveRepository(
     private val treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     internal val lanShares: LanShareRepository? = null,
     val jellyfin: JellyfinRepository? = null,
+    val plex: dev.piko.shared.plex.PlexRepository? = null,
 ) {
     private val client get() = clientManager.currentClient.value ?: error("Not logged in")
 
@@ -554,6 +555,13 @@ open class PikoDriveRepository(
                 }
             }
         }
+        plex?.let { plex ->
+            backgroundScope.launch {
+                plex.accounts.collect {
+                    _folderChanges.tryEmit(DriveChange.ContentsChanged(setOf(DeviceLocation.ROOT_ID)))
+                }
+            }
+        }
     }
 
     /**
@@ -677,6 +685,9 @@ open class PikoDriveRepository(
             JellyfinLocation.of(fileId)?.let { location ->
                 return@runSuspendCatching jellyfin?.pathTo(fileId, containing = !location.directory).orEmpty()
             }
+            PlexLocation.of(fileId)?.let { location ->
+                return@runSuspendCatching plex?.pathTo(fileId, containing = !location.directory).orEmpty()
+            }
             LocalLocation.of(fileId)?.let { local ->
                 localMounts.find(fileId) ?: error("本地文件夹已取消挂载")
                 val localParent = local.parent
@@ -764,6 +775,7 @@ open class PikoDriveRepository(
         devicePathTo(folderId)?.let { return it }
         lanPathTo(folderId, containing = false)?.let { return it }
         jellyfin?.cachedPathTo(folderId, containing = false)?.let { return it }
+        plex?.cachedPathTo(folderId, containing = false)?.let { return it }
         LocalLocation.of(folderId) ?: return null
         localMounts.findCached(folderId) ?: return null
         return devicePathTo(DeviceLocation.SELF_ID).orEmpty() + localMounts.cachedPathTo(folderId).orEmpty()
@@ -796,10 +808,13 @@ open class PikoDriveRepository(
     }
 
     private fun hasDeviceNodes(): Boolean =
-        localMounts.cachedRoots().isNotEmpty() || lanShares?.hasPeers() == true || jellyfin?.serverNodes().orEmpty().isNotEmpty()
+        localMounts.cachedRoots().isNotEmpty() || lanShares?.hasPeers() == true ||
+            jellyfin?.serverNodes().orEmpty().isNotEmpty() || plex?.serverNodes().orEmpty().isNotEmpty()
 
     private suspend fun virtualBrowsable(parentId: String, sortOrder: PikoFileSortOrder): List<FileStat>? = when {
-        parentId == DeviceLocation.ROOT_ID -> listOf(DeviceLocation.selfStat()) + lanShares?.deviceNodes().orEmpty() + jellyfin?.serverNodes().orEmpty()
+        parentId == DeviceLocation.ROOT_ID ->
+            listOf(DeviceLocation.selfStat()) + lanShares?.deviceNodes().orEmpty() +
+                jellyfin?.serverNodes().orEmpty() + plex?.serverNodes().orEmpty()
         parentId == DeviceLocation.SELF_ID -> sortFiles(localMounts.roots(), sortOrder, parentId)
         LocalLocation.isLocal(parentId) -> sortFiles(localMounts.list(parentId), sortOrder, parentId)
         DeviceLocation.peerDeviceId(parentId) != null -> {
@@ -813,6 +828,10 @@ open class PikoDriveRepository(
         JellyfinLocation.of(parentId) != null -> {
             val location = JellyfinLocation.of(parentId)!!
             sortFiles(jellyfin?.list(location.serverId, location.itemId).orEmpty(), sortOrder, parentId)
+        }
+        PlexLocation.of(parentId) != null -> {
+            val location = PlexLocation.of(parentId)!!
+            sortFiles(plex?.list(location.mountId, location.node).orEmpty(), sortOrder, parentId)
         }
         else -> null
     }
@@ -2120,6 +2139,8 @@ open class PikoDriveRepository(
     suspend fun originalImageUrl(fileId: String): String? =
         if (JellyfinLocation.isJellyfin(fileId)) {
             jellyfin?.originalImageUrl(fileId)
+        } else if (PlexLocation.isPlex(fileId)) {
+            plex?.originalImageUrl(fileId)
         } else if (LeasedFile.isLeased(fileId)) {
             LeasedFile.resolvedFileOf(fileId)?.gcid?.takeIf { it.isNotBlank() }?.let { imageThumbnailUrlOf(it, large = true) }
         } else getFileDetail(fileId).getOrNull()?.downloadUrl
@@ -3464,6 +3485,12 @@ open class PikoDriveRepository(
     /** Jellyfin 的播放记录，与 PikPak 的分开取，单个服务器失败不影响其余。 */
     suspend fun jellyfinPlayHistory(): Result<List<FileStat>> = withContext(Dispatchers.Default) {
         val repo = jellyfin ?: return@withContext Result.success(emptyList())
+        runSuspendCatching { repo.playbackHistory() }
+    }
+
+    /** Plex 的播放记录，与 PikPak、Jellyfin 分开取。 */
+    suspend fun plexPlayHistory(): Result<List<FileStat>> = withContext(Dispatchers.Default) {
+        val repo = plex ?: return@withContext Result.success(emptyList())
         runSuspendCatching { repo.playbackHistory() }
     }
 

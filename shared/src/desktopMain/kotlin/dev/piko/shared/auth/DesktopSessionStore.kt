@@ -82,6 +82,15 @@ class DesktopSessionStore(
     override suspend fun clearJellyfinToken(serverId: String) =
         update("jellyfin-$serverId") { it.copy(jellyfinToken = null) }
 
+    override suspend fun loadPlexCredentials(accountUuid: String): String? =
+        secrets("plex-$accountUuid").plexCredentials
+
+    override suspend fun savePlexCredentials(accountUuid: String, serialized: String) =
+        update("plex-$accountUuid") { it.copy(plexCredentials = serialized.ifEmpty { null }) }
+
+    override suspend fun clearPlexCredentials(accountUuid: String) =
+        update("plex-$accountUuid") { it.copy(plexCredentials = null) }
+
     override suspend fun loadAccounts(): SavedAccounts = locked { readAccountsFile() ?: legacyAccounts ?: SavedAccounts() }
 
     override suspend fun saveAccounts(accounts: SavedAccounts) = locked {
@@ -224,9 +233,10 @@ internal data class AccountSecrets(
     val archivePasswords: String? = null,
     val localMountPasswords: Map<String, String> = emptyMap(),
     val jellyfinToken: String? = null,
+    val plexCredentials: String? = null,
 ) {
     val isEmpty: Boolean get() = session == null && password == null && archivePasswords == null &&
-        localMountPasswords.isEmpty() && jellyfinToken == null
+        localMountPasswords.isEmpty() && jellyfinToken == null && plexCredentials == null
 }
 
 /** 账号名可能是邮箱或手机号，不直接进文件名与钥匙串属性，取其摘要。 */

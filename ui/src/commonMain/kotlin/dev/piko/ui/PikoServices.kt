@@ -19,6 +19,8 @@ import dev.piko.shared.data.MoveHistory
 import dev.piko.shared.data.OfflinePackTracker
 import dev.piko.shared.data.PikoCacheStore
 import dev.piko.shared.jellyfin.JellyfinRepository
+import dev.piko.shared.plex.PlexRepository
+import dev.piko.shared.plex.PlexQrEncoder
 import dev.piko.shared.data.PikoTreeDatabaseFactory
 import dev.piko.shared.data.PikoAccountRepository
 import dev.piko.shared.data.PikoClientManager
@@ -85,6 +87,10 @@ class PikoServices(
     localMountSecrets: dev.piko.shared.data.LocalMountSecrets? = null,
     /** Jellyfin 只读客户端，由平台入口按设备名构造。 */
     jellyfin: JellyfinRepository? = null,
+    /** Plex 只读客户端，由平台入口按设备名构造。 */
+    plex: PlexRepository? = null,
+    /** 二维码矩阵生成器；截图环境可为空。 */
+    val plexQrEncoder: PlexQrEncoder? = null,
     /** 远程下载的实时通道；为 null 时远程下载不可用。 */
     remoteRealtime: dev.piko.shared.download.RemoteRealtimeTransport? = null,
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
@@ -124,6 +130,7 @@ class PikoServices(
         treeDatabaseFactory = treeDatabaseFactory,
         lanShares = lanShares,
         jellyfin = jellyfin,
+        plex = plex,
     ).also {
         val repository = it
         it.localMounts.secrets = localMountSecrets
@@ -143,6 +150,7 @@ class PikoServices(
         mediaRepository.localMounts = it.localMounts
         mediaRepository.lanShares = lanShares
         mediaRepository.jellyfin = jellyfin
+        mediaRepository.plex = plex
         mediaRepository.metadataSink = it.metadataSink
     }
     val lanShareHost: LanShareHost? = lanShareHostFactory?.invoke(driveRepository, preferences, lanShareSettings, deviceName)

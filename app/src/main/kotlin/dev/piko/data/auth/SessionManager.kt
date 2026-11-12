@@ -148,6 +148,7 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val LOCAL_MOUNTS = stringPreferencesKey("local_mounts")
         val LAN_SHARE_SETTINGS = stringPreferencesKey("lan_share_settings")
         val JELLYFIN_SERVERS = stringPreferencesKey("jellyfin_servers")
+        val PLEX_ACCOUNTS = stringPreferencesKey("plex_accounts")
         val GALLERY_SHOW_IMAGES = booleanPreferencesKey("gallery_show_images")
         val BATCH_RENAME = stringPreferencesKey("batch_rename")
         val VAULT_ARCHIVE_OPTIONS = stringPreferencesKey("vault_archive_options")
@@ -687,6 +688,10 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
     override val jellyfinServersFlow: Flow<String> = preference { it[PreferencesKeys.JELLYFIN_SERVERS].orEmpty() }
     override suspend fun saveJellyfinServers(serialized: String) {
         context.dataStore.edit { it[PreferencesKeys.JELLYFIN_SERVERS] = serialized }
+    }
+    override val plexAccountsFlow: Flow<String> = preference { it[PreferencesKeys.PLEX_ACCOUNTS].orEmpty() }
+    override suspend fun savePlexAccounts(serialized: String) {
+        context.dataStore.edit { it[PreferencesKeys.PLEX_ACCOUNTS] = serialized }
     }
 
     override val lanShareSettingsFlow: Flow<String> = preference { it[PreferencesKeys.LAN_SHARE_SETTINGS].orEmpty() }

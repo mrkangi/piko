@@ -183,14 +183,15 @@ internal fun fileActions(file: FileStat, commands: ItemCommands, on: FileActionH
             download = DriveActions.download(onClick = on.download).takeIf { commands.download },
             share = DriveActions.share(on.share).takeIf { commands.share },
             rename = DriveActions.rename(on.rename).takeIf { commands.rename },
-            star = DriveActions.star(file.isStarred, on.toggleStar),
+            star = if (dev.piko.shared.data.PlexLocation.isPlex(file.id)) null else DriveActions.star(file.isStarred, on.toggleStar),
         ),
     )
     if (commands.extract) add(DriveActions.extract(on.extract))
     if (commands.downloadAtQuality) add(DriveActions.downloadAtQuality(on.prepareQualities.takeIf { video }, on.downloadAtQuality))
     if (commands.download && !file.isFolder) on.remoteDownload?.let { add(DriveActions.downloadToDevice(it)) }
     if (video) add(DriveActions.downloadSegment(on.downloadSegment, on.prepareQualities))
-    if (!file.isFolder && commands.download) on.copyDownloadLink?.let { add(DriveActions.copyDownloadLink(it)) }
+    val mediaServer = dev.piko.shared.data.JellyfinLocation.isJellyfin(file.id) || dev.piko.shared.data.PlexLocation.isPlex(file.id)
+    if (!file.isFolder && (commands.download || mediaServer)) on.copyDownloadLink?.let { add(DriveActions.copyDownloadLink(it)) }
     if (video) on.openInExternalPlayer?.let { add(DriveActions.openInExternalPlayer(it)) }
     if (file.isFolder) on.openInNewTab?.let { add(DriveActions.openInNewTab(it)) }
     if (commands.moveCopyTo) {
