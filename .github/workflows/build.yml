@@ -12,7 +12,7 @@ name: Build
 # SDK main 已进入 3.0 传输层重构，PikoStreamReader 的 readAheadLimit / urgent /
 # reportPlaybackBuffer 被移除；Piko 尚未迁移，测试包先固定在最后一个兼容提交。
 env:
-  PIKPAK_SDK_REF: 8eaf558
+  PIKPAK_SDK_REF: 8eaf5587a883ed4ea9bcca7b43a9194118719e63
 
 on:
   push:
