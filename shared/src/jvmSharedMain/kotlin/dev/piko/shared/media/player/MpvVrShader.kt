@@ -72,16 +72,30 @@ object MpvVrShader {
         return bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }
 
-    /** 生成完整的着色器文件内容：顶部 `//!TEXTURE` 随视角变化，下方 `//!HOOK` 源码恒定不变。 */
-    fun shaderSourceOf(mode: VrModeState): String = buildString(hookSource.length + 128) {
-        append("//!TEXTURE PIKO_VR_PARAMS\n")
-        append("//!SIZE 4 1\n")
-        append("//!FORMAT rgba8\n")
-        append("//!FILTER NEAREST\n")
-        append("//!BORDER CLAMP\n")
-        append(encodeParamsHex(mode)).append("\n\n")
-        append(hookSource)
-    }
+    /**
+     * 生成完整的着色器文件内容：顶部 `//!TEXTURE` 随视角变化，下方 `//!HOOK` 源码恒定不变。
+     *
+     * [passWidth]/[passHeight] 非空时给 `MAINPRESUB` 指定渲染尺寸。该 hook 在放大之前执行，
+     * 不给尺寸就是按源分辨率跑：8K 片源等于每帧处理三千多万像素，再缩回屏幕。
+     * 按屏幕的 1.25 倍渲染即可，画质几乎无损，像素量少一个数量级。
+     */
+    fun shaderSourceOf(mode: VrModeState, passWidth: Int? = null, passHeight: Int? = null): String =
+        buildString(hookSource.length + 128) {
+            append("//!TEXTURE PIKO_VR_PARAMS\n")
+            append("//!SIZE 4 1\n")
+            append("//!FORMAT rgba8\n")
+            append("//!FILTER NEAREST\n")
+            append("//!BORDER CLAMP\n")
+            append(encodeParamsHex(mode)).append("\n\n")
+            val sizeDirectives = if (passWidth != null && passHeight != null && passWidth > 0 && passHeight > 0) {
+                "//!WIDTH $passWidth\n//!HEIGHT $passHeight\n"
+            } else {
+                ""
+            }
+            append(hookSource.replace(PASS_SIZE_PLACEHOLDER, sizeDirectives))
+        }
+
+    private const val PASS_SIZE_PLACEHOLDER = "%PASS_SIZE%"
 
     private val VrProjection.shaderValue: Int
         get() = when (this) {
@@ -111,6 +125,7 @@ object MpvVrShader {
         //!BIND HOOKED
         //!BIND PIKO_VR_PARAMS
         //!DESC Piko VR projection
+        %PASS_SIZE%
 
         #define PIKO_PI 3.1415926535897932
         #define PROJ_EQUIRECT 0
@@ -272,11 +287,11 @@ class MpvVrShaderSession(private val dir: File) {
 
     /** 写出当前 [mode] 对应的着色器文件并返回绝对路径；写失败返回 null。 */
     @Synchronized
-    fun writeNext(mode: VrModeState): String? {
+    fun writeNext(mode: VrModeState, passWidth: Int? = null, passHeight: Int? = null): String? {
         if (!isAvailable) return null
         val nextSeq = ++sequence
         val file = File(dir, "${MpvVrShader.FILE_PREFIX}${nextSeq}${MpvVrShader.FILE_SUFFIX}")
-        runCatching { file.writeText(MpvVrShader.shaderSourceOf(mode)) }.onFailure { return null }
+        runCatching { file.writeText(MpvVrShader.shaderSourceOf(mode, passWidth, passHeight)) }.onFailure { return null }
         recentFiles.addLast(file)
         while (recentFiles.size > RETAINED_FILES) {
             runCatching { recentFiles.removeFirst().delete() }

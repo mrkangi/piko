@@ -8,14 +8,14 @@
 | 文件 | 职责 |
 | --- | --- |
 | `shared/.../media/player/PlaybackBackend.kt` | `VrProjection`、`VrEye`、`VrModeState`（限幅、拖动、缩放、回正、按文件名猜格式）与后端接口 |
-| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、`4x1 rgba8` 参数纹理编码与 `MpvVrShaderSession` 序号轮转 |
+| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、`4x1 rgba8` 参数纹理编码、pass 尺寸限幅与 `MpvVrShaderSession` 序号轮转 |
 | `shared/.../media/player/PlayerScreenState.kt` | `vrMode` 状态与 `updateVrMode` / `panVr` / `zoomVr`，换集回正 |
 | `app/.../MpvPlaybackBackend.kt` | Android libmpv：挂着色器、合并高频更新、恢复画面比例 |
 | `desktopApp/.../MediampPlaybackBackend.kt` | 桌面 mpv：同上，着色器放 `PikoHome/cache/mpv` |
 | `ui/.../player/PlayerGestures.kt` | VR 下拖动转视角、松手惯性阻尼滑行（Fling）、捏合缩放，其余手势让位 |
 | `ui/.../player/PlayerSheets.kt` | 设置面板的「VR 视角」分节与投影 / 眼睛 / 鱼眼角度细调 |
 | `ui/.../player/PlayerControls.kt` | 底栏 VR 快捷开关（一键开启、开启态高亮、再点退出；窄于 600dp 时收进「更多」） |
-| `ui/.../player/PlayerOverlays.kt` | 底部「回正视角 / 退出 VR」胶囊 |
+| `ui/.../player/PlayerOverlays.kt` | 左侧竖栏：投影格式（点击轮换）、回正视角、退出 VR |
 
 ## mpv 侧约束
 
@@ -76,6 +76,17 @@
   所以对外方法叫 `updateVrMode`。
 - 不要依赖 `vrEnabled = vr?.enabled == true` 之后的智能转换：Android 与桌面两次编译
   对同一写法的判定并不一致，统一用 `vrMode?.let { ... }`。
+- **VR 操作放在左侧竖栏**，不要放回底部居中：VR 画面铺满全屏时底部正中正好压住视线下沿，
+  而左侧只是一条窄栏，也避开底栏、续播提示与中央播放键。竖栏随控件一起显隐。
+- **投影格式按钮点一次轮换一种**：`DualFisheye180 → DualHalfEquirectangular180 →
+  HalfEquirectangular180 → Equirectangular360 → DualVertEquirectangular360` 循环，
+  只改 `projection`，保留当前朝向与视野，方便原地对比同一视角下的各种封装；不跨视频持久化。
+- **着色器 pass 固定为屏幕的约 1.25 倍**（`//!WIDTH` / `//!HEIGHT`，并 clamp 到源分辨率）。
+  `MAINPRESUB` 在放大之前执行，不给尺寸就是按源分辨率跑：8K 片源每帧要处理三千多万像素，
+  再缩回屏幕，这是高分辨率 VR 掉帧的主因。限定后只渲染可见视野，像素量少一个数量级，
+  1.25 倍还带一点超采样。窗口尺寸变化时后端会按新尺寸重写一次着色器。
+- **进入 VR 时的 `keepaspect` / `panscan` / `video-zoom` / `video-pan-*` 只在进入时写一次**，
+  拖动视角只换着色器。原先每个触摸点都写这五项，会反复触发 vo 重新配置，拖动明显更卡。
 
 ## 已知限制
 
@@ -84,11 +95,12 @@
 - 双眼输出（`VrEye.Both`）只是左右并排，给 3D 显示器或 VR 盒子用，普通屏幕看是两幅画。
 - 底栏的 VR 快捷开关与设置面板共用 `VrModeState.toggled(title)`：开启时按文件名猜投影并回正视角，
   猜不中或要改眼睛 / 鱼眼角度再进设置面板细调。竖屏窄于 600dp 时它在底栏「更多」里，
-  开启后「更多」按钮按开启态高亮，退出仍可点底部的「退出 VR」胶囊。
+  开启后「更多」按钮按开启态高亮；退出与投影轮换都在左侧竖栏。
 
 ## 手测清单
 
 1. 打开文件名含 `180` 的左右并排鱼眼片，点底栏 VR 图标（竖屏窄宽度时先点「更多」）：应直接进入「180° 鱼眼」且视角回正。
+   左侧竖栏点投影按钮，应在五种格式间循环，且当前视角不动。
 2. 拖动看四周，左右拖到头不应出现镜像或翻面；上下到 ±90° 停住。
 3. 滚轮 / 双指缩放，视野限制在 40°–150°；鱼眼镜头角度可切 180/190/200。
 4. 暂停后拖动仍实时更新；继续播放后硬解不中断（详情面板看 `hwdec-current`）。

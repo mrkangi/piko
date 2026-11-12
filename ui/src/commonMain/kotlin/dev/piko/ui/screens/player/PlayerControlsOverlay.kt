@@ -368,20 +368,27 @@ fun MobilePlayerControls(
                         onCropRegionChange(null)
                     },
                 )
-                VrViewPromptRow(
-                    visible = chromeVisible && !isSeeking && vrEnabled && errorMessage == null,
-                    canReset = vrMode?.isDefaultView == false,
-                    projectionLabel = vrMode?.projection?.label.orEmpty(),
-                    onReset = {
-                        ui.interacted()
-                        vrMode?.let { onVrModeChange(it.resetView()) }
-                    },
-                    onExit = {
-                        ui.interacted()
-                        vrMode?.let { onVrModeChange(it.copy(enabled = false)) }
-                    },
-                )
             }
+
+            // VR 的操作放在左侧竖栏：底部居中的一排会压在画面下沿的正中
+            VrSideControls(
+                visible = chromeVisible && !isSeeking && vrEnabled && errorMessage == null,
+                canReset = vrMode?.isDefaultView == false,
+                projectionLabel = vrMode?.projection?.label.orEmpty(),
+                onCycleProjection = {
+                    ui.interacted()
+                    vrMode?.let { onVrModeChange(it.nextProjection()) }
+                },
+                onReset = {
+                    ui.interacted()
+                    vrMode?.let { onVrModeChange(it.resetView()) }
+                },
+                onExit = {
+                    ui.interacted()
+                    vrMode?.let { onVrModeChange(it.copy(enabled = false)) }
+                },
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
 
             AnimatedVisibility(
                 visible = chromeVisible,

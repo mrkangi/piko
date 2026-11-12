@@ -52,6 +52,7 @@ import org.openani.mediamp.mpv.JvmMpvMediampPlayer
 import org.openani.mediamp.mpv.MPVHandle
 import org.openani.mediamp.source.UriMediaData
 import java.io.File
+import kotlin.math.ceil
 
 /**
  * MediaMP（mpv 后端）到共用播放接口的转接。
@@ -482,11 +483,15 @@ internal class MediampPlaybackBackend(
         val handle = mpv ?: return
         val session = vrShaderSession ?: return
         if (next.enabled) {
-            val path = session.writeNext(next) ?: return
-            // 透视投影按窗口实际宽高比算，画面铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉
-            handle.setPropertyString("keepaspect", "no")
-            handle.setPropertyString("panscan", "0.0")
-            resetMpvCropZoom()
+            val pass = vrPassSize(handle)
+            val path = session.writeNext(next, pass?.first, pass?.second) ?: return
+            if (!vrShaderLoaded) {
+                // 透视投影按窗口实际宽高比算，画面铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉。
+                // 只在进入 VR 时写一次，拖动视角不再重复配置 vo
+                handle.setPropertyString("keepaspect", "no")
+                handle.setPropertyString("panscan", "0.0")
+                resetMpvCropZoom()
+            }
             handle.command("no-osd", "change-list", "glsl-shaders", "set", path)
             vrShaderLoaded = true
         } else {
@@ -498,6 +503,21 @@ internal class MediampPlaybackBackend(
             // 让 MediaMP 按当前所选重新下发 keepaspect、panscan 与框选缩放
             setAspectRatio(currentAspectRatio ?: PlayerAspectRatio.Fit)
         }
+    }
+
+    /**
+     * VR 着色器 pass 的渲染尺寸：屏幕的 1.25 倍，且不超过源分辨率。读不到就退回源尺寸。
+     * `MAINPRESUB` 在放大之前执行，不限定会按 8K 源逐像素跑。
+     */
+    private fun vrPassSize(handle: MPVHandle): Pair<Int, Int>? {
+        val osdWidth = handle.getPropertyString("osd-width")?.toIntOrNull() ?: 0
+        val osdHeight = handle.getPropertyString("osd-height")?.toIntOrNull() ?: 0
+        if (osdWidth <= 0 || osdHeight <= 0) return null
+        val sourceWidth = handle.getPropertyString("video-params/w")?.toIntOrNull() ?: 0
+        val sourceHeight = handle.getPropertyString("video-params/h")?.toIntOrNull() ?: 0
+        val width = ceil(osdWidth * VR_PASS_SCALE).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
+        val height = ceil(osdHeight * VR_PASS_SCALE).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
+        return width to height
     }
 
     private fun applyMpvCropRegion(region: VideoCropRegion) {
@@ -563,6 +583,9 @@ private const val MIB = 1024 * 1024
 private const val PREVIEW_CACHE_SECONDS = 8
 private const val PREVIEW_PROBE_BYTES = 1024 * 1024
 private const val PREVIEW_ANALYZE_SECONDS = 1
+
+/** VR 着色器按屏幕的 1.25 倍渲染再缩回：略有超采样，像素量仍远小于 8K 源。 */
+private const val VR_PASS_SCALE = 1.25f
 
 /** 句柄取不到时退回 MediaMP 读的轨道：音轨没有语言，也分不出外挂。 */
 private fun snapshotOf(feature: MediaMetadata, audio: List<AudioTrack>, subtitles: List<SubtitleTrack>) = MpvTrackSnapshot(

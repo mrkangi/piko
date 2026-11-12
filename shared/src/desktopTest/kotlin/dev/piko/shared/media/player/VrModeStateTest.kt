@@ -68,6 +68,30 @@ class VrModeStateTest {
     }
 
     @Test
+    fun clickingProjectionCyclesThroughAllFormatsAndKeepsTheView() {
+        val start = VrModeState(
+            enabled = true,
+            projection = VrProjection.DualFisheye180,
+            yawRadians = 0.4f,
+            pitchRadians = -0.2f,
+            fovDegrees = 80f,
+        )
+        val seen = mutableListOf(start.projection)
+        var state = start
+        repeat(VrProjection.entries.size) {
+            state = state.nextProjection()
+            seen += state.projection
+        }
+        // 一轮回到起点，且每种格式都出现了
+        assertEquals(start.projection, state.projection)
+        assertEquals(VrProjection.entries.toSet(), seen.toSet())
+        // 只换投影，视角保持不动
+        assertEquals(start.yawRadians, state.yawRadians)
+        assertEquals(start.pitchRadians, state.pitchRadians)
+        assertEquals(start.fovDegrees, state.fovDegrees)
+    }
+
+    @Test
     fun shaderEncodesParametersIntoRgba8TextureWithoutParamDirectives() {
         val mode = VrModeState(
             enabled = true,
@@ -98,6 +122,18 @@ class VrModeStateTest {
         assertFalse("//!PARAM" in source)
         assertTrue("//!TEXTURE PIKO_VR_PARAMS" in source)
         assertTrue("//!HOOK MAINPRESUB" in source)
+    }
+
+    @Test
+    fun shaderCanCapThePassSize() {
+        val mode = VrModeState(enabled = true, projection = VrProjection.DualFisheye180)
+        val capped = MpvVrShader.shaderSourceOf(mode, passWidth = 1600, passHeight = 900)
+        assertTrue("//!WIDTH 1600" in capped)
+        assertTrue("//!HEIGHT 900" in capped)
+
+        val uncapped = MpvVrShader.shaderSourceOf(mode)
+        assertFalse("//!WIDTH" in uncapped)
+        assertFalse("//!HEIGHT" in uncapped)
     }
 
     @Test

@@ -247,6 +247,19 @@ enum class VrProjection(val isStereo: Boolean) {
 }
 
 /**
+ * 播放页投影按钮的轮换顺序：先按 VR180 的三种常见封装，再到 360。
+ * 从任意一项都能绕回，按钮点到底不会停住。
+ */
+val VrProjection.next: VrProjection
+    get() = when (this) {
+        VrProjection.DualFisheye180 -> VrProjection.DualHalfEquirectangular180
+        VrProjection.DualHalfEquirectangular180 -> VrProjection.HalfEquirectangular180
+        VrProjection.HalfEquirectangular180 -> VrProjection.Equirectangular360
+        VrProjection.Equirectangular360 -> VrProjection.DualVertEquirectangular360
+        VrProjection.DualVertEquirectangular360 -> VrProjection.DualFisheye180
+    }
+
+/**
  * 双眼片源里取哪只眼看。手机与电脑都是平面屏幕，默认只取左眼，画面干净没有重影；
  * 双眼用于给 VR 盒子或 3D 显示器输出左右并排。
  */
@@ -309,6 +322,9 @@ data class VrModeState(
         } else {
             copy(enabled = true, projection = guessProjection(title)).resetView()
         }
+
+    /** 换输入投影，保留当前朝向与视野：便于原地对比同一视角下的各种封装。 */
+    fun nextProjection(): VrModeState = copy(projection = projection.next)
 
     companion object {
         const val DEFAULT_FOV_DEGREES = 105f

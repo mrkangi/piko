@@ -41,6 +41,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /**
  * libmpv 的播放后端。
@@ -440,18 +441,22 @@ internal class MpvPlaybackBackend(
         }
     }
 
-    /** 只在 mpv-calls 线程上调用。 */
-    private fun applyVrMode(mode: VrModeState) {
+    /** 只在 mpv-calls 线程上调用。[outputWidth]/[outputHeight] 是刚设置的 Surface 尺寸，为 0 时读 mpv 的 osd 尺寸。 */
+    private fun applyVrMode(mode: VrModeState, outputWidth: Int = 0, outputHeight: Int = 0) {
         if (destroyed || released) return
         val session = vrShaderSession ?: return
         if (mode.enabled) {
-            val path = session.writeNext(mode) ?: return
-            // 透视投影按窗口的实际宽高比算，画面要铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉
-            mpv.setPropertyString("keepaspect", "no")
-            mpv.setPropertyDouble("panscan", 0.0)
-            mpv.setPropertyDouble("video-zoom", 0.0)
-            mpv.setPropertyDouble("video-pan-x", 0.0)
-            mpv.setPropertyDouble("video-pan-y", 0.0)
+            val pass = vrPassSize(outputWidth, outputHeight)
+            val path = session.writeNext(mode, pass?.first, pass?.second) ?: return
+            if (!vrShaderLoaded) {
+                // 透视投影按窗口的实际宽高比算，画面要铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉。
+                // 只在进入 VR 时写一次：拖动视角时每个触摸点都写这五项，每次都触发一次 vo 重新配置
+                mpv.setPropertyString("keepaspect", "no")
+                mpv.setPropertyDouble("panscan", 0.0)
+                mpv.setPropertyDouble("video-zoom", 0.0)
+                mpv.setPropertyDouble("video-pan-x", 0.0)
+                mpv.setPropertyDouble("video-pan-y", 0.0)
+            }
             mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "set", path))
             vrShaderLoaded = true
         } else {
@@ -467,6 +472,24 @@ internal class MpvPlaybackBackend(
                 mpv.setPropertyDouble("panscan", if (currentAspectRatio == PlayerAspectRatio.Crop) 1.0 else 0.0)
             }
         }
+    }
+
+    /**
+     * VR 着色器 pass 的渲染尺寸：屏幕的 1.25 倍，且不超过源分辨率。读不到尺寸时返回 null，
+     * 退回按源分辨率渲染（行为与旧版一致）。
+     *
+     * `MAINPRESUB` 在放大之前执行，不限尺寸就是 8K 源逐像素跑；限定成可见视野大小后，
+     * 8K 片源每帧的着色像素少一个数量级。
+     */
+    private fun vrPassSize(outputWidth: Int = 0, outputHeight: Int = 0): Pair<Int, Int>? {
+        val osdWidth = outputWidth.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-width") }.getOrNull() ?: 0)
+        val osdHeight = outputHeight.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-height") }.getOrNull() ?: 0)
+        if (osdWidth <= 0 || osdHeight <= 0) return null
+        val sourceWidth = runCatching { mpv.getPropertyInt("video-params/w") }.getOrNull() ?: 0
+        val sourceHeight = runCatching { mpv.getPropertyInt("video-params/h") }.getOrNull() ?: 0
+        val width = ceil(osdWidth * VR_PASS_SCALE).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
+        val height = ceil(osdHeight * VR_PASS_SCALE).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
+        return width to height
     }
 
     override fun setVolume(volume: Float) {
@@ -600,6 +623,9 @@ internal class MpvPlaybackBackend(
         if (released || !surfaceAttached) return
         onMpv {
             mpv.setPropertyString("android-surface-size", "${width}x$height")
+            // 着色器 pass 按屏幕尺寸算，旋转或改窗口后要按新尺寸重写一次；拖视角时不会走到这里
+            // 尺寸刚设置，vo 可能还没重新配置，直接用这次的宽高算 pass 尺寸
+            if (vrShaderLoaded) applyVrMode(currentVrMode, width, height)
             if (needsPausedRedrawOnResize) {
                 needsPausedRedrawOnResize = false
                 // 切后台时 ON_STOP 会把播放器暂停，新建的 Surface 尚未收到任何渲染帧；尺寸设好后主动原位重绘一帧，消除切回黑屏
@@ -906,6 +932,8 @@ internal class MpvPlaybackBackend(
         const val PREVIEW_PROBE_BYTES = 1024 * 1024
         const val PREVIEW_ANALYZE_SECONDS = 1
         const val POSITION_GRANULARITY_MILLIS = 250L
+        // VR 着色器按屏幕的 1.25 倍渲染再缩回：略有超采样，像素量仍远小于 8K 源
+        const val VR_PASS_SCALE = 1.25f
 
         // mpv_log_level 的 MPV_LOG_LEVEL_ERROR。1.0.0 的构件没带 MpvLogLevel 常量类
         const val MPV_LOG_LEVEL_ERROR = 20

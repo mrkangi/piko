@@ -9,7 +9,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -43,6 +46,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -62,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -98,67 +103,84 @@ internal fun RestoreCropPromptButton(
 }
 
 /**
- * 开了 VR 之后底部的一排快捷操作：当前投影格式、回正视角、退出。
+ * VR 的常驻操作放在左边一条竖栏里：投影格式、回正视角、退出。
  *
- * 拖动画面转视角是隐式操作，界面上留一个常驻的退出入口，免得用户以为退不出去；
- * 视角偏离正前方时才出现「回正」，平时不占地方。
+ * 原先在画面底部居中，VR 画面铺满全屏时正好压在视线下方；挪到左侧只占一条窄栏，
+ * 也避开了底栏、续播提示与中央播放键。投影格式本身是按钮，点一次换到下一种。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-internal fun VrViewPromptRow(
+internal fun VrSideControls(
     visible: Boolean,
     canReset: Boolean,
     projectionLabel: String,
+    onCycleProjection: () -> Unit,
     onReset: () -> Unit,
     onExit: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val motion = MaterialTheme.motionScheme
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(motion.defaultEffectsSpec()) + slideInVertically(motion.defaultSpatialSpec()) { it / 2 },
-        exit = fadeOut(motion.fastEffectsSpec()) + slideOutVertically(motion.fastSpatialSpec()) { it / 2 },
+        enter = fadeIn(motion.defaultEffectsSpec()) + slideInHorizontally(motion.defaultSpatialSpec()) { -it },
+        exit = fadeOut(motion.fastEffectsSpec()) + slideOutHorizontally(motion.fastSpatialSpec()) { -it },
+        modifier = modifier,
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .widthIn(max = 168.dp)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+                .padding(start = 16.dp),
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (projectionLabel.isNotEmpty()) {
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = playerContainerColor(),
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                VrSideButton(
+                    onClick = onCycleProjection,
+                    modifier = Modifier.semantics {
+                        contentDescription = tr(
+                            "投影格式 $projectionLabel，点击切换",
+                            "Projection $projectionLabel, tap to change",
+                            "投影形式 $projectionLabel、タップで切り替え",
+                            "투영 형식 $projectionLabel, 탭하여 전환",
+                            "投影格式 $projectionLabel，點擊切換",
+                        )
+                    },
                 ) {
-                    Text(
-                        text = projectionLabel,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
+                    Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(projectionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (canReset) {
-                FilledTonalButton(
-                    onClick = onReset,
-                    shapes = ButtonDefaults.shapes(),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = playerContainerColor(),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                    ),
-                ) {
+                VrSideButton(onClick = onReset) {
                     Text(tr("回正视角", "Recenter view", "視点をリセット", "시점 초기화", "視角回正"))
                 }
             }
-            FilledTonalButton(
-                onClick = onExit,
-                shapes = ButtonDefaults.shapes(),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = playerContainerColor(),
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-            ) {
+            VrSideButton(onClick = onExit) {
                 Text(tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR"))
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun VrSideButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    FilledTonalButton(
+        onClick = onClick,
+        shapes = ButtonDefaults.shapes(),
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = playerContainerColor(),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        modifier = modifier,
+        content = content,
+    )
 }
 
 /**
@@ -203,7 +225,7 @@ internal fun ResumeTipCapsule(
 }
 
 /**
- * 画面底部的提示区：消息提示、续播提示、全屏入口自上而下排成一列。
+ * 画面底部的提示区：消息提示、续播提示、框选还原自上而下排成一列。
  *
  * 三者原先各自按固定的底部间距定位，同时出现就会叠在一起。放进同一列后由布局
  * 负责让位；整列在控件栏出现时抬到底栏上方，收起后落回贴近底边的位置。
