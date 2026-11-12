@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled._360
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.MaterialTheme
@@ -377,7 +378,24 @@ fun MobilePlayerControls(
                 projectionLabel = vrMode?.projection?.label.orEmpty(),
                 onCycleProjection = {
                     ui.interacted()
-                    vrMode?.let { onVrModeChange(it.nextProjection()) }
+                    vrMode?.let { mode ->
+                        val next = mode.nextProjection()
+                        onVrModeChange(next)
+                        // 按钮只剩图标，换到哪种格式由中央读数报一下，用户不用记住轮换顺序
+                        ui.flash(
+                            CenterIndicator(
+                                Icons.AutoMirrored.Filled._360,
+                                next.projection.label,
+                                tr(
+                                    "投影格式 ${next.projection.label}",
+                                    "Projection ${next.projection.label}",
+                                    "投影形式 ${next.projection.label}",
+                                    "투영 형식 ${next.projection.label}",
+                                    "投影格式 ${next.projection.label}",
+                                ),
+                            ),
+                        )
+                    }
                 },
                 onReset = {
                     ui.interacted()

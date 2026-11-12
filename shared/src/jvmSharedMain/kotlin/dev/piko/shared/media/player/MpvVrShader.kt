@@ -1,6 +1,7 @@
 package dev.piko.shared.media.player
 
 import java.io.File
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -11,19 +12,24 @@ import kotlin.math.roundToInt
  * 既不经过 CPU 的 `v360` 滤镜，也不打断零拷贝硬解；改视角只更新参数纹理，mpv 会重绘当前帧，
  * 暂停时拖动也立刻生效。
  *
- * ### 为什么不用 `//!PARAM` 与 `glsl-shader-opts`
- * mpv 0.41.0 的 `//!PARAM` 仅在 `vo=gpu-next`（libplacebo 的 `pl_mpv_user_shader_parse`）中实现；
- * Android 的 `vo=gpu` 与桌面端 MediaMP 的 `vo=libmpv` 走的都是 `video/out/gpu/user_shaders.c`，
- * 遇到 `//!PARAM` 第一行就会报 `Unrecognized command 'PARAM ...'!` 并丢弃整份着色器，画面毫无变化。
+ * ### 两套传参方式
+ * 拖动视角时每帧都会更新参数，如果每次都改写着色器文件，mpv 会重新读盘、重新编译整份 GLSL，
+ * 手指还没抬起来就卡住了。因此按当前视频输出分别处理：
  *
- * 这里改用 `user_shaders.c` 原生支持的 `//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`，所有移动与桌面
- * GPU 均必选支持）：把 7 个视角参数按 16-bit 定点编码进 16 字节纹理，主 `//!HOOK MAINPRESUB`
- * 的 GLSL 源码完全固定不变。每次更新视角时，`vo=gpu` 的 `shader_cache` 100% 命中已编译的 GPU
- * Program（零 GLSL 重编译），仅重传 16 字节参数纹理并立即触发重绘。
+ * - **`vo=gpu-next`（Android 进入 VR 时启用）**：用 `//!PARAM` 声明视角参数，每次只把新的
+ *   键值串写进 `glsl-shader-opts`。着色器源码与文件路径都不变，libplacebo 把参数当 uniform
+ *   更新，只重绘当前帧，不重编译。
+ * - **`vo=gpu` / `vo=libmpv`（回退路径与桌面端 MediaMP）**：这两条传统渲染路径只认
+ *   `user_shaders.c` 的指令，遇到 `//!PARAM` 会直接丢弃整份着色器。这里改用
+ *   `//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`）把 7 个参数按 16-bit 定点编码进 16 字节纹理，
+ *   再按路径轮转写出序号文件。它能用，但每次更新仍要重新读文件，不适合高频拖动。
  *
- * 同时 `video/out/gpu/video.c` 的 `gl_video_setup_hooks` 会按路径字符串（`strcmp`）在内存里缓存
- * 已读过的着色器文本，重复传入同一路径不会重新读盘；因此由 [MpvVrShaderSession] 写出带序号的
- * 文件并自动清理旧文件。
+ * 两条路径共用同一份反投影 GLSL：参数读取放在 `#ifdef PIKO_VR_UNIFORM` 里，
+ * 固定预处理器开关由 [paramShaderSourceOf] 打开。
+ *
+ * `video/out/gpu/video.c` 与 `vo_gpu_next.c` 都会按路径字符串缓存已读过的着色器文本，
+ * 重复传入同一路径不会重新读盘；因此 [MpvVrShaderSession] 只在投影/尺寸真正变化时写新文件，
+ * 参数更新不碰文件。
  */
 object MpvVrShader {
     const val FILE_PREFIX = "piko_vr_"
@@ -78,24 +84,111 @@ object MpvVrShader {
      * [passWidth]/[passHeight] 非空时给 `MAINPRESUB` 指定渲染尺寸。该 hook 在放大之前执行，
      * 不给尺寸就是按源分辨率跑：8K 片源等于每帧处理三千多万像素，再缩回屏幕。
      * 按屏幕的 1.25 倍渲染即可，画质几乎无损，像素量少一个数量级。
+     *
+     * 这是给 `vo=gpu` / `vo=libmpv` 的回退版本；Android 的正常路径见 [paramShaderSourceOf]。
      */
     fun shaderSourceOf(mode: VrModeState, passWidth: Int? = null, passHeight: Int? = null): String =
-        buildString(hookSource.length + 128) {
+        buildString(hookBody.length + 256) {
             append("//!TEXTURE PIKO_VR_PARAMS\n")
             append("//!SIZE 4 1\n")
             append("//!FORMAT rgba8\n")
             append("//!FILTER NEAREST\n")
             append("//!BORDER CLAMP\n")
             append(encodeParamsHex(mode)).append("\n\n")
-            val sizeDirectives = if (passWidth != null && passHeight != null && passWidth > 0 && passHeight > 0) {
-                "//!WIDTH $passWidth\n//!HEIGHT $passHeight\n"
-            } else {
-                ""
-            }
-            append(hookSource.replace(PASS_SIZE_PLACEHOLDER, sizeDirectives))
+            append(hookSource(uniformParams = false, passWidth = passWidth, passHeight = passHeight))
         }
 
-    private const val PASS_SIZE_PLACEHOLDER = "%PASS_SIZE%"
+    /**
+     * 生成 `vo=gpu-next` 用的着色器：源码只与 pass 尺寸有关，视角参数由 [shaderOptsOf] 下发。
+     *
+     * 同一份源码可以一直复用，拖动视角不需要写文件、也不需要重新编译。
+     */
+    fun paramShaderSourceOf(passWidth: Int? = null, passHeight: Int? = null): String =
+        buildString(paramDeclarations.length + hookBody.length + 256) {
+            append(paramDeclarations)
+            append(hookSource(uniformParams = true, passWidth = passWidth, passHeight = passHeight))
+        }
+
+    /** 把当前视角编码成 `glsl-shader-opts` 的键值串。只在 `vo=gpu-next` 下有实际作用。 */
+    fun shaderOptsOf(mode: VrModeState): String {
+        val state = mode.normalized()
+        fun Float.opt(): String = String.format(Locale.ROOT, "%.6f", this)
+        return listOf(
+            "piko_fov=${state.fovDegrees.toRadians().opt()}",
+            "piko_yaw=${state.yawRadians.opt()}",
+            "piko_pitch=${state.pitchRadians.opt()}",
+            "piko_roll=${state.rollRadians.opt()}",
+            "piko_fisheye_fov=${state.fisheyeFovDegrees.toRadians().opt()}",
+            "piko_projection=${state.projection.shaderValue}",
+            "piko_eye=${state.eye.shaderValue}",
+        ).joinToString(",")
+    }
+
+    /**
+     * `//!PARAM` 必须写在整份文件的开头。初始值与 [VrModeState] 的默认值一致：
+     * 即使后端还没下发 `glsl-shader-opts`，第一帧也是正常的 180° 鱼眼视角。
+     */
+    private val paramDeclarations: String = """
+        //!PARAM piko_fov
+        //!DESC Horizontal field of view in radians
+        //!TYPE float
+        //!MINIMUM 0.1
+        //!MAXIMUM 3.0
+        1.832596
+
+        //!PARAM piko_yaw
+        //!DESC Camera yaw in radians
+        //!TYPE float
+        //!MINIMUM -6.2831855
+        //!MAXIMUM 6.2831855
+        0.0
+
+        //!PARAM piko_pitch
+        //!DESC Camera pitch in radians
+        //!TYPE float
+        //!MINIMUM -1.5707964
+        //!MAXIMUM 1.5707964
+        0.0
+
+        //!PARAM piko_roll
+        //!DESC Camera roll in radians
+        //!TYPE float
+        //!MINIMUM -3.1415927
+        //!MAXIMUM 3.1415927
+        0.0
+
+        //!PARAM piko_fisheye_fov
+        //!DESC Fisheye lens field of view in radians
+        //!TYPE float
+        //!MINIMUM 1.5707964
+        //!MAXIMUM 3.6651914
+        3.1415927
+
+        //!PARAM piko_projection
+        //!DESC Input projection (0=equirect, 1=dual fisheye, 2=dual half equirect, 3=half equirect, 4=dual vert equirect)
+        //!TYPE int
+        1
+
+        //!PARAM piko_eye
+        //!DESC Source eye (0=left, 1=right, 2=both)
+        //!TYPE int
+        0
+
+    """.trimIndent() + "\n\n"
+
+    private fun hookSource(uniformParams: Boolean, passWidth: Int?, passHeight: Int?): String =
+        buildString(hookBody.length + 256) {
+            append("//!HOOK MAINPRESUB\n")
+            append("//!BIND HOOKED\n")
+            if (!uniformParams) append("//!BIND PIKO_VR_PARAMS\n")
+            append("//!DESC Piko VR projection\n")
+            if (passWidth != null && passHeight != null && passWidth > 0 && passHeight > 0) {
+                append("//!WIDTH $passWidth\n")
+                append("//!HEIGHT $passHeight\n")
+            }
+            if (uniformParams) append("#define PIKO_VR_UNIFORM 1\n")
+            append(hookBody)
+        }
 
     private val VrProjection.shaderValue: Int
         get() = when (this) {
@@ -120,13 +213,7 @@ object MpvVrShader {
         return (normalized * 65535f).roundToInt().coerceIn(0, 65535)
     }
 
-    private val hookSource: String = """
-        //!HOOK MAINPRESUB
-        //!BIND HOOKED
-        //!BIND PIKO_VR_PARAMS
-        //!DESC Piko VR projection
-        %PASS_SIZE%
-
+    private val hookBody: String = """
         #define PIKO_PI 3.1415926535897932
         #define PROJ_EQUIRECT 0
         #define PROJ_DUAL_FISHEYE 1
@@ -242,6 +329,15 @@ object MpvVrShader {
         }
 
         vec4 hook() {
+        #ifdef PIKO_VR_UNIFORM
+            float fov = piko_fov;
+            float yaw = piko_yaw;
+            float pitch = piko_pitch;
+            float roll = piko_roll;
+            float fisheye_fov = piko_fisheye_fov;
+            int input_projection = piko_projection;
+            int eye = piko_eye;
+        #else
             vec4 t0 = texture(PIKO_VR_PARAMS, vec2(0.125, 0.5));
             vec4 t1 = texture(PIKO_VR_PARAMS, vec2(0.375, 0.5));
             vec4 t2 = texture(PIKO_VR_PARAMS, vec2(0.625, 0.5));
@@ -252,6 +348,7 @@ object MpvVrShader {
             float fisheye_fov = decode_u16(t2.r, t2.g, 1.5707964, 3.6651914);
             int input_projection = int(floor(t2.b * 255.0 + 0.5));
             int eye = int(floor(t2.a * 255.0 + 0.5));
+        #endif
 
             vec2 uv = HOOKED_pos;
             if (eye == EYE_BOTH && is_stereo(input_projection)) {
@@ -275,6 +372,9 @@ object MpvVrShader {
 class MpvVrShaderSession(private val dir: File) {
     private val recentFiles = ArrayDeque<File>(RETAINED_FILES + 1)
     private var sequence = 0L
+    private var paramFile: File? = null
+    private var paramWidth: Int? = null
+    private var paramHeight: Int? = null
 
     val isAvailable: Boolean = runCatching {
         if (!dir.exists()) dir.mkdirs()
@@ -289,6 +389,8 @@ class MpvVrShaderSession(private val dir: File) {
     @Synchronized
     fun writeNext(mode: VrModeState, passWidth: Int? = null, passHeight: Int? = null): String? {
         if (!isAvailable) return null
+        // 从 gpu-next 的动态参数路径切回纹理路径：之后不能再复用之前的参数文件
+        paramFile = null
         val nextSeq = ++sequence
         val file = File(dir, "${MpvVrShader.FILE_PREFIX}${nextSeq}${MpvVrShader.FILE_SUFFIX}")
         runCatching { file.writeText(MpvVrShader.shaderSourceOf(mode, passWidth, passHeight)) }.onFailure { return null }
@@ -299,12 +401,40 @@ class MpvVrShaderSession(private val dir: File) {
         return file.absolutePath
     }
 
+    /**
+     * 写出 `vo=gpu-next` 用的参数化着色器并返回路径；同一 pass 尺寸复用同一个文件。
+     *
+     * 只有进入 VR、旋转屏幕或改窗口尺寸时才会走到这里；拖动视角只更新 `glsl-shader-opts`。
+     */
+    @Synchronized
+    fun writeParamShader(passWidth: Int? = null, passHeight: Int? = null): String? {
+        if (!isAvailable) return null
+        val existing = paramFile
+        if (existing != null && existing.isFile && paramWidth == passWidth && paramHeight == passHeight) {
+            return existing.absolutePath
+        }
+        val nextSeq = ++sequence
+        val file = File(dir, "${MpvVrShader.FILE_PREFIX}${nextSeq}${MpvVrShader.FILE_SUFFIX}")
+        runCatching { file.writeText(MpvVrShader.paramShaderSourceOf(passWidth, passHeight)) }.onFailure { return null }
+        recentFiles.addLast(file)
+        while (recentFiles.size > RETAINED_FILES) {
+            runCatching { recentFiles.removeFirst().delete() }
+        }
+        paramFile = file
+        paramWidth = passWidth
+        paramHeight = passHeight
+        return file.absolutePath
+    }
+
     /** 退出 VR 或释放播放器时删除所有临时着色器文件。 */
     @Synchronized
     fun clear() {
         while (recentFiles.isNotEmpty()) {
             runCatching { recentFiles.removeFirst().delete() }
         }
+        paramFile = null
+        paramWidth = null
+        paramHeight = null
     }
 
     private fun cleanupStaleFiles() {

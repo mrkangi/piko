@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
@@ -137,6 +138,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -1447,6 +1449,48 @@ internal fun PlayerIconButton(
                 contentDescription = label,
                 modifier = Modifier.size(iconSize),
             )
+        }
+    }
+}
+
+/**
+ * 玻璃底图标按钮：与中央播放键同一套半透明深色底与细白边。
+ *
+ * 浮在 VR 画面上时只占一个小圆，尽量少挡画面；提示与读屏标签仍由按钮自己给出。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PlayerGlassIconButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    containerSize: Dp = 48.dp,
+    iconSize: Dp = 22.dp,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+        modifier = modifier,
+    ) {
+        Surface(
+            onClick = onClick,
+            shape = CircleShape,
+            color = GLASS_SCRIM,
+            contentColor = Color.White,
+            border = GLASS_BORDER,
+            modifier = Modifier
+                .size(containerSize)
+                .handCursor(),
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    modifier = Modifier.size(iconSize),
+                )
+            }
         }
     }
 }

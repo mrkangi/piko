@@ -9,7 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** VR 视角的限幅、拖动、缩放、文件名猜测与参数纹理编码。 */
+/** VR 视角的限幅、拖动、缩放、文件名猜测，以及两条着色器传参路径。 */
 class VrModeStateTest {
     @Test
     fun pitchStopsAtStraightUpAndDown() {
@@ -134,6 +134,65 @@ class VrModeStateTest {
         val uncapped = MpvVrShader.shaderSourceOf(mode)
         assertFalse("//!WIDTH" in uncapped)
         assertFalse("//!HEIGHT" in uncapped)
+    }
+
+    @Test
+    fun paramShaderUsesUniformDirectivesAndIgnoresTheView() {
+        val source = MpvVrShader.paramShaderSourceOf(passWidth = 1600, passHeight = 900)
+        // gpu-next 的 //!PARAM 必须在文件开头，且每个参数都带类型与默认值
+        assertTrue(source.startsWith("//!PARAM piko_fov"))
+        assertTrue("//!TYPE float" in source)
+        assertTrue("//!TYPE int" in source)
+        assertTrue("//!WIDTH 1600" in source)
+        assertTrue("//!HEIGHT 900" in source)
+        assertTrue("#define PIKO_VR_UNIFORM 1" in source)
+        // 参数化版本不能再带纹理，否则每次更新参数还是要重写文件
+        assertFalse("//!TEXTURE" in source)
+        // 源码与视角无关：拖动只更新 glsl-shader-opts
+        assertEquals(source, MpvVrShader.paramShaderSourceOf(passWidth = 1600, passHeight = 900))
+    }
+
+    @Test
+    fun shaderOptsCarryTheWholeViewAsPlainDecimals() {
+        val mode = VrModeState(
+            enabled = true,
+            projection = VrProjection.DualVertEquirectangular360,
+            eye = VrEye.Right,
+            yawRadians = 0.5f,
+            pitchRadians = -0.25f,
+            fovDegrees = 90f,
+            fisheyeFovDegrees = 190f,
+        )
+        val opts = MpvVrShader.shaderOptsOf(mode)
+        assertTrue("piko_fov=1.570796" in opts)
+        assertTrue("piko_yaw=0.500000" in opts)
+        assertTrue("piko_pitch=-0.250000" in opts)
+        assertTrue("piko_fisheye_fov=3.316126" in opts)
+        assertTrue("piko_projection=4" in opts)
+        assertTrue("piko_eye=1" in opts)
+        // 不能用科学计数法：mpv 的键值串解析按普通十进制读
+        assertFalse("E-" in opts.uppercase())
+    }
+
+    @Test
+    fun paramShaderSessionReusesTheSameFileForTheSamePassSize() {
+        val dir = Files.createTempDirectory("piko-vr-param-test").toFile()
+        try {
+            val session = MpvVrShaderSession(dir)
+            val first = session.writeParamShader(1600, 900)
+            val again = session.writeParamShader(1600, 900)
+            assertNotNull(first)
+            assertEquals(first, again)
+            val resized = session.writeParamShader(1280, 720)
+            assertNotNull(resized)
+            assertTrue(resized != first)
+            // 参数文件与纹理文件不能互相复用
+            val texture = session.writeNext(VrModeState(enabled = true))
+            assertNotNull(texture)
+            assertTrue(session.writeParamShader(1280, 720) != resized)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test

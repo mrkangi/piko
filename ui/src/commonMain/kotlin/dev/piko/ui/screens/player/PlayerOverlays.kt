@@ -20,11 +20,9 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,14 +37,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeMute
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled._360
 import androidx.compose.material.icons.filled.BrightnessMedium
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -71,7 +70,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
@@ -106,9 +104,9 @@ internal fun RestoreCropPromptButton(
  * VR 的常驻操作放在左边一条竖栏里：投影格式、回正视角、退出。
  *
  * 原先在画面底部居中，VR 画面铺满全屏时正好压在视线下方；挪到左侧只占一条窄栏，
- * 也避开了底栏、续播提示与中央播放键。投影格式本身是按钮，点一次换到下一种。
+ * 也避开了底栏、续播提示与中央播放键。三个操作都用纯图标加玻璃底，尺寸与中央播放键同一套，
+ * 不再用带文字的实色胶囊占掉画面。投影格式点一次换到下一种，当前格式放在提示与读屏标签里。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun VrSideControls(
     visible: Boolean,
@@ -128,59 +126,38 @@ internal fun VrSideControls(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 168.dp)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
-                .padding(start = 16.dp),
-            horizontalAlignment = Alignment.Start,
+                .padding(start = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (projectionLabel.isNotEmpty()) {
-                VrSideButton(
+                PlayerGlassIconButton(
+                    icon = Icons.AutoMirrored.Filled._360,
+                    label = tr(
+                        "投影格式 $projectionLabel",
+                        "Projection $projectionLabel",
+                        "投影形式 $projectionLabel",
+                        "투영 형식 $projectionLabel",
+                        "投影格式 $projectionLabel",
+                    ),
                     onClick = onCycleProjection,
-                    modifier = Modifier.semantics {
-                        contentDescription = tr(
-                            "投影格式 $projectionLabel，点击切换",
-                            "Projection $projectionLabel, tap to change",
-                            "投影形式 $projectionLabel、タップで切り替え",
-                            "투영 형식 $projectionLabel, 탭하여 전환",
-                            "投影格式 $projectionLabel，點擊切換",
-                        )
-                    },
-                ) {
-                    Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(projectionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                )
             }
             if (canReset) {
-                VrSideButton(onClick = onReset) {
-                    Text(tr("回正视角", "Recenter view", "視点をリセット", "시점 초기화", "視角回正"))
-                }
+                PlayerGlassIconButton(
+                    icon = Icons.Filled.CenterFocusStrong,
+                    label = tr("回正视角", "Recenter view", "視点をリセット", "시점 초기화", "視角回正"),
+                    onClick = onReset,
+                )
             }
-            VrSideButton(onClick = onExit) {
-                Text(tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR"))
-            }
+            PlayerGlassIconButton(
+                icon = Icons.Filled.Close,
+                label = tr("退出 VR", "Exit VR", "VR を終了", "VR 종료", "退出 VR"),
+                onClick = onExit,
+            )
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun VrSideButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable RowScope.() -> Unit,
-) {
-    FilledTonalButton(
-        onClick = onClick,
-        shapes = ButtonDefaults.shapes(),
-        colors = ButtonDefaults.filledTonalButtonColors(
-            containerColor = playerContainerColor(),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-        modifier = modifier,
-        content = content,
-    )
 }
 
 /**

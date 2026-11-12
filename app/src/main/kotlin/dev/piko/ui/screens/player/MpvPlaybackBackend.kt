@@ -18,6 +18,7 @@ import dev.piko.shared.log.PikoLog
 import dev.piko.shared.media.player.ExternalSubtitle
 import dev.piko.shared.media.player.MPV_SUBTITLE_LANGUAGES
 import dev.piko.shared.media.player.MediaTrack
+import dev.piko.shared.media.player.MpvVrShader
 import dev.piko.shared.media.player.MpvVrShaderSession
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
@@ -99,6 +100,7 @@ internal class MpvPlaybackBackend(
     override val vrMode: VrModeState get() = currentVrMode
     // 以下三个只在 mpv-calls 线程上读写
     private var vrShaderLoaded = false
+    private var vrVoRequested = false
     @Volatile private var pendingVrMode: VrModeState? = null
     @Volatile private var vrApplyQueued = false
 
@@ -254,6 +256,8 @@ internal class MpvPlaybackBackend(
             mpv.observeProperty("aid", MpvFormat.MPV_FORMAT_STRING)
             mpv.observeProperty("sid", MpvFormat.MPV_FORMAT_STRING)
             mpv.observeProperty("hwdec-current", MpvFormat.MPV_FORMAT_STRING)
+            // VO 切换是异步的；VR 里靠这个回调从纹理回退路径切到 gpu-next 的参数路径
+            mpv.observeProperty("current-vo", MpvFormat.MPV_FORMAT_STRING)
         }
     }
 
@@ -446,8 +450,23 @@ internal class MpvPlaybackBackend(
         if (destroyed || released) return
         val session = vrShaderSession ?: return
         if (mode.enabled) {
+            if (!vrVoRequested) {
+                // VR 投影参数走 vo=gpu-next 的 //!PARAM：拖动时只更新 glsl-shader-opts，
+                // 不重写文件、不重编译 GLSL。gpu 留在列表里作为兜底，真机不支持 libplacebo 时仍能出画面。
+                mpv.setPropertyString("vo", VR_VIDEO_OUTPUT)
+                mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "clr", ""))
+                vrVoRequested = true
+                vrShaderLoaded = false
+            }
             val pass = vrPassSize(outputWidth, outputHeight)
-            val path = session.writeNext(mode, pass?.first, pass?.second) ?: return
+            // VO 切换是异步的：刚下发 vo 时 current-vo 还是 gpu，先按纹理路径出一帧，
+            // 等 current-vo 变成 gpu-next 后由属性回调再切到参数路径。
+            val useParams = mpv.getPropertyString("current-vo") == "gpu-next"
+            val path = if (useParams) {
+                session.writeParamShader(pass?.first, pass?.second)
+            } else {
+                session.writeNext(mode, pass?.first, pass?.second)
+            } ?: return
             if (!vrShaderLoaded) {
                 // 透视投影按窗口的实际宽高比算，画面要铺满窗口；框选填充留下的缩放会叠加在球面上，先清掉。
                 // 只在进入 VR 时写一次：拖动视角时每个触摸点都写这五项，每次都触发一次 vo 重新配置
@@ -458,12 +477,17 @@ internal class MpvPlaybackBackend(
                 mpv.setPropertyDouble("video-pan-y", 0.0)
             }
             mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "set", path))
+            if (useParams) {
+                mpv.setPropertyString("glsl-shader-opts", MpvVrShader.shaderOptsOf(mode))
+            }
             vrShaderLoaded = true
         } else {
-            if (vrShaderLoaded) {
+            if (vrShaderLoaded || vrVoRequested) {
                 mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "clr", ""))
-                vrShaderLoaded = false
             }
+            if (vrVoRequested) mpv.setPropertyString("vo", VIDEO_OUTPUT)
+            vrShaderLoaded = false
+            vrVoRequested = false
             session.clear()
             if (currentAspectRatio == PlayerAspectRatio.RegionCrop) {
                 currentCropRegion?.let(::applyRegionCropOnMpv)
@@ -606,7 +630,7 @@ internal class MpvPlaybackBackend(
             }
             mpv.setOptionString("force-window", "yes")
             if (restoreVideoOutput && !headless) {
-                mpv.setPropertyString("vo", VIDEO_OUTPUT)
+                mpv.setPropertyString("vo", if (currentVrMode.enabled) VR_VIDEO_OUTPUT else VIDEO_OUTPUT)
                 mpv.setPropertyString("hwdec", hwdecPropertyOf(currentDecodeMode))
                 val targetVid = vidBeforeDetach.ifBlank { "auto" }
                 mpv.setPropertyString("vid", targetVid)
@@ -832,6 +856,9 @@ internal class MpvPlaybackBackend(
     override fun eventProperty(property: String, value: String) {
         if (property == "aid" || property == "sid") refreshTracks()
         else if (property == "hwdec-current" && fileLoaded) logDecoderState("hwdec-change")
+        else if (property == "current-vo" && currentVrMode.enabled && !released && !destroyed) {
+            onMpv { applyVrMode(currentVrMode) }
+        }
     }
 
     private fun logDecoderState(trigger: String) {
@@ -915,6 +942,8 @@ internal class MpvPlaybackBackend(
 
     private companion object {
         const val VIDEO_OUTPUT = "gpu"
+        /** 进入 VR 时优先 gpu-next；没有 libplacebo 的设备自动回落 gpu。 */
+        const val VR_VIDEO_OUTPUT = "gpu-next,gpu"
 
         // SurfaceRedrawGate 的顺序标记。事件只带编号不带内容，没有加载脚本，收到的 client-message 只会是它
         const val REDRAW_MARKER = "piko-redraw"

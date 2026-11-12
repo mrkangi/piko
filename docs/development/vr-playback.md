@@ -8,7 +8,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `shared/.../media/player/PlaybackBackend.kt` | `VrProjection`、`VrEye`、`VrModeState`（限幅、拖动、缩放、回正、按文件名猜格式）与后端接口 |
-| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、`4x1 rgba8` 参数纹理编码、pass 尺寸限幅与 `MpvVrShaderSession` 序号轮转 |
+| `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、gpu-next 的 `//!PARAM` 与回退用的 `4x1 rgba8` 参数纹理、pass 尺寸限幅与 `MpvVrShaderSession` 文件管理 |
 | `shared/.../media/player/PlayerScreenState.kt` | `vrMode` 状态与 `updateVrMode` / `panVr` / `zoomVr`，换集回正 |
 | `app/.../MpvPlaybackBackend.kt` | Android libmpv：挂着色器、合并高频更新、恢复画面比例 |
 | `desktopApp/.../MediampPlaybackBackend.kt` | 桌面 mpv：同上，着色器放 `PikoHome/cache/mpv` |
@@ -19,26 +19,29 @@
 
 ## mpv 侧约束
 
-- **只用 `vo=gpu` 的用户着色器，不要用 FFmpeg `v360` 滤镜。** `v360` 在解码后走 CPU，
+- **只用 mpv 的用户着色器，不要用 FFmpeg `v360` 滤镜。** `v360` 在解码后走 CPU，
   会打断零拷贝硬解（4K/8K 手机与轻薄本直接掉帧），而且暂停时改角度不会重绘。
 - 着色器挂 `//!HOOK MAINPRESUB`。这样反投影只作用在视频平面上，字幕后画、保持屏幕平铺；
   挂 `OUTPUT` 会把字幕一起卷进球面。
-- **严禁在着色器中使用 `//!PARAM` 与 `glsl-shader-opts`（踩坑实录）：**
-  - mpv 0.41.0 的 `//!PARAM` 指令仅在 `vo=gpu-next`（libplacebo 的 `pl_mpv_user_shader_parse`）中实现；
-  - Piko 的 Android 端使用 `vo=gpu`，桌面端 MediaMP 使用 `vo=libmpv`（底层绑定 `video/out/gpu/libmpv_gpu.c`），
-    二者走的都是传统 `video/out/gpu/user_shaders.c` 的 `parse_user_shader`（仅认识 `//!TEXTURE`、`//!HOOK`、
-    `//!BIND`、`//!SAVE`、`//!DESC`、`//!OFFSET`、`//!ALIGN`、`//!WIDTH`、`//!HEIGHT`、`//!WHEN`、`//!COMPONENTS`、`//!COMPUTE`）。
-  - 一旦文件里出现 `//!PARAM`，`vo=gpu` / `vo=libmpv` 在第一行就会报 `Unrecognized command 'PARAM fov'!`
-    并直接中止解析该着色器文件，表现出来就是「UI 上开关和按钮都能点，但画面毫无变化」。
-- **`//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`）零重编译传参方案 + 路径轮转：**
+- **Android 进 VR 时切到 `vo=gpu-next`，视角走 `//!PARAM` + `glsl-shader-opts`（主路径）：**
+  - 着色器文件里的 7 个参数（`piko_fov`、`piko_yaw`、`piko_pitch`、`piko_roll`、
+    `piko_fisheye_fov`、`piko_projection`、`piko_eye`）只在文件头声明一次，GLSL 源码与文件路径都不变。
+  - 拖动视角时只写 `glsl-shader-opts`，libplacebo 把参数当 uniform 更新并重绘当前帧，
+    **不重新读文件、不重编译 GLSL**。这是拖动流畅的关键。
+  - `vo` 设为 `gpu-next,gpu`：设备不支持 libplacebo 时自动回落 `gpu`，不会黑屏。
+  - VO 切换是异步的。刚下发 `vo` 时 `current-vo` 仍是 `gpu`，后端先按下面的纹理路径出画面，
+    收到 `current-vo=gpu-next` 后再切到参数路径；桌面端 MediaMP 的 `vo=libmpv` 始终走纹理路径。
+- **`vo=gpu` / `vo=libmpv` 的回退路径：`//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`）+ 文件轮转：**
+  - 这两条传统渲染路径走 `video/out/gpu/user_shaders.c`，不认识 `//!PARAM`，
+    文件里一旦出现就会整份丢弃，所以回退版本把参数编码进纹理。
   - 7 个视角参数（`fov`, `yaw`, `pitch`, `roll`, `fisheye_fov`, `input_projection`, `eye`）由 `MpvVrShader.encodeParamsHex`
     按 16-bit 定点编码进 `4x1` 的 `rgba8` 纹理（16 字节，所有移动与桌面 GPU 100% 必选支持 `rgba8`；角度分辨率约 `0.0055°`），
     下方 `//!HOOK MAINPRESUB` 的 GLSL 代码固定不变。
   - 每次更新视角时，`vo=gpu` 的 `shader_cache` 因 GLSL 源码字符串完全未变而 100% 命中已编译的 GPU Program（**零 GLSL 重编译**），
     仅重传 16 字节参数纹理并置 `vo->want_redraw` 立即重绘（含暂停状态）。
-  - 注意：`video/out/gpu/video.c` 的 `gl_video_setup_hooks` 会在内存中按文件路径字符串（`strcmp(p->files[n].path, path)`）
-    缓存已读取的文件内容，重复传入相同路径不会重新读盘；因此 `MpvVrShaderSession` 每次写出新的序号文件 `piko_vr_<seq>.glsl`
-    并通过 `no-osd change-list glsl-shaders set <path>` 下发，同时保留最近 4 份文件防止渲染线程异步读取时撞上文件被删的竞态。
+  - 注意：`vo=gpu` 的 `gl_video_setup_hooks` 会在内存中按文件路径字符串缓存已读取的文件内容，重复传入相同路径不会重新读盘；
+    因此纹理路径每次写出新的序号文件 `piko_vr_<seq>.glsl` 并通过 `no-osd change-list glsl-shaders set <path>` 下发，
+    同时保留最近 4 份文件防止渲染线程异步读取时撞上文件被删的竞态。参数路径只在进入 VR 或窗口尺寸变化时写文件。
   - Android 端显式设置 `gpu-dumb-mode=no`，防止部分移动 GPU 因未命中 16-bit FBO 自动回退 dumb-mode 而清空 `glsl-shaders`。
 - 进入 VR 前必须 `keepaspect=no`（透视投影按窗口真实宽高比铺满），并清掉
   `video-zoom` / `video-pan-x` / `video-pan-y`；否则「框选填充」留下的缩放会叠在球面上。
@@ -77,7 +80,8 @@
 - 不要依赖 `vrEnabled = vr?.enabled == true` 之后的智能转换：Android 与桌面两次编译
   对同一写法的判定并不一致，统一用 `vrMode?.let { ... }`。
 - **VR 操作放在左侧竖栏**，不要放回底部居中：VR 画面铺满全屏时底部正中正好压住视线下沿，
-  而左侧只是一条窄栏，也避开底栏、续播提示与中央播放键。竖栏随控件一起显隐。
+  而左侧只是一条窄栏，也避开底栏、续播提示与中央播放键。竖栏随控件一起显隐；
+  三个操作都用与中央播放键同一套半透明玻璃底加纯图标，不再用带文字的实色胶囊占画面。
 - **投影格式按钮点一次轮换一种**：`DualFisheye180 → DualHalfEquirectangular180 →
   HalfEquirectangular180 → Equirectangular360 → DualVertEquirectangular360` 循环，
   只改 `projection`，保留当前朝向与视野，方便原地对比同一视角下的各种封装；不跨视频持久化。
@@ -86,7 +90,7 @@
   再缩回屏幕，这是高分辨率 VR 掉帧的主因。限定后只渲染可见视野，像素量少一个数量级，
   1.25 倍还带一点超采样。窗口尺寸变化时后端会按新尺寸重写一次着色器。
 - **进入 VR 时的 `keepaspect` / `panscan` / `video-zoom` / `video-pan-*` 只在进入时写一次**，
-  拖动视角只换着色器。原先每个触摸点都写这五项，会反复触发 vo 重新配置，拖动明显更卡。
+  拖动视角只更新 `glsl-shader-opts`（回退路径只换文件）。原先每个触摸点都写这五项，会反复触发 vo 重新配置，拖动明显更卡。
 
 ## 已知限制
 
