@@ -9,6 +9,11 @@ name: Build
 #    才额外打 Windows x64 / macOS / Linux，桌面改动需要验证时再要。
 # 2. 手动触发：只跑构建、把产物留在 workflow 的 Artifacts 里（保留 7 天），不建 Release。
 #    适合只想拿某一个平台的包、或先确认能编过再打 tag。
+# SDK main 已进入 3.0 传输层重构，PikoStreamReader 的 readAheadLimit / urgent /
+# reportPlaybackBuffer 被移除；Piko 尚未迁移，测试包先固定在最后一个兼容提交。
+env:
+  PIKPAK_SDK_REF: 8eaf558
+
 on:
   push:
     tags:
@@ -120,6 +125,7 @@ jobs:
         with:
           repository: NihilDigit/pikpak-kotlin
           path: pikpak-kotlin
+          ref: ${{ env.PIKPAK_SDK_REF }}
 
       - name: Build against the SDK source
         shell: bash
@@ -175,6 +181,7 @@ jobs:
         with:
           repository: NihilDigit/pikpak-kotlin
           path: pikpak-kotlin
+          ref: ${{ env.PIKPAK_SDK_REF }}
 
       - name: Build against the SDK source
         shell: bash
@@ -227,6 +234,7 @@ jobs:
         with:
           repository: NihilDigit/pikpak-kotlin
           path: pikpak-kotlin
+          ref: ${{ env.PIKPAK_SDK_REF }}
 
       - name: Build against the SDK source
         shell: bash
@@ -271,6 +279,7 @@ jobs:
         with:
           repository: NihilDigit/pikpak-kotlin
           path: pikpak-kotlin
+          ref: ${{ env.PIKPAK_SDK_REF }}
 
       - name: Build against the SDK source
         shell: bash
