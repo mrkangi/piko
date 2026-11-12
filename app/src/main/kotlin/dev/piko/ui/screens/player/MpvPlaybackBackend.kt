@@ -544,8 +544,8 @@ internal class MpvPlaybackBackend(
     }
 
     /**
-     * 刷新 VR 着色器 pass 的渲染尺寸：屏幕的 1.25 倍，且不超过源分辨率。读不到尺寸时返回 null，
-     * 退回按源分辨率渲染（行为与旧版一致）。
+     * 刷新 VR 着色器 pass 的渲染尺寸：常速取屏幕的 1.25 倍，高倍速收到 1:1（见
+     * [MpvVrShader.passScaleFor]），且不超过源分辨率。读不到尺寸时返回 null，退回按源分辨率渲染。
      *
      * `MAINPRESUB` 在放大之前执行，不限尺寸就是 8K 源逐像素跑；限定成可见视野大小后，
      * 8K 片源每帧的着色像素少一个数量级。
@@ -555,12 +555,13 @@ internal class MpvPlaybackBackend(
         val outputHeight = vrSurfaceHeight.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-height") }.getOrNull() ?: 0)
         val sourceWidth = runCatching { mpv.getPropertyInt("video-params/w") }.getOrNull() ?: 0
         val sourceHeight = runCatching { mpv.getPropertyInt("video-params/h") }.getOrNull() ?: 0
+        val scale = MpvVrShader.passScaleFor(currentSpeed)
         vrPassInitialized = true
         vrPassSize = if (outputWidth <= 0 || outputHeight <= 0) {
             null
         } else {
-            val width = ceil(outputWidth * VR_PASS_SCALE).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
-            val height = ceil(outputHeight * VR_PASS_SCALE).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
+            val width = ceil(outputWidth * scale).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
+            val height = ceil(outputHeight * scale).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
             width to height
         }
         return vrPassSize
@@ -893,7 +894,15 @@ internal class MpvPlaybackBackend(
                     bufferedPositionMillis = millis
                 }
             }
-            "speed" -> currentSpeed = value.toFloat()
+            "speed" -> {
+                val previousScale = MpvVrShader.passScaleFor(currentSpeed)
+                currentSpeed = value.toFloat()
+                // pass 尺寸写在着色器文件的 //!WIDTH/HEIGHT 里，跨过高倍速阈值必须重写一次；
+                // 只在阈值两侧切换，1.25x → 1.5x 这类同侧的改动不会重编译着色器
+                if (currentVrMode.enabled && MpvVrShader.passScaleFor(currentSpeed) != previousScale) {
+                    vrApplyQueue.submit(currentVrMode, refreshOutput = true)
+                }
+            }
             "volume" -> currentVolume = (value / 100).toFloat().coerceIn(0f, 1f)
             "video-params/aspect" -> {
                 rawAspect = value
@@ -1045,9 +1054,6 @@ internal class MpvPlaybackBackend(
         const val PREVIEW_PROBE_BYTES = 1024 * 1024
         const val PREVIEW_ANALYZE_SECONDS = 1
         const val POSITION_GRANULARITY_MILLIS = 250L
-        // VR 着色器按屏幕的 1.25 倍渲染再缩回：略有超采样，像素量仍远小于 8K 源
-        const val VR_PASS_SCALE = 1.25f
-
         // mpv_log_level 的 MPV_LOG_LEVEL_ERROR。1.0.0 的构件没带 MpvLogLevel 常量类
         const val MPV_LOG_LEVEL_ERROR = 20
         const val MPV_LOG_LEVEL_WARN = 30

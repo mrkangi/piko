@@ -88,10 +88,15 @@
 - **投影格式按钮点一次轮换一种**：`DualFisheye180 → DualHalfEquirectangular180 →
   HalfEquirectangular180 → Equirectangular360 → DualVertEquirectangular360` 循环，
   只改 `projection`，保留当前朝向与视野，方便原地对比同一视角下的各种封装；不跨视频持久化。
-- **着色器 pass 固定为屏幕的约 1.25 倍**（`//!WIDTH` / `//!HEIGHT`，并 clamp 到源分辨率）。
+- **着色器 pass 常速为屏幕的 1.25 倍，高倍速降到 1:1**（`//!WIDTH` / `//!HEIGHT`，并 clamp 到源分辨率）。
   `MAINPRESUB` 在放大之前执行，不给尺寸就是按源分辨率跑：8K 片源每帧要处理三千多万像素，
   再缩回屏幕，这是高分辨率 VR 掉帧的主因。限定后只渲染可见视野，像素量少一个数量级，
-  1.25 倍还带一点超采样。窗口尺寸变化时后端会按新尺寸重写一次着色器。
+  1.25 倍还带一点超采样。倍速到 `1.5x` 及以上（`MpvVrShader.passScaleFor`）只渲染 1:1：
+  解码与反投影的每秒工作量同时翻倍，先保证帧率，回到常速自动恢复超采样。
+  窗口尺寸变化或跨过倍速阈值时，后端会按新尺寸重写一次着色器。
+- **鱼眼采样直接用 xy 的单位向量算方位角**：`atan(y, x)` 后再取 `cos/sin` 与 `xy / length(xy)`
+  等价，`atan(rho, z)` 又正好等于 `acos(z)`，每像素因此少一次 `atan` 与一对 `cos/sin`；
+  `render()` 送进来的方向向量已是单位长度，采样里不再重复 `normalize`。
 - **进入 VR 时的 `keepaspect` / `panscan` / `video-zoom` / `video-pan-*` 只在进入时写一次**，
   拖动视角只更新 `glsl-shader-opts`（回退路径只换文件）。原先每个触摸点都写这五项，会反复触发 vo 重新配置，拖动明显更卡。
 - **VO、Surface、换文件和视角更新统一走 `VrApplyQueue`**。drain 执行期间调度标志保持置位，

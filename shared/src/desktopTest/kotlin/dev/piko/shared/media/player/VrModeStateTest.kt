@@ -197,6 +197,32 @@ class VrModeStateTest {
     }
 
     @Test
+    fun passScaleDropsSupersamplingOnlyAtHighSpeed() {
+        assertEquals(MpvVrShader.SUPERSAMPLE_PASS_SCALE, MpvVrShader.passScaleFor(1f))
+        assertEquals(MpvVrShader.SUPERSAMPLE_PASS_SCALE, MpvVrShader.passScaleFor(1.25f))
+        assertEquals(MpvVrShader.HIGH_SPEED_PASS_SCALE, MpvVrShader.passScaleFor(1.5f))
+        assertEquals(MpvVrShader.HIGH_SPEED_PASS_SCALE, MpvVrShader.passScaleFor(2f))
+        // 播放器不会给出 0，但后端的默认值与异常值都按常速处理
+        assertEquals(MpvVrShader.SUPERSAMPLE_PASS_SCALE, MpvVrShader.passScaleFor(0f))
+    }
+
+    @Test
+    fun fisheyeSamplingAvoidsRedundantTranscendentals() {
+        val source = MpvVrShader.paramShaderSourceOf(passWidth = 1600, passHeight = 900)
+        // 方位角改用 xy 的单位向量，不再 atan + cos/sin；theta 也由 atan(rho, z) 一次得到
+        assertTrue("float rho = length(dir.xy);" in source)
+        assertTrue("atan(rho, dir.z)" in source)
+        assertTrue("dir.xy / max(rho, 1e-4) * r" in source)
+        assertFalse("atan(d.y, d.x)" in source)
+        assertFalse("acos(" in source)
+        // render() 传入的 dir 已是单位向量，重复归一化是白费一次 rsqrt
+        assertFalse("normalize(dir)" in source)
+        // 纹理与参数两条路径共用同一份 GLSL，优化对回退路径同样生效
+        val texture = MpvVrShader.shaderSourceOf(VrModeState(enabled = true))
+        assertTrue("float rho = length(dir.xy);" in texture)
+    }
+
+    @Test
     fun shaderSessionRotatesFilesAndCleansUpOldOnes() {
         val dir = Files.createTempDirectory("piko-vr-test").toFile()
         try {

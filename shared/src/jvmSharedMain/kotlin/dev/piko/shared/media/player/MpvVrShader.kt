@@ -35,6 +35,15 @@ object MpvVrShader {
     const val FILE_PREFIX = "piko_vr_"
     const val FILE_SUFFIX = ".glsl"
 
+    /** 常速下的 pass 比例：屏幕的 1.25 倍，带一点超采样。 */
+    const val SUPERSAMPLE_PASS_SCALE = 1.25f
+
+    /** 高倍速下的 pass 比例：解码与重投影同时变快，超采样先让位给帧率，像素量少约 36%。 */
+    const val HIGH_SPEED_PASS_SCALE = 1.0f
+
+    /** 从这个倍速起降回 1:1。低于它时 1.25 倍仍有余量，不必牺牲画质。 */
+    const val HIGH_SPEED_CUTOFF = 1.5f
+
     private const val MIN_FOV_RAD = 0.1f
     private const val MAX_FOV_RAD = 3.0f
     private const val MIN_YAW_RAD = -6.2831855f
@@ -123,6 +132,13 @@ object MpvVrShader {
             "piko_eye=${state.eye.shaderValue}",
         ).joinToString(",")
     }
+
+    /**
+     * 按播放倍速决定 pass 比例。倍速越高，每秒要反投影的像素越多；[HIGH_SPEED_CUTOFF]
+     * 以上把超采样收掉，只保留 1:1，优先保证跟手与不掉帧。
+     */
+    fun passScaleFor(speed: Float): Float =
+        if (speed >= HIGH_SPEED_CUTOFF) HIGH_SPEED_PASS_SCALE else SUPERSAMPLE_PASS_SCALE
 
     /**
      * `//!PARAM` 必须写在整份文件的开头。初始值与 [VrModeState] 的默认值一致：
@@ -275,12 +291,14 @@ object MpvVrShader {
         }
 
         vec2 sample_dual_fisheye(vec3 dir, int source_eye, float fisheye_fov) {
-            vec3 d = normalize(dir);
-            float theta = acos(clamp(d.z, -1.0, 1.0));
-            float phi = atan(d.y, d.x);
-            float r = theta / (fisheye_fov * 0.5);
+            // dir 已由 render() 归一化，旋转矩阵不改变长度，这里再归一化只是白费一次 rsqrt。
+            // 方位角只需要 xy 的单位向量：atan 后再取 cos/sin 与直接 xy / length(xy) 等价，
+            // 于是每像素省掉一次 atan 与一对 cos/sin；atan(rho, z) 也直接得到原来的极角。
+            float rho = length(dir.xy);
+            float r = atan(rho, dir.z) / (fisheye_fov * 0.5);
             if (r > 1.0) return vec2(-1000.0);
-            vec2 pos = vec2(cos(phi), sin(phi)) * r;
+            // 1e-4 兼顾 mediump 设备：再小的下限在 fp16 里会被冲成 0，除法出 NaN
+            vec2 pos = dir.xy / max(rho, 1e-4) * r;
             float eye_offset = (source_eye == EYE_LEFT) ? 0.0 : 0.5;
             return vec2(eye_offset + 0.25 + pos.x * 0.25, 0.5 + pos.y * 0.5);
         }
