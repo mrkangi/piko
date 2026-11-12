@@ -28,6 +28,7 @@ class AndroidPikoSessionStore(private val context: Context) : PikoSessionStore {
     private fun localMountPasswordKey(account: String, mountId: String) =
         stringPreferencesKey("piko_local_mount_password_${account}_$mountId")
     private fun jellyfinTokenKey(serverId: String) = stringPreferencesKey("piko_jellyfin_token_$serverId")
+    private fun plexCredentialsKey(accountUuid: String) = stringPreferencesKey("piko_plex_credentials_$accountUuid")
 
     override suspend fun load(account: String): Session? {
         val stored = context.dataStore.data.first()[sessionKey(account)] ?: return null
@@ -148,6 +149,20 @@ class AndroidPikoSessionStore(private val context: Context) : PikoSessionStore {
 
     override suspend fun clearJellyfinToken(serverId: String) {
         context.dataStore.edit { it.remove(jellyfinTokenKey(serverId)) }
+    }
+
+    override suspend fun loadPlexCredentials(accountUuid: String): String? {
+        val stored = context.dataStore.data.first()[plexCredentialsKey(accountUuid)] ?: return null
+        return CredentialCipher.decrypt(stored)
+    }
+
+    override suspend fun savePlexCredentials(accountUuid: String, serialized: String) {
+        val sealed = CredentialCipher.encrypt(serialized)
+        context.dataStore.edit { it[plexCredentialsKey(accountUuid)] = sealed }
+    }
+
+    override suspend fun clearPlexCredentials(accountUuid: String) {
+        context.dataStore.edit { it.remove(plexCredentialsKey(accountUuid)) }
     }
 
     private fun MutablePreferences.dropLegacyMirror() {

@@ -32,6 +32,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import dev.piko.shared.jellyfin.JellyfinSettings
 import dev.piko.shared.jellyfin.createAndroidJellyfinRepository
+import dev.piko.shared.plex.PlexSettings
+import dev.piko.shared.plex.createPlexRepository
+import dev.piko.shared.plex.ZxingPlexQrEncoder
 import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.InstantMagnetRepository
 import dev.piko.shared.data.PikoClientManager
@@ -208,6 +211,16 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             deviceName = pikoDeviceName,
             deviceId = remoteDeviceId,
         )
+        val plex = createPlexRepository(
+            http = HttpClient(OkHttp),
+            settings = PlexSettings(sessionManager, appScope),
+            secrets = sessionStore,
+            scope = appScope,
+            clientVersion = BuildConfig.VERSION_NAME,
+            deviceName = pikoDeviceName,
+            deviceId = remoteDeviceId,
+            platform = "Android",
+        )
         services = PikoServices(
             platformPreferences = sessionManager,
             clientManager = clientManager,
@@ -228,6 +241,8 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             },
             localMountSecrets = sessionStore,
             jellyfin = jellyfin,
+            plex = plex,
+            plexQrEncoder = ZxingPlexQrEncoder,
             remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
             cacheStore = cacheStore,
             treeDatabaseFactory = dev.piko.shared.data.AndroidPikoTreeDatabaseFactory(File(cacheDir, "piko/trees")),

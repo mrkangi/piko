@@ -74,6 +74,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import dev.piko.shared.jellyfin.JellyfinSettings
 import dev.piko.shared.jellyfin.createDesktopJellyfinRepository
+import dev.piko.shared.plex.PlexSettings
+import dev.piko.shared.plex.createPlexRepository
+import dev.piko.shared.plex.ZxingPlexQrEncoder
 import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.PikoClientManager
 import dev.piko.shared.state.InstantSheetState
@@ -683,6 +686,16 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         deviceName = lanDeviceName,
         deviceId = remoteDeviceId,
     )
+    val plex = createPlexRepository(
+        http = HttpClient(OkHttp),
+        settings = PlexSettings(preferences, appScope),
+        secrets = sessionStore,
+        scope = appScope,
+        clientVersion = pikoVersion,
+        deviceName = lanDeviceName,
+        deviceId = remoteDeviceId,
+        platform = lanPlatform,
+    )
     return PikoServices(
         platformPreferences = preferences,
         clientManager = clientManager,
@@ -703,6 +716,8 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         },
         localMountSecrets = sessionStore,
         jellyfin = jellyfin,
+        plex = plex,
+        plexQrEncoder = ZxingPlexQrEncoder,
         remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
         cacheStore = cacheStore,
         treeDatabaseFactory = dev.piko.shared.data.DesktopPikoTreeDatabaseFactory(),

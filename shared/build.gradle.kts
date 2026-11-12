@@ -52,6 +52,7 @@ kotlin {
             dependencies {
                 implementation(libs.smbj)
                 implementation(libs.jellyfin.core)
+                implementation(libs.zxing.core)
                 implementation(libs.paho.mqttv3)
                 runtimeOnly(libs.slf4j.nop)
             }

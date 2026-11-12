@@ -53,8 +53,8 @@ internal fun libraryNote(library: DriveLibrary, file: FileStat, event: DriveEven
         val how = if (it.type == EventType.UPLOAD) tr("上传", "Uploads", "アップロード", "업로드", "上傳") else tr("离线或秒传", "Cloud download or instant save", "クラウドダウンロード・インスタント保存", "클라우드 다운로드 또는 즉시 저장", "離線下載或秒傳")
         listOfNotNull(formatEventTime(it.updatedTime), how).joinToString(" ")
     }
-    DriveLibrary.HISTORY -> if (JellyfinLocation.isJellyfin(file.id)) {
-        jellyfinHistoryNote(file)
+    DriveLibrary.HISTORY -> if (JellyfinLocation.isJellyfin(file.id) || dev.piko.shared.data.PlexLocation.isPlex(file.id)) {
+        mediaServerHistoryNote(file)
     } else event?.let {
         val watched = it.playSeconds?.let { seconds ->
             val at = formatTime(seconds * 1000)
@@ -64,8 +64,8 @@ internal fun libraryNote(library: DriveLibrary, file: FileStat, event: DriveEven
     }
 }
 
-/** Jellyfin 的播放记录没有 PikPak 事件行，播放位置与时间都来自条目的 userData。 */
-private fun jellyfinHistoryNote(file: FileStat): String? {
+/** 媒体服务器的播放记录没有 PikPak 事件行，播放位置与时间都来自条目的 userData。 */
+private fun mediaServerHistoryNote(file: FileStat): String? {
     val position = file.params["playback_position"]?.toDoubleOrNull()?.let { (it * 1000).toLong() }?.takeIf { it > 0 }
     val duration = file.params["duration"]?.toDoubleOrNull()?.let { (it * 1000).toLong() }?.takeIf { it > 0 }
     val watched = when {
@@ -119,7 +119,7 @@ internal val DriveLibrary.empty: LibraryEmpty
     get() = when (this) {
         DriveLibrary.RECENT -> LibraryEmpty(tr("暂无最近添加", "No recently added files", "最近追加したファイルはありません", "최근 추가 파일이 없습니다", "尚無最近新增的檔案"), tr("上传、离线下载与秒传的文件显示于此", "Uploads, cloud downloads and instant saves appear here", "アップロード・クラウドダウンロード・インスタント保存したファイルを表示します", "업로드, 클라우드 다운로드 및 즉시 저장 파일이 여기에 표시됩니다", "上傳、離線下載與秒傳的檔案會顯示於此"), icon)
         DriveLibrary.STARRED -> LibraryEmpty(tr("暂无星标", "No starred items", "スター付きの項目はありません", "별표 항목이 없습니다", "尚無星號項目"), tr("在文件菜单中添加星标后显示于此", "Star items from the file menu to see them here", "ファイルメニューでスターを付けると表示されます", "파일 메뉴에서 별표를 추가하면 여기에 표시됩니다", "在檔案選單中新增星號後會顯示於此"), icon)
-        DriveLibrary.HISTORY -> LibraryEmpty(tr("暂无播放记录", "No playback history", "再生履歴はありません", "재생 기록이 없습니다", "尚無播放記錄"), tr("包含 PikPak 与 Jellyfin 的播放记录", "Includes playback from PikPak and Jellyfin", "PikPak と Jellyfin の再生履歴を含みます", "PikPak 및 Jellyfin의 재생 기록을 포함합니다", "包含 PikPak 與 Jellyfin 的播放記錄"), icon)
+        DriveLibrary.HISTORY -> LibraryEmpty(tr("暂无播放记录", "No playback history", "再生履歴はありません", "재생 기록이 없습니다", "尚無播放記錄"), tr("包含 PikPak、Jellyfin 与 Plex 的播放记录", "Includes playback from PikPak, Jellyfin and Plex", "PikPak、Jellyfin、Plex の再生履歴を含みます", "PikPak, Jellyfin 및 Plex의 재생 기록을 포함합니다", "包含 PikPak、Jellyfin 與 Plex 的播放記錄"), icon)
         DriveLibrary.TRASH -> LibraryEmpty(tr("回收站为空", "Trash is empty", "ゴミ箱は空です", "휴지통이 비어 있습니다", "資源回收筒是空的"), tr("移入回收站的文件显示于此，可恢复或彻底删除", "Trashed files appear here for restoration or permanent deletion", "ゴミ箱に移動したファイルを表示します。復元または完全に削除できます", "휴지통의 파일을 여기에서 복원하거나 영구 삭제할 수 있습니다", "移至資源回收筒的檔案會顯示於此，可還原或永久刪除"), icon)
         // 实际画的是 DuplicatesEmptyState，要分扫描中、失败与已结束
         DriveLibrary.DUPLICATES -> LibraryEmpty(tr("未发现重复文件", "No duplicate files found", "重複ファイルはありません", "중복 파일이 없습니다", "未發現重複檔案"), "",Icons.Outlined.FolderOpen)

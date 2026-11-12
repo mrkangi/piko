@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SwipeVertical
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.UploadFile
@@ -41,6 +42,7 @@ import dev.piko.shared.data.isLocal
 import dev.piko.shared.data.isLocalMountRoot
 import dev.piko.shared.data.isVirtual
 import dev.piko.shared.data.JellyfinLocation
+import dev.piko.shared.data.PlexLocation
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.naming.av.hasAvCode
@@ -61,7 +63,7 @@ internal val DriveViewMode.paletteLabel: String
     }
 
 internal fun commandPlaceOf(state: DriveScreenState, stackDepth: Int): CommandPlace = when {
-    state.isLocalPlace || state.isDevicePlace || state.isLanPlace || state.isJellyfinPlace -> CommandPlace.LOCAL
+    state.isLocalPlace || state.isDevicePlace || state.isLanPlace || state.isJellyfinPlace || state.isPlexPlace -> CommandPlace.LOCAL
     state.importPreviewView != null -> CommandPlace.IMPORT_PREVIEW
     state.archiveView != null -> CommandPlace.ARCHIVE
     state.libraryView == DriveLibrary.TRASH -> CommandPlace.TRASH
@@ -143,6 +145,8 @@ internal class DriveItemActionIntents(
     val onRevealLocalInFileManager: (String) -> Unit,
     val onUnmountLocal: (String) -> Unit,
     val onUnmountJellyfin: (String) -> Unit,
+    val onUnmountPlex: (String) -> Unit,
+    val onManagePlex: () -> Unit,
 )
 
 internal fun buildArchiveEntryActions(
@@ -231,7 +235,7 @@ internal fun buildSelectionActions(
             download = DriveActions.download { intents.onDownload(files.filterNot { it.isUploading }, false) }.takeIf { commands.download },
             share = DriveActions.share { intents.onShare(settled) }.takeIf { commands.share },
             rename = DriveActions.batchRename { intents.onBatchRename(settled, false) }.takeIf { commands.rename },
-            star = DriveActions.star(
+            star = if (settled.any { PlexLocation.isPlex(it.id) }) null else DriveActions.star(
                 starred = settled.all { it.isStarred },
                 onClick = {
                     val nextStarred = !settled.all { it.isStarred }
@@ -430,6 +434,25 @@ internal fun buildDriveOperations(
                         tr("移除服务器", "Remove server", "サーバーを削除", "서버 제거", "移除伺服器"),
                         { intents.onUnmountJellyfin(jellyfin.serverId) },
                         destructive = true,
+                    ),
+                )
+            }
+            val plex = PlexLocation.of(file.id)
+            if (plex != null && plex.node.isBlank()) {
+                add(
+                    SheetAction(
+                        Icons.Outlined.LinkOff,
+                        tr("移除服务器", "Remove server", "サーバーを削除", "서버 제거", "移除伺服器"),
+                        { intents.onUnmountPlex(plex.mountId) },
+                        destructive = true,
+                    ),
+                )
+                add(
+                    SheetAction(
+                        Icons.Outlined.Settings,
+                        tr("管理 Plex 账号", "Manage Plex accounts", "Plex アカウントを管理", "Plex 계정 관리", "管理 Plex 帳號"),
+                        { intents.onManagePlex() },
+                        group = ActionGroup.Manage,
                     ),
                 )
             }

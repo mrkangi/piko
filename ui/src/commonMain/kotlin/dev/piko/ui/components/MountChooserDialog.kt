@@ -27,6 +27,7 @@ fun MountChooserDialog(
     onLocalFolder: (() -> Unit)?,
     onSmbShare: () -> Unit,
     onJellyfin: () -> Unit,
+    onPlex: () -> Unit,
 ) {
     val options = listOf(
         MountOption(
@@ -46,6 +47,12 @@ fun MountChooserDialog(
             title = tr("Jellyfin 媒体服务器", "Jellyfin server", "Jellyfin サーバー", "Jellyfin 서버", "Jellyfin 媒體伺服器"),
             supporting = tr("只读浏览媒体库并播放", "Browse and play from a read-only library", "読み取り専用でライブラリを閲覧・再生", "읽기 전용으로 라이브러리 탐색 및 재생", "唯讀瀏覽媒體庫並播放"),
             onClick = onJellyfin,
+        ),
+        MountOption(
+            icon = Icons.Outlined.LiveTv,
+            title = tr("Plex 媒体服务器", "Plex server", "Plex サーバー", "Plex 서버", "Plex 媒體伺服器"),
+            supporting = tr("使用 Plex 账号登录，只读原画播放", "Sign in with Plex; read-only original playback", "Plex アカウントでサインインし、オリジナル画質のみ再生", "Plex 계정으로 로그인하고 원본 화질만 재생", "使用 Plex 帳號登入，僅唯讀原畫播放"),
+            onClick = onPlex,
         ),
     )
     PikoDialog(

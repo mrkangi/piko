@@ -8,6 +8,8 @@ import dev.piko.shared.data.LeasedFile
 import dev.piko.shared.data.JellyfinLocation
 import dev.piko.shared.jellyfin.JellyfinPlayback
 import dev.piko.shared.jellyfin.JellyfinRepository
+import dev.piko.shared.plex.PlexPlayback
+import dev.piko.shared.plex.PlexRepository
 import dev.piko.shared.data.VaultEntry
 import dev.piko.shared.log.logFailure
 import dev.piko.shared.log.logFile
@@ -185,6 +187,7 @@ class PikoMediaRepository(
     var localMounts: dev.piko.shared.data.LocalMounts? = null
     var lanShares: dev.piko.shared.lan.LanShareRepository? = null
     var jellyfin: JellyfinRepository? = null
+    var plex: PlexRepository? = null
     var metadataSink: dev.piko.shared.data.DriveMetadataSink? = null
 
     /**
@@ -238,6 +241,7 @@ class PikoMediaRepository(
                     }
                 }
                 jellyfinPlayableInfo(fileId)?.let { return@runSuspendCatching it }
+                plexPlayableInfo(fileId)?.let { return@runSuspendCatching it }
                 smbPlayableInfo(fileId)?.let { return@runSuspendCatching it }
                 val detail = detailOf(client, fileId)
                 val resolved = detail.resolveVariant(preferenceFor(preferredResolution))
@@ -300,12 +304,18 @@ class PikoMediaRepository(
         return repo.playback(fileId).toPlayableInfo(fileId)
     }
 
+    private suspend fun plexPlayableInfo(fileId: String): PlayableMediaInfo? {
+        if (!dev.piko.shared.data.PlexLocation.isPlex(fileId)) return null
+        val repo = plex ?: return null
+        return repo.playback(fileId).toPlayableInfo(fileId)
+    }
+
     /**
      * Jellyfin 原始文件经本机代理、用系统 HTTP 栈读取。播放器内置的 FFmpeg HTTP 接收缓冲偏小，
      * 跨公网 RTT 一高就卡在几 Mbps；浏览器与 Findroid 快，走的正是系统栈。
      * 拿不到长度或登记失败时返回 null，播放端退回直链。
      */
-    private suspend fun jellyfinStream(info: PlayableMediaInfo): ProxyStream? {
+    private suspend fun httpMediaServerStream(info: PlayableMediaInfo): ProxyStream? {
         if (info.kind != PlayableMediaKind.Video) return null
         val factory = httpStreamSourceFactory ?: return null
         val source = factory(info.currentUrl, info.sizeBytes) ?: return null
@@ -330,6 +340,21 @@ class PikoMediaRepository(
         isOrigin = true,
     )
 
+    private fun PlexPlayback.toPlayableInfo(fileId: String) = PlayableMediaInfo(
+        fileId = fileId,
+        name = name.ifBlank { tr("Plex 媒体", "Plex media", "Plex メディア", "Plex 미디어", "Plex 媒體") },
+        gcid = "",
+        currentUrl = url,
+        durationSeconds = durationSeconds,
+        currentResolution = "",
+        availableVariants = emptyList(),
+        sizeBytes = sizeBytes,
+        kind = if (mimeType.startsWith("image/")) PlayableMediaKind.Image else PlayableMediaKind.Video,
+        width = width,
+        height = height,
+        isOrigin = true,
+    )
+
     /**
      * 获取文件的下载直链（含归档条目或压缩包内条目的按需借出直链）。
      */
@@ -340,6 +365,9 @@ class PikoMediaRepository(
                 lanShares?.streamUrl(fileId)?.let { return@runSuspendCatching it }
                 if (JellyfinLocation.isJellyfin(fileId)) {
                     return@runSuspendCatching requireNotNull(jellyfin).playback(fileId).url
+                }
+                if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
+                    return@runSuspendCatching requireNotNull(plex).playback(fileId).url
                 }
                 val detail = detailOf(client, fileId)
                 detail.downloadUrl?.takeIf { it.isNotBlank() } ?: error(tr("未获取到下载链接", "Download link unavailable", "ダウンロードリンクを取得できません", "다운로드 링크를 가져올 수 없습니다", "無法取得下載連結"))
@@ -371,7 +399,10 @@ class PikoMediaRepository(
                     }
                 }
                 jellyfinPlayableInfo(fileId)?.let { info ->
-                    return@runSuspendCatching PreparedPlayback(info, jellyfinStream(info))
+                    return@runSuspendCatching PreparedPlayback(info, httpMediaServerStream(info))
+                }
+                plexPlayableInfo(fileId)?.let { info ->
+                    return@runSuspendCatching PreparedPlayback(info, httpMediaServerStream(info))
                 }
                 smbPlayableInfo(fileId)?.let { info ->
                     return@runSuspendCatching PreparedPlayback(info, null)
@@ -463,6 +494,13 @@ class PikoMediaRepository(
                 }
                 if (JellyfinLocation.isJellyfin(fileId)) {
                     val playback = requireNotNull(jellyfin).playback(fileId)
+                    val durationMs = playback.durationSeconds * 1000L
+                    val bytesPerMs = if (durationMs > 0) playback.sizeBytes.toDouble() / durationMs else 0.0
+                    return@runSuspendCatching PreparedClip(null, playback.url, false, startMs, bytesPerMs,
+                        maxWindowMs = dev.piko.shared.state.localClipMaxWindowMs(startMs, videoDurationMs))
+                }
+                if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
+                    val playback = requireNotNull(plex).playback(fileId)
                     val durationMs = playback.durationSeconds * 1000L
                     val bytesPerMs = if (durationMs > 0) playback.sizeBytes.toDouble() / durationMs else 0.0
                     return@runSuspendCatching PreparedClip(null, playback.url, false, startMs, bytesPerMs,
@@ -578,6 +616,10 @@ class PikoMediaRepository(
                     val playback = requireNotNull(jellyfin).playback(fileId)
                     return@runSuspendCatching ClipProbe(false, playback.durationSeconds * 1000L)
                 }
+                if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
+                    val playback = requireNotNull(plex).playback(fileId)
+                    return@runSuspendCatching ClipProbe(false, playback.durationSeconds * 1000L)
+                }
                 val owner = client
                 val detail = detailOf(owner, fileId)
                 freshDetailsLock.withLock {
@@ -602,7 +644,11 @@ class PikoMediaRepository(
      * 读这份详情建 handle 时要带 leased，直链过期后重建出的对象才会同样删掉。
      */
     private suspend fun detailOf(client: PikPakClient, fileId: String): FileDetail {
-        require(!dev.piko.shared.data.LocalLocation.isLocal(fileId) && !JellyfinLocation.isJellyfin(fileId)) { "虚拟文件不支持云端操作" }
+        require(
+            !dev.piko.shared.data.LocalLocation.isLocal(fileId) &&
+                !JellyfinLocation.isJellyfin(fileId) &&
+                !dev.piko.shared.data.PlexLocation.isPlex(fileId),
+        ) { "虚拟文件不支持云端操作" }
         val observer = metadataSink?.capture(client)
         val leased = LeasedFile.resolvedFileOf(fileId)
         val detail = if (leased == null) {
@@ -807,6 +853,14 @@ class PikoMediaRepository(
             }
             return
         }
+        if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
+            if (fileId.isBlank() || positionMillis <= 0L || durationMillis <= 0L) return
+            withContext(Dispatchers.Default) {
+                runSuspendCatching { plex?.reportPlayback(fileId, positionMillis, durationMillis, stopped) }
+                    .logFailure(TAG, "上报 Plex 播放进度失败：${logFile(fileId, "")}")
+            }
+            return
+        }
         // 归档条目与压缩包里的文件在网盘里没有常驻的文件，播放历史记不上；续播位置照样记在本机
         if (dev.piko.shared.data.VirtualLocation.isVirtual(fileId) || fileId.isBlank() || LeasedFile.isLeased(fileId) || positionMillis <= 0L || durationMillis <= 0L) return
         withContext(Dispatchers.Default) {
@@ -823,6 +877,12 @@ class PikoMediaRepository(
     suspend fun cloudPlaybackPosition(fileId: String): Long? {
         if (JellyfinLocation.isJellyfin(fileId)) {
             val repo = jellyfin ?: return null
+            return withContext(Dispatchers.Default) {
+                runSuspendCatching { repo.resumePosition(fileId) }.getOrNull()
+            }
+        }
+        if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
+            val repo = plex ?: return null
             return withContext(Dispatchers.Default) {
                 runSuspendCatching { repo.resumePosition(fileId) }.getOrNull()
             }

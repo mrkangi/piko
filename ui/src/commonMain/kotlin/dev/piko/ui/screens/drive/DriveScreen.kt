@@ -52,6 +52,7 @@ import dev.piko.data.repository.PathBreadcrumb
 import dev.piko.data.repository.isPlayableVideo
 import dev.piko.data.repository.isPreviewableImage
 import dev.piko.shared.data.ArchiveEntryId
+import dev.piko.shared.data.DeviceLocation
 import dev.piko.shared.data.DriveClipboard
 import dev.piko.shared.data.DriveLibrary
 import dev.piko.shared.data.LastFolderStack
@@ -102,6 +103,8 @@ import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.SmbMountDialog
 import dev.piko.ui.components.JellyfinDialog
+import dev.piko.ui.components.PlexLoginDialog
+import dev.piko.ui.components.PlexManageDialog
 import dev.piko.ui.components.MountChooserDialog
 import dev.piko.ui.components.pageFocusTarget
 import dev.piko.ui.components.previewImageCoverUrl
@@ -217,6 +220,9 @@ private class DriveViewEvents(
     val onRevealLocalInFileManager: (String) -> Unit,
     val onUnmountLocalFolder: (String) -> Unit,
     val onUnmountJellyfinServer: (String) -> Unit,
+    val onUnmountPlexServer: (String) -> Unit,
+    val onRemovePlexAccount: (String) -> Unit,
+    val onManagePlex: () -> Unit,
 )
 
 @Stable
@@ -445,6 +451,8 @@ fun DriveScreen(
     var showMountChooser by remember { mutableStateOf(false) }
     var showSmbMount by remember { mutableStateOf(false) }
     var showJellyfin by remember { mutableStateOf(false) }
+    var showPlex by remember { mutableStateOf(false) }
+    var showPlexManager by remember { mutableStateOf(false) }
     val mountAction = SheetAction(
         Icons.Outlined.Storage,
         tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄"),
@@ -468,6 +476,10 @@ fun DriveScreen(
                 showMountChooser = false
                 showJellyfin = true
             },
+            onPlex = {
+                showMountChooser = false
+                showPlex = true
+            },
         )
     }
     if (showSmbMount) {
@@ -486,6 +498,50 @@ fun DriveScreen(
                 viewModel.loginJellyfin(url, name, username, password)
             },
         )
+    }
+    if (showPlex) {
+        val repo = driveRepo.plex
+        val qr = services.plexQrEncoder
+        if (repo != null) {
+            PlexLoginDialog(
+                repository = repo,
+                qrEncoder = qr,
+                onDismiss = { showPlex = false },
+                onAdded = { account ->
+                    val first = account.servers.firstOrNull()
+                    if (first != null) {
+                        state.restoreFolderStack(
+                            listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
+                        )
+                        state.highlight(setOf(dev.piko.shared.data.PlexLocation(first.mountId).id))
+                    }
+                },
+            )
+        }
+    }
+    if (showPlexManager) {
+        val repo = driveRepo.plex
+        if (repo != null) {
+            val accounts by repo.accounts.collectAsStateWithLifecycle()
+            PlexManageDialog(
+                accounts = accounts,
+                onDismiss = { showPlexManager = false },
+                onRemoveAccount = viewModel::removePlexAccount,
+                onRemoveServer = viewModel::removePlexServer,
+                onRefreshAccount = { accountUuid ->
+                    scope.launch {
+                        repo.refreshAccount(accountUuid)
+                            .onFailure { snackbarHostState.showSnackbar(it.message ?: tr("刷新 Plex 服务器失败", "Failed to refresh Plex servers", "Plex サーバーの更新に失敗しました", "Plex 서버 새로 고침에 실패했습니다", "重新整理 Plex 伺服器失敗")) }
+                    }
+                },
+                onSwitchProfile = { accountUuid, profileUuid, pin ->
+                    scope.launch {
+                        repo.setActiveProfile(accountUuid, profileUuid, pin)
+                            .onFailure { snackbarHostState.showSnackbar(it.message ?: tr("切换 Plex 用户失败", "Failed to switch Plex user", "Plex ユーザーの切り替えに失敗しました", "Plex 사용자 전환에 실패했습니다", "切換 Plex 使用者失敗")) }
+                    }
+                },
+            )
+        }
     }
 
     val desktopWorkspace = workspace as? DriveWorkspace
@@ -680,6 +736,9 @@ fun DriveScreen(
         onRevealLocalInFileManager = viewModel::revealLocalInFileManager,
         onUnmountLocalFolder = viewModel::unmountLocalFolder,
         onUnmountJellyfinServer = viewModel::removeJellyfinServer,
+        onUnmountPlexServer = viewModel::removePlexServer,
+        onRemovePlexAccount = viewModel::removePlexAccount,
+        onManagePlex = { showPlexManager = true },
     )
 
     DriveScreenContent(
@@ -1006,6 +1065,8 @@ private fun DriveScreenContent(
         onRevealLocalInFileManager = events.onRevealLocalInFileManager,
         onUnmountLocal = events.onUnmountLocalFolder,
         onUnmountJellyfin = events.onUnmountJellyfinServer,
+        onUnmountPlex = events.onUnmountPlexServer,
+        onManagePlex = events.onManagePlex,
     )
     remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
         RemoteSendDialog(files = targets, onDismiss = { remoteDownloadTargets = null })

@@ -56,7 +56,8 @@ object DeviceLocation {
 /** 不是网盘真实条目的位置：本机挂载与设备节点。这些位置只读，也不能拿去请求服务端。 */
 object VirtualLocation {
     fun isVirtual(id: String): Boolean =
-        LocalLocation.isLocal(id) || DeviceLocation.isDevice(id) || LanLocation.isLan(id) || JellyfinLocation.isJellyfin(id)
+        LocalLocation.isLocal(id) || DeviceLocation.isDevice(id) || LanLocation.isLan(id) ||
+            JellyfinLocation.isJellyfin(id) || PlexLocation.isPlex(id)
 }
 
 val FileStat.isVirtual: Boolean get() = VirtualLocation.isVirtual(id)
