@@ -11,6 +11,7 @@
 | `shared/.../jvmSharedMain/.../MpvVrShader.kt` | 内置 `MAINPRESUB` 反投影着色器、gpu-next 的 `//!PARAM` 与回退用的 `4x1 rgba8` 参数纹理、pass 尺寸限幅与 `MpvVrShaderSession` 文件管理 |
 | `shared/.../media/player/PlayerScreenState.kt` | `vrMode` 状态与 `updateVrMode` / `panVr` / `zoomVr`，换集回正 |
 | `app/.../MpvPlaybackBackend.kt` | Android libmpv：挂着色器、合并高频更新、恢复画面比例 |
+| `app/.../VrApplyQueue.kt` | Android VR 请求串行 drain：只留最新视角，保留输出刷新标志，不丢执行期间到来的请求 |
 | `desktopApp/.../MediampPlaybackBackend.kt` | 桌面 mpv：同上，着色器放 `PikoHome/cache/mpv` |
 | `ui/.../player/PlayerGestures.kt` | VR 下拖动转视角、松手惯性阻尼滑行（Fling）、捏合缩放，其余手势让位 |
 | `ui/.../player/PlayerSheets.kt` | 设置面板的「VR 视角」分节与投影 / 眼睛 / 鱼眼角度细调 |
@@ -31,6 +32,8 @@
   - `vo` 设为 `gpu-next,gpu`：设备不支持 libplacebo 时自动回落 `gpu`，不会黑屏。
   - VO 切换是异步的。刚下发 `vo` 时 `current-vo` 仍是 `gpu`，后端先按下面的纹理路径出画面，
     收到 `current-vo=gpu-next` 后再切到参数路径；桌面端 MediaMP 的 `vo=libmpv` 始终走纹理路径。
+  - gpu-next 建立后，普通拖动只写一次 `glsl-shader-opts`。VO、Surface 尺寸、当前文件与 pass 尺寸
+    只在进入 VR、输出变化或换文件时刷新；不要在每个触摸点读取 mpv 属性或重复绑定相同路径。
 - **`vo=gpu` / `vo=libmpv` 的回退路径：`//!TEXTURE PIKO_VR_PARAMS`（`4x1 rgba8`）+ 文件轮转：**
   - 这两条传统渲染路径走 `video/out/gpu/user_shaders.c`，不认识 `//!PARAM`，
     文件里一旦出现就会整份丢弃，所以回退版本把参数编码进纹理。
@@ -91,6 +94,11 @@
   1.25 倍还带一点超采样。窗口尺寸变化时后端会按新尺寸重写一次着色器。
 - **进入 VR 时的 `keepaspect` / `panscan` / `video-zoom` / `video-pan-*` 只在进入时写一次**，
   拖动视角只更新 `glsl-shader-opts`（回退路径只换文件）。原先每个触摸点都写这五项，会反复触发 vo 重新配置，拖动明显更卡。
+- **VO、Surface、换文件和视角更新统一走 `VrApplyQueue`**。drain 执行期间调度标志保持置位，
+  生产者在锁内替换最新请求；只有确认 pending 为空才清除调度标志。输出刷新请求与后续拖动合并时，
+  模式取最新值，`refreshOutput` 取并集，避免最后一次拖动、退出或 Surface 恢复被旧任务吞掉。
+- 参数着色器报错时每个播放器实例只回退一次到 gpu 纹理路径，不在两个 VO 之间反复切换。
+  VR 输出路径与 pass 尺寸只在变化时写一条日志；播放信息面板的「视频输出」可直接查看 `current-vo`。
 
 ## 已知限制
 

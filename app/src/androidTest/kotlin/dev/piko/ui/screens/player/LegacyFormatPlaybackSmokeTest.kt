@@ -10,6 +10,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
+import dev.piko.shared.media.player.VrModeState
+import dev.piko.shared.media.player.VrProjection
 import dev.piko.shared.media.proxy.PikoMediaProxy
 import dev.piko.shared.media.proxy.ProxyByteSource
 import dev.piko.shared.media.proxy.ProxyReader
@@ -88,6 +90,54 @@ class LegacyFormatPlaybackSmokeTest {
                 }
                 probe.step("回到前台后画面重新挂上") { backend.readStringProperty("current-vo") == "gpu" }
                 probe.step("回到前台后继续播放") { probe.mpvPositionSeconds() > 1.0 }
+                probe.assertNoErrors()
+            }
+        } finally {
+            probe.close()
+            withContext(Dispatchers.Main) { backend.release() }
+            stream.close()
+        }
+    }
+
+    @Test
+    fun vrShaderLoadsAndRestoresTheOriginalOutput() = runBlocking {
+        val name = "control-mpeg4-aac.mp4"
+        val stream = register(name)
+        val backend = withContext(Dispatchers.Main) { MpvPlaybackBackend(targetContext) }
+        val probe = Probe(name, backend)
+        try {
+            ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+                scenario.onActivity { it.setContent { MpvVideoSurface(backend, Modifier.fillMaxSize()) } }
+                withContext(Dispatchers.Main) { backend.open(PlaybackTarget.Url(stream.url), startMillis = 0L) }
+                probe.step("开播") { PlaybackBackendEvent.Ready in probe.events }
+
+                withContext(Dispatchers.Main) {
+                    backend.setVrMode(VrModeState(enabled = true, projection = VrProjection.Equirectangular360))
+                }
+                probe.step("VR 着色器挂载") {
+                    backend.readStringProperty("glsl-shaders")?.contains("piko_vr_") == true
+                }
+                // VO 切换是异步的；不支持 gpu-next 的模拟器可以走纹理回退
+                delay(500)
+                if (backend.readStringProperty("current-vo") == "gpu-next") {
+                    probe.step("gpu-next 使用参数着色器") {
+                        backend.readStringProperty("glsl-shader-opts")?.contains("piko_projection=0") == true
+                    }
+                    val shaderPath = backend.readStringProperty("glsl-shaders")
+                    withContext(Dispatchers.Main) {
+                        backend.setVrMode(VrModeState(enabled = true, projection = VrProjection.Equirectangular360, yawRadians = 0.5f))
+                    }
+                    probe.step("拖动只更新视角参数") {
+                        backend.readStringProperty("glsl-shader-opts")?.contains("piko_yaw=0.500000") == true &&
+                            backend.readStringProperty("glsl-shaders") == shaderPath
+                    }
+                }
+
+                withContext(Dispatchers.Main) { backend.setVrMode(VrModeState(enabled = false)) }
+                probe.step("退出 VR 还原视频输出") {
+                    backend.readStringProperty("current-vo") == "gpu" &&
+                        backend.readStringProperty("glsl-shaders")?.contains("piko_vr_") != true
+                }
                 probe.assertNoErrors()
             }
         } finally {

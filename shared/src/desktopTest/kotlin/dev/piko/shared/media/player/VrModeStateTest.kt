@@ -137,7 +137,7 @@ class VrModeStateTest {
     }
 
     @Test
-    fun paramShaderUsesUniformDirectivesAndIgnoresTheView() {
+    fun paramShaderDeclaresEveryViewParameterOnce() {
         val source = MpvVrShader.paramShaderSourceOf(passWidth = 1600, passHeight = 900)
         // gpu-next 的 //!PARAM 必须在文件开头，且每个参数都带类型与默认值
         assertTrue(source.startsWith("//!PARAM piko_fov"))
@@ -148,8 +148,9 @@ class VrModeStateTest {
         assertTrue("#define PIKO_VR_UNIFORM 1" in source)
         // 参数化版本不能再带纹理，否则每次更新参数还是要重写文件
         assertFalse("//!TEXTURE" in source)
-        // 源码与视角无关：拖动只更新 glsl-shader-opts
-        assertEquals(source, MpvVrShader.paramShaderSourceOf(passWidth = 1600, passHeight = 900))
+        val names = listOf("piko_fov", "piko_yaw", "piko_pitch", "piko_roll", "piko_fisheye_fov", "piko_projection", "piko_eye")
+        names.forEach { name -> assertTrue("//!PARAM $name" in source) }
+        assertEquals(names.size, Regex("//!PARAM ").findAll(source).count())
     }
 
     @Test
@@ -170,7 +171,7 @@ class VrModeStateTest {
         assertTrue("piko_fisheye_fov=3.316126" in opts)
         assertTrue("piko_projection=4" in opts)
         assertTrue("piko_eye=1" in opts)
-        // 不能用科学计数法：mpv 的键值串解析按普通十进制读
+        // 固定小数便于后端比较重复值，也让 mpv 的选项日志保持可读
         assertFalse("E-" in opts.uppercase())
     }
 

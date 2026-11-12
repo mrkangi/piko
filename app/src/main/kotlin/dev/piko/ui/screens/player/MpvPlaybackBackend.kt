@@ -98,11 +98,25 @@ internal class MpvPlaybackBackend(
     override val supportsVrMode: Boolean get() = !preview && !headless && vrShaderSession?.isAvailable == true
     private var currentVrMode by mutableStateOf(VrModeState())
     override val vrMode: VrModeState get() = currentVrMode
-    // 以下三个只在 mpv-calls 线程上读写
+    private enum class VrTransport { Params, Texture }
+
+    // 以下字段只在 mpv-calls 线程上读写
     private var vrShaderLoaded = false
     private var vrVoRequested = false
-    @Volatile private var pendingVrMode: VrModeState? = null
-    @Volatile private var vrApplyQueued = false
+    private var vrTransport: VrTransport? = null
+    private var vrPassSize: Pair<Int, Int>? = null
+    private var vrPassInitialized = false
+    private var vrLastShaderOpts: String? = null
+    private var vrLoggedOutput: String? = null
+    @Volatile private var vrObservedVo: String? = null
+    @Volatile private var vrSurfaceWidth = 0
+    @Volatile private var vrSurfaceHeight = 0
+    @Volatile private var vrUniformUnavailable = false
+    private val vrApplyQueue = VrApplyQueue(
+        execute = { task -> onMpv(task) },
+        stopped = { released || destroyed },
+        apply = ::applyVrRequest,
+    )
 
     override var audioTracks by mutableStateOf<List<MediaTrack>>(emptyList())
         private set
@@ -433,36 +447,41 @@ internal class MpvPlaybackBackend(
         val next = mode.normalized()
         if (next == currentVrMode) return
         currentVrMode = next
-        // 拖动时每个触摸点都来一次，队列里只留最新的一份：mpv 那边读到的永远是最新的视角
-        pendingVrMode = next
-        if (vrApplyQueued) return
-        vrApplyQueued = true
-        onMpv {
-            vrApplyQueued = false
-            val target = pendingVrMode ?: return@onMpv
-            pendingVrMode = null
-            applyVrMode(target)
-        }
+        vrApplyQueue.submit(next)
     }
 
-    /** 只在 mpv-calls 线程上调用。[outputWidth]/[outputHeight] 是刚设置的 Surface 尺寸，为 0 时读 mpv 的 osd 尺寸。 */
-    private fun applyVrMode(mode: VrModeState, outputWidth: Int = 0, outputHeight: Int = 0) {
+    /** 只在 mpv-calls 线程上调用。 */
+    private fun applyVrRequest(request: VrApplyRequest) {
         if (destroyed || released) return
         val session = vrShaderSession ?: return
+        val mode = request.mode
         if (mode.enabled) {
             if (!vrVoRequested) {
                 // VR 投影参数走 vo=gpu-next 的 //!PARAM：拖动时只更新 glsl-shader-opts，
                 // 不重写文件、不重编译 GLSL。gpu 留在列表里作为兜底，真机不支持 libplacebo 时仍能出画面。
-                mpv.setPropertyString("vo", VR_VIDEO_OUTPUT)
+                mpv.setPropertyString("vo", if (vrUniformUnavailable) VIDEO_OUTPUT else VR_VIDEO_OUTPUT)
                 mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "clr", ""))
                 vrVoRequested = true
                 vrShaderLoaded = false
+                vrTransport = null
+                vrLastShaderOpts = null
             }
-            val pass = vrPassSize(outputWidth, outputHeight)
-            // VO 切换是异步的：刚下发 vo 时 current-vo 还是 gpu，先按纹理路径出一帧，
-            // 等 current-vo 变成 gpu-next 后由属性回调再切到参数路径。
-            val useParams = mpv.getPropertyString("current-vo") == "gpu-next"
-            val path = if (useParams) {
+            // 已经建立 gpu-next 后，拖动只做一次属性写入；不读属性、不碰文件，也不重复绑定路径。
+            if (!request.refreshOutput && vrShaderLoaded && vrTransport == VrTransport.Params) {
+                applyVrShaderOpts(mode)
+                return
+            }
+            if (vrUniformUnavailable && request.refreshOutput && vrObservedVo != VIDEO_OUTPUT) {
+                mpv.setPropertyString("vo", VIDEO_OUTPUT)
+            }
+            val observedVo = vrObservedVo ?: mpv.getPropertyString("current-vo").also { vrObservedVo = it }
+            val transport = if (observedVo == "gpu-next" && !vrUniformUnavailable) {
+                VrTransport.Params
+            } else {
+                VrTransport.Texture
+            }
+            val pass = if (request.refreshOutput || !vrPassInitialized) refreshVrPassSize() else vrPassSize
+            val path = if (transport == VrTransport.Params) {
                 session.writeParamShader(pass?.first, pass?.second)
             } else {
                 session.writeNext(mode, pass?.first, pass?.second)
@@ -477,10 +496,14 @@ internal class MpvPlaybackBackend(
                 mpv.setPropertyDouble("video-pan-y", 0.0)
             }
             mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "set", path))
-            if (useParams) {
-                mpv.setPropertyString("glsl-shader-opts", MpvVrShader.shaderOptsOf(mode))
-            }
+            vrTransport = transport
             vrShaderLoaded = true
+            if (transport == VrTransport.Params) {
+                applyVrShaderOpts(mode, force = true)
+            } else {
+                vrLastShaderOpts = null
+            }
+            logVrOutput(transport, pass)
         } else {
             if (vrShaderLoaded || vrVoRequested) {
                 mpv.command(arrayOf("no-osd", "change-list", "glsl-shaders", "clr", ""))
@@ -488,6 +511,11 @@ internal class MpvPlaybackBackend(
             if (vrVoRequested) mpv.setPropertyString("vo", VIDEO_OUTPUT)
             vrShaderLoaded = false
             vrVoRequested = false
+            vrTransport = null
+            vrPassSize = null
+            vrPassInitialized = false
+            vrLastShaderOpts = null
+            vrLoggedOutput = null
             session.clear()
             if (currentAspectRatio == PlayerAspectRatio.RegionCrop) {
                 currentCropRegion?.let(::applyRegionCropOnMpv)
@@ -498,22 +526,44 @@ internal class MpvPlaybackBackend(
         }
     }
 
+    private fun applyVrShaderOpts(mode: VrModeState, force: Boolean = false) {
+        val opts = MpvVrShader.shaderOptsOf(mode)
+        if (force || opts != vrLastShaderOpts) {
+            mpv.setPropertyString("glsl-shader-opts", opts)
+            vrLastShaderOpts = opts
+        }
+    }
+
+    private fun logVrOutput(transport: VrTransport, pass: Pair<Int, Int>?) {
+        val size = pass?.let { "${it.first}x${it.second}" } ?: "source"
+        val key = "$transport:$size"
+        if (key == vrLoggedOutput) return
+        vrLoggedOutput = key
+        val description = if (transport == VrTransport.Params) "gpu-next 参数" else "gpu 纹理"
+        PikoLog.d("Player", "VR 输出：$description，pass=$size")
+    }
+
     /**
-     * VR 着色器 pass 的渲染尺寸：屏幕的 1.25 倍，且不超过源分辨率。读不到尺寸时返回 null，
+     * 刷新 VR 着色器 pass 的渲染尺寸：屏幕的 1.25 倍，且不超过源分辨率。读不到尺寸时返回 null，
      * 退回按源分辨率渲染（行为与旧版一致）。
      *
      * `MAINPRESUB` 在放大之前执行，不限尺寸就是 8K 源逐像素跑；限定成可见视野大小后，
      * 8K 片源每帧的着色像素少一个数量级。
      */
-    private fun vrPassSize(outputWidth: Int = 0, outputHeight: Int = 0): Pair<Int, Int>? {
-        val osdWidth = outputWidth.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-width") }.getOrNull() ?: 0)
-        val osdHeight = outputHeight.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-height") }.getOrNull() ?: 0)
-        if (osdWidth <= 0 || osdHeight <= 0) return null
+    private fun refreshVrPassSize(): Pair<Int, Int>? {
+        val outputWidth = vrSurfaceWidth.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-width") }.getOrNull() ?: 0)
+        val outputHeight = vrSurfaceHeight.takeIf { it > 0 } ?: (runCatching { mpv.getPropertyInt("osd-height") }.getOrNull() ?: 0)
         val sourceWidth = runCatching { mpv.getPropertyInt("video-params/w") }.getOrNull() ?: 0
         val sourceHeight = runCatching { mpv.getPropertyInt("video-params/h") }.getOrNull() ?: 0
-        val width = ceil(osdWidth * VR_PASS_SCALE).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
-        val height = ceil(osdHeight * VR_PASS_SCALE).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
-        return width to height
+        vrPassInitialized = true
+        vrPassSize = if (outputWidth <= 0 || outputHeight <= 0) {
+            null
+        } else {
+            val width = ceil(outputWidth * VR_PASS_SCALE).toInt().let { if (sourceWidth > 0) minOf(it, sourceWidth) else it }
+            val height = ceil(outputHeight * VR_PASS_SCALE).toInt().let { if (sourceHeight > 0) minOf(it, sourceHeight) else it }
+            width to height
+        }
+        return vrPassSize
     }
 
     override fun setVolume(volume: Float) {
@@ -619,6 +669,8 @@ internal class MpvPlaybackBackend(
     fun attachSurface(surface: Surface, initialWidth: Int = 0, initialHeight: Int = 0) {
         if (released) return
         attachedSurface = surface
+        vrSurfaceWidth = initialWidth
+        vrSurfaceHeight = initialHeight
         val restoreVideoOutput = videoOutputDisabled
         surfaceAttached = true
         videoOutputDisabled = false
@@ -630,12 +682,17 @@ internal class MpvPlaybackBackend(
             }
             mpv.setOptionString("force-window", "yes")
             if (restoreVideoOutput && !headless) {
-                mpv.setPropertyString("vo", if (currentVrMode.enabled) VR_VIDEO_OUTPUT else VIDEO_OUTPUT)
+                val targetVo = when {
+                    !currentVrMode.enabled || vrUniformUnavailable -> VIDEO_OUTPUT
+                    else -> VR_VIDEO_OUTPUT
+                }
+                mpv.setPropertyString("vo", targetVo)
                 mpv.setPropertyString("hwdec", hwdecPropertyOf(currentDecodeMode))
                 val targetVid = vidBeforeDetach.ifBlank { "auto" }
                 mpv.setPropertyString("vid", targetVid)
                 needsPausedRedrawOnResize = true
             }
+            if (currentVrMode.enabled) vrApplyQueue.submit(currentVrMode, refreshOutput = true)
         }
         pendingLoad?.let {
             pendingLoad = null
@@ -645,11 +702,14 @@ internal class MpvPlaybackBackend(
 
     fun setSurfaceSize(width: Int, height: Int) {
         if (released || !surfaceAttached) return
+        val sizeChanged = vrSurfaceWidth != width || vrSurfaceHeight != height
+        vrSurfaceWidth = width
+        vrSurfaceHeight = height
         onMpv {
             mpv.setPropertyString("android-surface-size", "${width}x$height")
-            // 着色器 pass 按屏幕尺寸算，旋转或改窗口后要按新尺寸重写一次；拖视角时不会走到这里
-            // 尺寸刚设置，vo 可能还没重新配置，直接用这次的宽高算 pass 尺寸
-            if (vrShaderLoaded) applyVrMode(currentVrMode, width, height)
+            if (currentVrMode.enabled && sizeChanged) {
+                vrApplyQueue.submit(currentVrMode, refreshOutput = true)
+            }
             if (needsPausedRedrawOnResize) {
                 needsPausedRedrawOnResize = false
                 // 切后台时 ON_STOP 会把播放器暂停，新建的 Surface 尚未收到任何渲染帧；尺寸设好后主动原位重绘一帧，消除切回黑屏
@@ -856,8 +916,11 @@ internal class MpvPlaybackBackend(
     override fun eventProperty(property: String, value: String) {
         if (property == "aid" || property == "sid") refreshTracks()
         else if (property == "hwdec-current" && fileLoaded) logDecoderState("hwdec-change")
-        else if (property == "current-vo" && currentVrMode.enabled && !released && !destroyed) {
-            onMpv { applyVrMode(currentVrMode) }
+        else if (property == "current-vo") {
+            vrObservedVo = value
+            if (currentVrMode.enabled && !released && !destroyed) {
+                vrApplyQueue.submit(currentVrMode, refreshOutput = true)
+            }
         }
     }
 
@@ -891,6 +954,7 @@ internal class MpvPlaybackBackend(
             MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 fileLoaded = true
                 attachPendingSubtitles()
+                if (currentVrMode.enabled) vrApplyQueue.submit(currentVrMode, refreshOutput = true)
             }
             MpvEvent.MPV_EVENT_SEEK -> isSeeking = true
             MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -917,6 +981,14 @@ internal class MpvPlaybackBackend(
     override fun logMessage(prefix: String, level: Int, text: String) {
         // 回调里是 v 级别的全量日志，只留错误作为失败原因
         if (level <= MPV_LOG_LEVEL_ERROR) lastErrorLog = "$prefix: ${text.trim()}"
+        if (level <= MPV_LOG_LEVEL_ERROR && !released && currentVrMode.enabled && !vrUniformUnavailable &&
+            vrObservedVo == "gpu-next" && isVrShaderFailure(prefix, text)
+        ) {
+            // 每个播放器实例只回退一次，避免参数着色器持续失败时在两个 VO 之间来回切
+            vrUniformUnavailable = true
+            PikoLog.w("Player", "VR 参数着色器不可用，回退 gpu 纹理路径（$prefix）")
+            vrApplyQueue.submit(currentVrMode, refreshOutput = true)
+        }
         // 警告以上进应用日志。坏流会逐包刷同几句，最近记过的不再记，免得挤掉日志里别的内容。
         // 只比上一句不够：从切片开头解到第一个关键帧前，HEVC 解码器每个包交替报「PPS id out of range」
         // 与「Skipping invalid undecodable NALU」，一段就是几百行
@@ -927,6 +999,18 @@ internal class MpvPlaybackBackend(
                 PikoLog.log(if (level <= MPV_LOG_LEVEL_ERROR) LogLevel.ERROR else LogLevel.WARN, "mpv", line, null)
             }
         }
+    }
+
+    private fun isVrShaderFailure(prefix: String, text: String): Boolean {
+        val source = prefix.lowercase(Locale.ROOT)
+        val message = text.lowercase(Locale.ROOT)
+        val failed = listOf("fail", "error", "invalid", "missing", "unrecognized").any(message::contains)
+        if (!failed) return false
+        val parameterFailure = "piko_" in message || "//!param" in message ||
+            "variable type" in message || "variable data" in message || "initial parameter" in message
+        if (parameterFailure) return true
+        return ("shader" in message || "hook" in message) &&
+            ("gpu-next" in source || "libplacebo" in source)
     }
 
     // 只在 mpv 的日志线程上读写。按加入先后排，满了挤掉最早的

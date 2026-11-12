@@ -25,6 +25,7 @@ fun readPlaybackStats(property: (String) -> String?): List<PlaybackStatsSection>
         read("video-params/pixelformat")?.let { tr("像素格式", "Pixel format", "ピクセル形式", "픽셀 형식", "像素格式") to it },
         read("video-params/gamma")?.takeIf { it in HDR_TRANSFERS }?.let { "HDR" to it.uppercase() },
         tr("解码", "Decoder", "デコード", "디코딩", "解碼") to (read("hwdec-current")?.takeUnless { it == "no" }?.let { tr("硬件（$it）", "Hardware ($it)", "ハードウェア（$it）", "하드웨어($it)", "硬體（$it）") } ?: tr("软件", "Software", "ソフトウェア", "소프트웨어", "軟體")),
+        read("current-vo")?.let { tr("视频输出", "Video output", "映像出力", "비디오 출력", "影片輸出") to it },
         read("video-bitrate")?.toDoubleOrNull()?.let { tr("码率", "Bitrate", "ビットレート", "비트레이트", "位元率") to formatBitrate(it) },
         frames(read("estimated-frame-number"), read("estimated-frame-count"))?.let { tr("帧", "Frames", "フレーム", "프레임", "影格") to it },
         // 两种丢帧分开写：渲染丢帧多是显示跟不上，解码丢帧是解码跟不上，排查方向不同
