@@ -478,6 +478,7 @@ private fun ClipPager(
                 // 回翻恢复到半途位置时，先放开代理侧预读，确保跳出开头 5 秒预取区也能顺畅解出首帧
                 if (resumeOffset > 0L) streams.boost(clip, BOOSTED_READ_AHEAD_SECONDS, BOOSTED_MIN_AHEAD_BYTES)
                 // 新装的段先压着，真看起来才升档，见 LaunchedEffect(current)
+                players[slot].tuneBuffering(prepared.estimatedBytesPerSecond)
                 players[slot].setBufferAhead(HOLD_BUFFER_SECONDS)
                 players[slot].open(
                     prepared.localPath?.let { PlaybackTarget.LocalFile(it) } ?: PlaybackTarget.Url(url),
@@ -631,6 +632,20 @@ private fun ClipPager(
         if ((rememberedPositions[current] ?: 0L) > 0L) {
             currentPlayer.setBufferAhead(BOOSTED_SECONDS)
             streams.boost(current, BOOSTED_READ_AHEAD_SECONDS, BOOSTED_MIN_AHEAD_BYTES)
+        }
+        // 把播放器的实时缓冲余量同步给代理背后的 SDK 读取器：播放头快耗尽时提前抬高新请求的优先级，
+        // 而不是等 mpv 已经 paused-for-cache 才补救。整片播放器早就在做，信息流此前漏了这一路。
+        launch {
+            snapshotFlow {
+                val activeSlot = slotOf(settled)
+                if (paused || rendered[activeSlot] != current) {
+                    null
+                } else {
+                    (currentPlayer.bufferedPositionMillis - currentPlayer.positionMillis).coerceAtLeast(0L)
+                }
+            }.collect { buffered ->
+                if (buffered != null) streams.reportPlaybackBuffer(current, buffered.milliseconds)
+            }
         }
         // 持续同步当前已渲染段的相对播放进度，翻过多个槽位再翻回来时也能精确接上
         launch {

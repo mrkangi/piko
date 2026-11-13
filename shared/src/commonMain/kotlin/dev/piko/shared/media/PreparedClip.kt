@@ -6,6 +6,7 @@ import io.github.nihildigit.pikpak.PikPakStreamReader
 import io.github.nihildigit.pikpak.StreamRole
 import kotlinx.coroutines.CancellationException
 import kotlin.concurrent.Volatile
+import kotlin.time.Duration
 
 /**
  * 随机片段里的一段，备好了代理会话：全片 [clipStartMs] 起的一段，交给播放器从 [startOnPlayer] 起播。
@@ -54,6 +55,10 @@ class PreparedClip internal constructor(
 
     /** 代理实际读的那条流的字节数，切片即切片的长度。没有代理会话时为 null。 */
     val streamBytes: Long? get() = stream?.size
+
+    /** 这条流每秒平均消耗的字节数；本地文件或时长未知时为 null。 */
+    val estimatedBytesPerSecond: Long?
+        get() = (bytesPerMs * 1000.0).toLong().takeIf { it > 0L }
 
     var role: StreamRole
         get() = stream?.role ?: StreamRole.FOREGROUND
@@ -147,6 +152,17 @@ class PreparedClip internal constructor(
      */
     fun extendReadAhead(seconds: Int, minBytes: Long = MIN_AHEAD_BYTES) {
         stream?.readAheadLimit = maxOf((bytesPerMs * seconds * 1000 * BITRATE_MARGIN).toLong(), minBytes)
+    }
+
+    /**
+     * 把播放器实时缓冲余量交给代理背后的 SDK 读取器，供播放头即将停滞时按期限发起救援。
+     * 切片流的播放器时钟由 mpv 从 0 起算，而 `demuxer-cache-time` 仍按流内 PTS 报，
+     * 两者差值不是实际余量；切片的时钟与时间戳已由 SlicedByteSource 对齐，这里不重复上报，
+     * 仍由 [urgent] 在真正卡住时兜底。原画整条流的两个读数同一把尺子，可以安全上报。
+     */
+    fun reportPlaybackBuffer(bufferedDuration: Duration) {
+        if (sliced) return
+        stream?.reportPlaybackBuffer(bufferedDuration, estimatedBytesPerSecond)
     }
 
     override fun close() {

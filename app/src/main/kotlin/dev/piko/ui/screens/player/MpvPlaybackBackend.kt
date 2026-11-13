@@ -22,6 +22,7 @@ import dev.piko.shared.media.player.MpvVrShader
 import dev.piko.shared.media.player.MpvVrShaderSession
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
+import dev.piko.shared.media.player.PlaybackBuffering
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.VideoDecodeMode
@@ -137,6 +138,10 @@ internal class MpvPlaybackBackend(
         else -> VideoDecodeMode.Auto
     }
 
+    // 预览播放器按实测码率调整解复用缓存；整片播放器沿用 tuneBuffering 的固定预算。
+    @Volatile private var mediaBytesPerSecond: Long? = null
+    @Volatile private var bufferAheadSeconds: Int = if (preview) PREVIEW_CACHE_SECONDS else 0
+
     // 最近一次 loadfile 已到 FILE_LOADED。手动挂的字幕据此决定立即 sub-add 还是排进上面那一批
     @Volatile var fileLoaded = false
         private set
@@ -228,9 +233,11 @@ internal class MpvPlaybackBackend(
             if (keyframeStart) mpv.setOptionString("hr-seek", "no")
             // 字节上限对低码率的流不够：720P 转码约 120 KB/s，8 MiB 是一分多钟。预渲染的播放器暂停着
             // 也会读满它，把下一段的预取挤慢，所以再按时长卡一道
-            mpv.setOptionString("cache-secs", "8")
+            mpv.setOptionString("cache-secs", "$PREVIEW_CACHE_SECONDS")
             mpv.setOptionString("demuxer-max-bytes", "${8 * MIB}")
             mpv.setOptionString("demuxer-max-back-bytes", "${4 * MIB}")
+            // 码率高于缓存供给时，攒够两秒再恢复，避免 loading→播一秒→loading 的锯齿
+            mpv.setOptionString("cache-pause-wait", "2")
         } else {
             mpv.setOptionString("demuxer-max-bytes", "${(if (reducedCache) 24 else 48) * MIB}")
             mpv.setOptionString("demuxer-max-back-bytes", "${(if (reducedCache) 8 else 16) * MIB}")
@@ -573,7 +580,21 @@ internal class MpvPlaybackBackend(
 
     /** 见 PreviewBackend.setBufferAhead。mpv 的缓存选项改了下一轮读即生效，不必重开文件。 */
     fun setBufferAhead(seconds: Int) {
-        onMpv { mpv.setPropertyString("cache-secs", "$seconds") }
+        bufferAheadSeconds = seconds
+        onMpv {
+            mpv.setPropertyString("cache-secs", "$seconds")
+            if (preview) applyPreviewBufferBudget()
+        }
+    }
+
+    /**
+     * 预览段按码率放宽解复用缓存。低码率仍停在 8 MiB；高码率原画按当前 cache-secs 折算，
+     * 最多 48 MiB，避免 8 MiB 只够零点几秒导致持续卡顿。
+     */
+    private fun applyPreviewBufferBudget() {
+        val bytes = PlaybackBuffering.previewForwardBytes(mediaBytesPerSecond, bufferAheadSeconds) ?: return
+        mpv.setPropertyString("demuxer-max-bytes", "$bytes")
+        mpv.setPropertyString("demuxer-max-back-bytes", "${PlaybackBuffering.previewBackBytes(bytes)}")
     }
 
     /**
@@ -582,8 +603,17 @@ internal class MpvPlaybackBackend(
      * 码率未知（本地文件、探测不到时长）时维持构造函数里的默认值。
      */
     override fun tuneBuffering(mediaBytesPerSecond: Long?) {
-        if (preview) return
         val rate = mediaBytesPerSecond?.takeIf { it > 0L } ?: return
+        this.mediaBytesPerSecond = rate
+        if (preview) {
+            onMpv { applyPreviewBufferBudget() }
+            PikoLog.d(
+                "Player",
+                "预览缓冲预算 ${PlaybackBuffering.previewForwardBytes(rate, bufferAheadSeconds)?.div(MIB) ?: 0} MiB" +
+                    "（估算码率 ${rate / 1024} KB/s，cache ${bufferAheadSeconds}s）",
+            )
+            return
+        }
         val ceiling = if (android.os.Process.is64Bit()) MAX_BUFFER_BYTES_64 else MAX_BUFFER_BYTES_32
         val bytes = (rate * BUFFER_SECONDS).coerceIn(MIN_BUFFER_BYTES, ceiling)
         onMpv {
@@ -1050,6 +1080,7 @@ internal class MpvPlaybackBackend(
         const val MIN_BACK_BUFFER_BYTES = 16L * MIB
         const val MAX_BUFFER_BYTES_64 = 128L * MIB
         const val MAX_BUFFER_BYTES_32 = 64L * MIB
+        const val PREVIEW_CACHE_SECONDS = 8
         const val CALL_THREAD_IDLE_SECONDS = 5L
         const val PREVIEW_PROBE_BYTES = 1024 * 1024
         const val PREVIEW_ANALYZE_SECONDS = 1

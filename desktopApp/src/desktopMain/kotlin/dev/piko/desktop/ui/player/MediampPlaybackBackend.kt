@@ -17,6 +17,7 @@ import dev.piko.shared.media.player.MpvTrackSnapshot
 import dev.piko.shared.media.player.MpvVrShaderSession
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.shared.media.player.PlaybackBackendEvent
+import dev.piko.shared.media.player.PlaybackBuffering
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.shared.media.player.PlayerAspectRatio
 import dev.piko.shared.media.player.VideoCropRegion
@@ -85,6 +86,10 @@ internal class MediampPlaybackBackend(
     private var currentVrMode by mutableStateOf(VrModeState())
     override val vrMode: VrModeState get() = currentVrMode
     private var vrShaderLoaded = false
+
+    // 预览播放器按实测码率调整解复用缓存，见 PlaybackBuffering
+    @Volatile private var mediaBytesPerSecond: Long? = null
+    @Volatile private var bufferAheadSeconds: Int = if (preview) PREVIEW_CACHE_SECONDS else 0
 
     override var positionMillis by mutableLongStateOf(0L)
         private set
@@ -164,6 +169,8 @@ internal class MediampPlaybackBackend(
             // 各自以前台身份往后读几百 MB，把账号的连接占满，其余请求首字节要等十几秒
             mpv?.setPropertyString("demuxer-max-bytes", "${8 * MIB}")
             mpv?.setPropertyString("demuxer-max-back-bytes", "${4 * MIB}")
+            // 码率高于缓存供给时，攒够两秒再恢复，避免 loading→播一秒→loading 的锯齿
+            mpv?.setPropertyString("cache-pause-wait", "2")
             // 字节上限对低码率的流不够：720P 转码约 120 KB/s，8 MiB 是一分多钟，比随机片段的一整段还长。
             // 预渲染的两个播放器暂停着也会读满它，把下一段的预取挤慢，所以再按时长卡一道
             mpv?.setPropertyString("cache-secs", "$PREVIEW_CACHE_SECONDS")
@@ -424,7 +431,23 @@ internal class MediampPlaybackBackend(
     /** 见 PreviewBackend.setBufferAhead。mpv 的缓存选项改了下一轮读即生效，不必重开文件。 */
     fun setBufferAhead(seconds: Int) {
         if (closing) return
+        bufferAheadSeconds = seconds
         mpv?.setPropertyString("cache-secs", "$seconds")
+        if (preview) applyPreviewBufferBudget()
+    }
+
+    override fun tuneBuffering(mediaBytesPerSecond: Long?) {
+        val rate = mediaBytesPerSecond?.takeIf { it > 0L } ?: return
+        this.mediaBytesPerSecond = rate
+        if (preview) applyPreviewBufferBudget()
+    }
+
+    private fun applyPreviewBufferBudget() {
+        if (closing) return
+        val handle = mpv ?: return
+        val bytes = PlaybackBuffering.previewForwardBytes(mediaBytesPerSecond, bufferAheadSeconds) ?: return
+        handle.setPropertyString("demuxer-max-bytes", "$bytes")
+        handle.setPropertyString("demuxer-max-back-bytes", "${PlaybackBuffering.previewBackBytes(bytes)}")
     }
 
     // 读不到时 MPVHandle 可能抛错而不是返回 null（属性在当前文件上不存在），统一当作读不到

@@ -20,6 +20,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -153,6 +154,11 @@ class ClipStreams internal constructor(
     /** [clip] 真在看了，代理往后预读 [seconds] 秒（保底 [minBytes]），见 PreparedClip.extendReadAhead。 */
     fun boost(clip: Clip, seconds: Int, minBytes: Long = PreparedClip.MIN_AHEAD_BYTES) {
         streams[clip]?.let { stream -> withPrepared(stream) { it.extendReadAhead(seconds, minBytes) } }
+    }
+
+    /** 把播放器的实时缓冲余量交给这一段的代理会话，供 SDK 在播放头即将停滞时提前救援。 */
+    fun reportPlaybackBuffer(clip: Clip, buffered: Duration) {
+        streams[clip]?.let { stream -> withPrepared(stream) { it.reportPlaybackBuffer(buffered) } }
     }
 
     /** 除 [clip] 外都压回只读开头，也不再算有人在等；升过档的段翻走后不该再往后取。 */

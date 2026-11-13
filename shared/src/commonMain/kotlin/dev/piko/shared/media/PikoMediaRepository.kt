@@ -317,9 +317,24 @@ class PikoMediaRepository(
      */
     private suspend fun httpMediaServerStream(info: PlayableMediaInfo): ProxyStream? {
         if (info.kind != PlayableMediaKind.Video) return null
+        return httpMediaServerStream(info.currentUrl, info.sizeBytes, info.name)
+    }
+
+    /**
+     * 把直连 HTTP 媒体接到本机代理。信息流的 Jellyfin/Plex 片段也走这里：
+     * 非交错 MP4 的音轨数据常排在视频之后，播放器会在两条相距很远的 Range 之间来回切，
+     * 不经过代理时每条 Range 都可能新建/关闭一次 TCP；`HttpStreamByteSource` 的保留窗口
+     * 与同轨接管正是为这种文件准备的。
+     */
+    private suspend fun httpMediaServerStream(
+        url: String,
+        sizeBytes: Long,
+        name: String,
+        role: StreamRole = StreamRole.FOREGROUND,
+    ): ProxyStream? {
         val factory = httpStreamSourceFactory ?: return null
-        val source = factory(info.currentUrl, info.sizeBytes) ?: return null
-        return registerProxy(source, fileName = info.name, role = StreamRole.FOREGROUND)
+        val source = factory(url, sizeBytes) ?: return null
+        return registerProxy(source, fileName = name, role = role)
     }
 
     private fun JellyfinPlayback.toPlayableInfo(fileId: String) = PlayableMediaInfo(
@@ -496,14 +511,19 @@ class PikoMediaRepository(
                     val playback = requireNotNull(jellyfin).playback(fileId)
                     val durationMs = playback.durationSeconds * 1000L
                     val bytesPerMs = if (durationMs > 0) playback.sizeBytes.toDouble() / durationMs else 0.0
-                    return@runSuspendCatching PreparedClip(null, playback.url, false, startMs, bytesPerMs,
+                    // HLS 是多段播放列表，不能当成单个可 Range 的文件走 HTTP 代理
+                    val stream = if (playback.isHls) null else {
+                        httpMediaServerStream(playback.url, playback.sizeBytes, playback.name, role)
+                    }
+                    return@runSuspendCatching PreparedClip(stream, playback.url, false, startMs, bytesPerMs,
                         maxWindowMs = dev.piko.shared.state.localClipMaxWindowMs(startMs, videoDurationMs))
                 }
                 if (dev.piko.shared.data.PlexLocation.isPlex(fileId)) {
                     val playback = requireNotNull(plex).playback(fileId)
                     val durationMs = playback.durationSeconds * 1000L
                     val bytesPerMs = if (durationMs > 0) playback.sizeBytes.toDouble() / durationMs else 0.0
-                    return@runSuspendCatching PreparedClip(null, playback.url, false, startMs, bytesPerMs,
+                    val stream = httpMediaServerStream(playback.url, playback.sizeBytes, playback.name, role)
+                    return@runSuspendCatching PreparedClip(stream, playback.url, false, startMs, bytesPerMs,
                         maxWindowMs = dev.piko.shared.state.localClipMaxWindowMs(startMs, videoDurationMs))
                 }
                 val key = clipKey(client.account, fileId, startMs)
