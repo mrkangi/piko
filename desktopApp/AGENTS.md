@@ -48,6 +48,7 @@ Windows、macOS 与 Linux 的应用入口、原生系统能力实现及独立播
 
 与 Windows 共用同一份 `desktopApp` 源码，DMG 仅在 `release.yml` 的 `macos-15` runner 上原生打包（jpackage 不支持跨平台构建），播放采用 `mediamp-mpv-runtime-macos-arm64` 并走 Metal 渲染，平台集成集中在 `MacOs.kt`（Objective-C 消息发送共用 `MacObjc`）：
 
+- **标题栏原生调用线程**：Skiko `disableTitleBar` 内部会 `dispatch_sync` 到 AppKit 主队列，禁止在 AWT EDT 直接调用，否则开窗时序竞争可能互等并冻结整个应用。统一经 `runMacTitleBarNative` 的进程级串行后台线程执行；AWT 组件树查找仍留在 EDT（2026-11 macOS 26.5 的 hang 采样已定位到此处）。
 - **签名与 AOT 限制**：当前无 Apple 开发者证书，产物为 ad-hoc 签名且未经公证；不生成 AOT 缓存（AOT 训练晚于 jpackage 签名步骤，向 `.app` 内补写缓存会破坏代码签名封印）。
 - **系统集成差异**：标题栏通过根面板属性将内容铺入标题栏并调用 Skiko `disableTitleBar` 接管拖动，保留系统原生红绿灯按钮（全屏空间 `WindowPlacement.Fullscreen` 下自动隐藏自绘顶栏）；`magnet:` 链接、`.torrent` 文件、`⌘Q`（窗口可见时走主窗口关闭逻辑，已隐藏在后台时直接退出）与点击 Dock 图标通过 Apple Events 接收（`.torrent` 文件读取与哈希计算移交 IO 线程）；默认协议与文件关联通过 LaunchServices 直接修改（`MacLinkAssociation`，首次普通启动询问一次）；系统通知经 `osascript` 发送，防休眠经 `caffeinate` 维持，外部播放器经 LaunchServices 查询扩展名默认应用后以 `open -a` 传入本机回环代理地址（`MacExternalPlayer`），主修饰键为 `⌘`。
 - **整包替换更新**：应用内更新通过 `apply-update-mac.sh` 整包替换 `Piko.app`（先拷贝至同目录旁，通过 `codesign --verify` 校验并清除 `com.apple.quarantine` 隔离属性后再原子替换；任一步骤失败均保留并重新拉起旧包，写入 `failed` 标记供下次启动提示）。

@@ -61,7 +61,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.draw.clip
 import dev.nihildigit.windowstouch.ProvideTouchViewConfiguration
 import java.awt.Container
+import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.FontStyle
 import org.jetbrains.skiko.SkiaLayer
@@ -444,9 +447,17 @@ private fun FrameWindowScope.MacTitleBarEffect() {
     // 画布的原生层在窗口显示时才建好，之前调用什么也不做，所以先等窗口显示出来
     LaunchedEffect(window) {
         while (!window.isShowing) delay(16)
-        findSkiaLayer(window)?.disableTitleBar(TitleBarHeight.value)
+        val layer = findSkiaLayer(window) ?: return@LaunchedEffect
+        runMacTitleBarNative { layer.disableTitleBar(TitleBarHeight.value) }
     }
 }
+
+private val macTitleBarDispatcher = Executors.newSingleThreadExecutor { task ->
+    Thread(task, "Piko-MacTitleBar").apply { isDaemon = true }
+}.asCoroutineDispatcher()
+
+internal suspend fun <T> runMacTitleBarNative(block: () -> T): T =
+    withContext(macTitleBarDispatcher) { block() }
 
 private fun findSkiaLayer(container: Container): SkiaLayer? {
     for (component in container.components) {
