@@ -8,7 +8,7 @@
 | 用途 | 触发方式 | 工作流 | 产物去向 |
 | --- | --- | --- | --- |
 | 正式发版 | 推 `vMAJOR.MINOR.PATCH` tag | `release.yml` | 草稿 Release，人工核对后公开 |
-| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包 |
+| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包；带 `mac` 加 macOS，带 `desktop` 加三平台 |
 | 只拿产物 | 手动 `workflow_dispatch` | `build.yml` | Actions Artifacts，保留 7 天 |
 | 全量测试 | push / PR / 手动 | `test.yml` | 无安装包，只有结论 |
 | 本机调试 | 本地 Gradle | — | `app/build/outputs/...` |
@@ -25,8 +25,15 @@ git tag test-20261111-vr
 git push origin test-20261111-vr
 ```
 
-tag 约定 `test-<日期>-<说明>`。**默认只打 Android**，因为绝大多数验证都在手机 / Quest 上；
-桌面端（Windows x64、macOS、Linux）只在 tag 里带 `desktop` 时才一起构建：
+tag 约定 `test-<日期>-<说明>`。**默认只打 Android**，因为绝大多数验证都在手机 / Quest 上。
+只验证 macOS 时在 tag 里带 `mac`，会构建 Android + macOS：
+
+```bash
+git tag test-20261111-vr-mac       # Android + macOS arm64
+git push origin test-20261111-vr-mac
+```
+
+需要 Windows x64 / macOS / Linux 三平台时，在 tag 里带 `desktop`：
 
 ```bash
 git tag test-20261111-vr-desktop   # Android + 桌面三平台
@@ -52,7 +59,7 @@ git push origin test-20261111-vr-desktop
 | --- | --- |
 | Android | `piko-<版本>-arm64-v8a.apk`、`-armeabi-v7a.apk`、`-x86_64.apk`、`-universal.apk`、`-mapping.txt` |
 | Windows（tag 带 `desktop`） | `piko-windows-x64-<版本>.7z` / `.msi` |
-| macOS（tag 带 `desktop`） | `piko-macos-arm64-<版本>.dmg` |
+| macOS（tag 带 `mac` 或 `desktop`） | `piko-macos-arm64-<版本>.dmg` |
 | Linux（tag 带 `desktop`） | `piko-linux-x64-<版本>.AppImage` |
 | 校验 | `SHA256SUMS.txt` |
 
@@ -71,7 +78,7 @@ gh release delete test-20261111-vr --cleanup-tag
 
 ## 2. 只出产物、不建 Release
 
-只想拿某个平台、或先确认能编过（`platforms` 可选 `android` / `desktop` / `all`）：
+只想拿某个平台、或先确认能编过（`platforms` 可选 `android` / `android-macos` / `desktop` / `all`）：
 
 ```bash
 gh workflow run build.yml --ref feature/remote-download \

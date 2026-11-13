@@ -5,8 +5,8 @@ name: Build
 #
 # 两种用法：
 # 1. 推一个 test-* tag（如 test-20261111-vr）：默认只打 Android，完成后自动建一个
-#    Pre-release，手机上点链接就能装。tag 里带 desktop（如 test-20261111-vr-desktop）
-#    才额外打 Windows x64 / macOS / Linux，桌面改动需要验证时再要。
+#    Pre-release，手机上点链接就能装。tag 里带 mac（如 test-20261111-vr-mac）只加 macOS；
+#    带 desktop（如 test-20261111-vr-desktop）才打 Windows x64 / macOS / Linux 三平台。
 # 2. 手动触发：只跑构建、把产物留在 workflow 的 Artifacts 里（保留 7 天），不建 Release。
 #    适合只想拿某一个平台的包、或先确认能编过再打 tag。
 # SDK main 已进入 3.0 传输层重构，PikoStreamReader 的 readAheadLimit / urgent /
@@ -33,6 +33,7 @@ on:
         type: choice
         options:
           - android
+          - android-macos
           - desktop
           - all
         default: android
@@ -53,7 +54,9 @@ jobs:
       base: ${{ steps.derive.outputs.base }}
       title: ${{ steps.derive.outputs.title }}
       android: ${{ steps.derive.outputs.android }}
-      desktop: ${{ steps.derive.outputs.desktop }}
+      windows: ${{ steps.derive.outputs.windows }}
+      macos: ${{ steps.derive.outputs.macos }}
+      linux: ${{ steps.derive.outputs.linux }}
     steps:
       - name: Derive version
         id: derive
@@ -71,13 +74,17 @@ jobs:
           title=""
           if [[ "$EVENT" == "push" ]]; then
             # test-20261111-vr → 后缀 20261111-vr，标题带上可读的日期与说明；
-            # 只有 tag 里带 desktop 才连桌面端一起打包，日常验证只出 Android 更快。
+            # tag 带 mac 时只额外打 macOS；带 desktop 时打三平台；日常验证只出 Android 更快。
             if [[ ! "$TAG" =~ ^test-(.+)$ ]]; then
               echo "Test tags must use test-<slug> format."
               exit 1
             fi
             suffix="${BASH_REMATCH[1]}"
-            [[ "$suffix" == *desktop* ]] && platforms="all"
+            if [[ "$suffix" == *desktop* ]]; then
+              platforms="all"
+            elif [[ "$suffix" == *mac* ]]; then
+              platforms="android-macos"
+            fi
             if [[ "$suffix" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})-(.+)$ ]]; then
               title="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}（${BASH_REMATCH[4]}）"
             else
@@ -100,12 +107,29 @@ jobs:
             name="$base-$suffix"
             [[ -z "$title" ]] && title="$suffix"
           fi
+          android=false
+          windows=false
+          macos=false
+          linux=false
+          case "$platforms" in
+            android) android=true ;;
+            android-macos) android=true; macos=true ;;
+            macos) macos=true ;;
+            desktop) windows=true; macos=true; linux=true ;;
+            all) android=true; windows=true; macos=true; linux=true ;;
+            *)
+              echo "Unknown platforms: $platforms"
+              exit 1
+              ;;
+          esac
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "code=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "title=${title:-$name}" >> "$GITHUB_OUTPUT"
-          echo "android=$([[ "$platforms" != "desktop" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "desktop=$([[ "$platforms" != "android" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "android=$android" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "linux=$linux" >> "$GITHUB_OUTPUT"
 
   android:
     needs: version
@@ -168,7 +192,7 @@ jobs:
 
   windows:
     needs: version
-    if: needs.version.outputs.desktop == 'true'
+    if: needs.version.outputs.windows == 'true'
     runs-on: windows-latest
     env:
       # MSI/DMG 的版本号必须是纯数字：后缀只用于文件名，不写进包内版本
@@ -222,7 +246,7 @@ jobs:
 
   macos:
     needs: version
-    if: needs.version.outputs.desktop == 'true'
+    if: needs.version.outputs.macos == 'true'
     runs-on: macos-15
     env:
       ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.base }}
@@ -267,7 +291,7 @@ jobs:
 
   linux:
     needs: version
-    if: needs.version.outputs.desktop == 'true'
+    if: needs.version.outputs.linux == 'true'
     runs-on: ubuntu-24.04
     env:
       ORG_GRADLE_PROJECT_pikoDesktopVersion: ${{ needs.version.outputs.base }}
@@ -347,7 +371,7 @@ jobs:
           测试构建，未跑安装与更新冒烟，仅用于验证功能。版本 \`$VERSION\`，tag \`$TAG\`。
 
           - Android：按 ABI 区分的 APK；签名与之前的测试包一致时可直接覆盖安装。
-          - 桌面端（tag 带 \`desktop\` 或手动选择时才构建）：Windows x64 的 7z / MSI、macOS arm64 DMG、Linux x64 AppImage。
+          - 桌面端（tag 带 \`mac\` 时只有 macOS；带 \`desktop\` 时为 Windows x64 的 7z / MSI、macOS arm64 DMG、Linux x64 AppImage）。
 
           测试包不进正式更新通道；应用内若提示了新版本，按提示升级即可。
           EOF
