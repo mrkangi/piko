@@ -300,11 +300,46 @@ internal class ProxySession(
     private suspend fun pump(reader: ProxyReader, start: Long, endExclusive: Long, sink: suspend (ByteArray, Int, Int) -> Unit) {
         val buffer = ByteArray(CHUNK_BYTES)
         var position = start
+        var attempt = 0
+        var lastFailure: Exception? = null
         while (position < endExclusive) {
             currentCoroutineContext().ensureActive()
+            if (isClosed) throw CancellationException("会话已关闭")
             val want = minOf(buffer.size.toLong(), endExclusive - position).toInt()
-            val read = reader.read(buffer, 0, want)
-            check(read > 0) { "字节来源在 $position 处提前结束，应到 $endExclusive" }
+            val read = try {
+                reader.read(buffer, 0, want)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastFailure = e
+                if (attempt >= READ_RETRY_DELAYS_MILLIS.size) throw e
+                val delayMillis = READ_RETRY_DELAYS_MILLIS[attempt++]
+                PikoLog.d(TAG, "读取 $position 暂时失败，${delayMillis}ms 后第 $attempt 次重试：${e::class.simpleName}")
+                runCatching { reader.seekTo(position) }
+                delay(delayMillis)
+                continue
+            }
+            if (read == 0) {
+                // 少数来源在暂时无数据时返回 0；只退避等待，不做无意义的同位置 seek。
+                if (attempt >= READ_RETRY_DELAYS_MILLIS.size) {
+                    throw IllegalStateException("字节来源在 $position 处持续无数据，应到 $endExclusive")
+                }
+                val delayMillis = READ_RETRY_DELAYS_MILLIS[attempt++]
+                delay(delayMillis)
+                continue
+            }
+            if (read < 0) {
+                // 底层只在文件尾返回 -1；这里还没到 endExclusive，说明是上游提前断开，不能把半截响应当正常结束。
+                val reason = lastFailure ?: IllegalStateException("字节来源在 $position 处提前结束，应到 $endExclusive")
+                if (attempt >= READ_RETRY_DELAYS_MILLIS.size) throw reason
+                val delayMillis = READ_RETRY_DELAYS_MILLIS[attempt++]
+                PikoLog.d(TAG, "字节来源在 $position 处提前结束，${delayMillis}ms 后第 $attempt 次重试")
+                runCatching { reader.seekTo(position) }
+                delay(delayMillis)
+                continue
+            }
+            attempt = 0
+            lastFailure = null
             try {
                 sink(buffer, 0, read)
             } catch (e: CancellationException) {
@@ -332,10 +367,16 @@ internal class ProxySession(
     private class ClientGone(cause: Exception) : Exception("播放器断开", cause)
 
     private companion object {
+        const val TAG = "Proxy"
+
         // 每次往本机回环 socket 推送 64 KiB，降低非交错 MP4 高频切轨时单次超前塞入内核回环缓冲区的冗余拷贝
         const val CHUNK_BYTES = 64 * 1024
 
         const val TAIL_BYTES = 512L * 1024
+
+        // 上游短暂断流（服务端瞬断、反向代理超时、连接被回收）时先在原位置重连几次，
+        // 避免把已经声明 Content-Length 的响应提前收尾，导致播放器整段重连甚至换源。
+        val READ_RETRY_DELAYS_MILLIS = longArrayOf(200L, 500L, 1_000L, 2_000L)
 
         // 覆盖交错 MP4 的视频轨、音轨、字幕轨及尾部探测，互不挤占预读窗口
         const val MAX_POOLED_READERS = 4

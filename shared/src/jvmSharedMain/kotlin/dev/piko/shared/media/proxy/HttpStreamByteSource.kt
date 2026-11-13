@@ -289,7 +289,12 @@ private class HttpStreamReader(
                 if (count < 0) {
                     synchronized(lock) {
                         if (gen == generation) {
-                            eof = true
+                            // 只有读满声明长度才算正常结束；提前 EOF 是上游断流，交给上层带退避重连。
+                            if (streamPosition >= size) {
+                                eof = true
+                            } else {
+                                streamError = IOException("HTTP 流提前结束：$streamPosition/$size")
+                            }
                             pumpActive = false
                             dataAvailableSignal?.complete(Unit)
                             dataAvailableSignal = null
