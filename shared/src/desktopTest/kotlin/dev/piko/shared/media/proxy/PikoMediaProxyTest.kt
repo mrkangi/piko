@@ -101,6 +101,28 @@ class PikoMediaProxyTest {
         assertEquals(0, source.concurrencyViolations.get())
     }
 
+    @Test
+    fun transientPrematureEofIsRetriedWithoutTruncatingTheResponse() = runBlocking {
+        val source = FakeSource(size = 2 * 1024 * 1024, failAt = 700_000L, failures = 1)
+        val url = proxy.register(source, "movie.mp4").url
+
+        val response = withTimeout(10_000) { request(url, range = "bytes=0-") }
+        assertEquals(206, response.status)
+        assertContentEquals(source.expected(0, 2 * 1024 * 1024), response.body)
+        assertEquals(1, source.shortReads.get())
+    }
+
+    @Test
+    fun transientReadExceptionIsRetriedWithoutTruncatingTheResponse() = runBlocking {
+        val source = FakeSource(size = 2 * 1024 * 1024, failAt = 900_000L, failures = 1, throwOnFailure = true)
+        val url = proxy.register(source, "movie.mp4").url
+
+        val response = withTimeout(10_000) { request(url, range = "bytes=0-") }
+        assertEquals(206, response.status)
+        assertContentEquals(source.expected(0, 2 * 1024 * 1024), response.body)
+        assertEquals(1, source.thrownFailures.get())
+    }
+
     // 错一个偏移，播放器拿到的是另一处的字节，TS 照样能解，只是画面不在该在的时刻
     @Test
     fun aSliceServesItsWindowAsAWholeFile() = runBlocking {
@@ -215,6 +237,60 @@ class PikoMediaProxyTest {
     }
 
     @Test
+    fun httpStreamSourceResumesAfterUpstreamShortWrite() = runBlocking {
+        val fileSize = 4 * 1024 * 1024
+        val firstCut = 256 * 1024
+        val upstreamRequests = AtomicInteger(0)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+        server.createContext("/flaky.mp4") { exchange ->
+            val attempt = upstreamRequests.incrementAndGet()
+            val rangeHeader = exchange.requestHeaders.getFirst("Range").orEmpty()
+            val start = rangeHeader.substringAfter("bytes=", "0").substringBefore('-').toLongOrNull() ?: 0L
+            val remaining = fileSize - start
+            exchange.responseHeaders.add("Accept-Ranges", "bytes")
+            exchange.responseHeaders.add("Content-Range", "bytes $start-${fileSize - 1}/$fileSize")
+            exchange.sendResponseHeaders(206, remaining)
+            val limit = if (attempt == 1) minOf(remaining, firstCut.toLong()) else remaining
+            runCatching {
+                exchange.responseBody.use { out ->
+                    var pos = start
+                    val end = start + limit
+                    val chunk = ByteArray(32 * 1024)
+                    while (pos < end) {
+                        val n = minOf(chunk.size.toLong(), end - pos).toInt()
+                        for (i in 0 until n) chunk[i] = ((pos + i) % 251).toByte()
+                        out.write(chunk, 0, n)
+                        pos += n
+                    }
+                    // 故意提前关闭：模拟反向代理/服务端在声明长度内断流
+                    if (attempt == 1) out.flush()
+                }
+            }
+            if (attempt == 1) exchange.close()
+        }
+        server.start()
+        try {
+            val upstreamUrl = "http://127.0.0.1:${server.address.port}/flaky.mp4"
+            val source = HttpStreamByteSource(upstreamUrl, fileSize.toLong())
+            val stream = proxy.register(source, "flaky.mp4")
+            try {
+                val response = withTimeout(20_000) { request(stream.url, range = "bytes=0-") }
+                assertEquals(206, response.status)
+                assertEquals(fileSize, response.body.size)
+                for (i in response.body.indices) {
+                    assertEquals(((i) % 251).toByte(), response.body[i], "byte $i")
+                }
+                assertTrue(upstreamRequests.get() >= 2, "upstreamRequests=${upstreamRequests.get()}")
+            } finally {
+                stream.close()
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun closedSessionIsGone() = runBlocking {
         val source = FakeSource(size = 1000)
         val stream = proxy.register(source, null)
@@ -229,10 +305,16 @@ class PikoMediaProxyTest {
     private class FakeSource(
         override val size: Long,
         private val readDelayMillis: Long = 0,
+        private val failAt: Long? = null,
+        private val failures: Int = 0,
+        private val throwOnFailure: Boolean = false,
     ) : ProxyByteSource {
         val concurrencyViolations = AtomicInteger(0)
         val openedReaders = AtomicInteger(0)
         val seekCalls = AtomicInteger(0)
+        val shortReads = AtomicInteger(0)
+        val thrownFailures = AtomicInteger(0)
+        private val remainingFailures = AtomicInteger(failures)
 
         /** 所有 reader 上正在进行的读。 */
         val activeReads = AtomicInteger(0)
@@ -269,6 +351,16 @@ class PikoMediaProxyTest {
                 try {
                     if (readDelayMillis > 0) delay(readDelayMillis)
                     if (position >= size) return -1
+                    val shouldFail = failAt != null && position >= failAt &&
+                        remainingFailures.getAndUpdate { if (it > 0) it - 1 else 0 } > 0
+                    if (shouldFail) {
+                        if (throwOnFailure) {
+                            thrownFailures.incrementAndGet()
+                            throw java.io.IOException("模拟上游断流")
+                        }
+                        shortReads.incrementAndGet()
+                        return -1
+                    }
                     val count = minOf(length.toLong(), size - position, 64L * 1024).toInt()
                     for (i in 0 until count) buffer[offset + i] = byteAt(position + i)
                     position += count
