@@ -49,10 +49,10 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
@@ -237,7 +237,7 @@ internal fun BoxScope.PlayerBottomStack(
 /**
  * 锁定手势与控件的开关。锁定后它是唯一可点的控件。
  *
- * 用可切换图标按钮：锁定态换成方角并填充，和未锁定一眼能分开。
+ * 用透明底的图标切换按钮，与控件栏其余按钮一致；锁定态换成方角并填充，和未锁定一眼能分开。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -246,7 +246,7 @@ internal fun LockToggle(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    FilledTonalIconToggleButton(
+    IconToggleButton(
         checked = isLocked,
         onCheckedChange = { onToggle() },
         shapes = IconButtonDefaults.toggleableShapes(),
