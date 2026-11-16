@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.HttpMethod
 import org.jellyfin.sdk.api.client.exception.ApiClientException
 import org.jellyfin.sdk.api.client.exception.InvalidStatusException
 import org.jellyfin.sdk.api.client.extensions.authenticationApi
@@ -47,6 +48,7 @@ import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.MediaType
+import org.jellyfin.sdk.model.api.MetadataRefreshMode
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackInfoDto
@@ -172,7 +174,28 @@ class SdkJellyfinRepository internal constructor(
             throw requestFailure(error)
         }
         val parentLocationId = JellyfinLocation(server.serverId, itemId).id
-        items.mapNotNull { item -> item.toFileStat(server, parentLocationId, token) }
+        items.mapNotNull { item -> item.toFileStat(server, parentLocationId, token, library = parent == null) }
+    }
+
+    override suspend fun scanLibrary(serverId: String, itemId: String) = withContext(Dispatchers.IO) {
+        val server = requireServer(serverId)
+        val api = apiFor(server)
+        try {
+            val id = itemId.toUuid()
+            api.request(
+                method = HttpMethod.POST,
+                pathTemplate = "/Items/{itemId}/Refresh",
+                queryParameters = mapOf(
+                    "recursive" to true,
+                    "metadataRefreshMode" to MetadataRefreshMode.DEFAULT,
+                    "imageRefreshMode" to MetadataRefreshMode.DEFAULT,
+                ),
+                pathParameters = mapOf("itemId" to id),
+            )
+        } catch (error: Throwable) {
+            throw requestFailure(error)
+        }
+        PikoLog.i(TAG, "已请求 Jellyfin 扫描媒体库")
     }
 
     /** 从已列过的目录拼路径，供瀑布流/信息流定位用；没列到的祖先返回 null。 */
@@ -491,7 +514,12 @@ class SdkJellyfinRepository internal constructor(
         return (resume + played).distinctBy { it.id }.mapNotNull { it.toFileStat(server, root, token) }
     }
 
-    private fun BaseItemDto.toFileStat(server: JellyfinServer, parentLocationId: String, token: String): FileStat? {
+    private fun BaseItemDto.toFileStat(
+        server: JellyfinServer,
+        parentLocationId: String,
+        token: String,
+        library: Boolean = false,
+    ): FileStat? {
         val itemName = name?.takeIf { it.isNotBlank() } ?: return null
         val folder = isFolder == true || type in FOLDER_TYPES
         val source = mediaSources?.firstOrNull()
@@ -535,6 +563,7 @@ class SdkJellyfinRepository internal constructor(
             params = buildMap {
                 put("jellyfin_server", server.serverId)
                 put("jellyfin_item", id.toString())
+                if (library) put("jellyfin_library", "1")
                 if (folder) put("jellyfin_folder", "1")
                 if (duration != null && duration > 0) put("duration", duration.toString())
                 if (positionSeconds != null) put("playback_position", positionSeconds.toString())

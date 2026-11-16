@@ -589,6 +589,42 @@ internal class DriveViewModel(
         }
     }
 
+    fun scanJellyfinLibrary(serverId: String, itemId: String) {
+        scanMediaLibrary { driveRepo.jellyfin?.scanLibrary(serverId, itemId) }
+    }
+
+    fun scanPlexLibrary(mountId: String, sectionId: String) {
+        scanMediaLibrary { driveRepo.plex?.scanLibrary(mountId, sectionId) }
+    }
+
+    private fun scanMediaLibrary(action: suspend () -> Unit?) {
+        viewModelScope.launch {
+            try {
+                action()
+                _effects.emit(
+                    DriveUiEffect.ShowSnackbar(
+                        tr("已触发媒体库扫描", "Library scan requested", "ライブラリのスキャンを開始しました", "미디어 라이브러리 스캔을 시작했습니다", "已觸發媒體庫掃描"),
+                    ),
+                )
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                PikoLog.w("MediaServer", "扫描媒体库失败", error)
+                _effects.emit(
+                    DriveUiEffect.ShowSnackbar(
+                        tr(
+                            "扫描请求失败，请确认账号有服务器管理权限",
+                            "Scan request failed; check that the account can manage the server",
+                            "スキャン要求に失敗しました。アカウントのサーバー管理権限を確認してください",
+                            "스캔 요청에 실패했습니다. 계정의 서버 관리 권한을 확인하세요",
+                            "掃描要求失敗，請確認帳號有伺服器管理權限",
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
     fun revealLocalInFileManager(fileId: String) {
         launchLocalAction {
             val resolved = driveRepo.localMounts.resolve(fileId)?.takeUnless { it.startsWith("content://") }

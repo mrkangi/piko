@@ -83,6 +83,8 @@ interface PlexRepository {
     suspend fun removeServer(mountId: String)
 
     suspend fun list(mountId: String, node: String): List<FileStat>
+    /** 让 PMS 扫描整个媒体库；[sectionId] 是媒体库编号。 */
+    suspend fun scanLibrary(mountId: String, sectionId: String)
     fun cachedPathTo(fileId: String, containing: Boolean): List<PikoPathBreadcrumb>?
     fun cachedParentOf(fileId: String): String?
     suspend fun pathTo(fileId: String, containing: Boolean): List<PikoPathBreadcrumb>?

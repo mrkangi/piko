@@ -35,6 +35,8 @@ interface JellyfinRepository {
     suspend fun remove(serverId: String)
 
     suspend fun list(serverId: String, itemId: String): List<FileStat>
+    /** 让服务器扫描媒体库；[itemId] 是媒体库根节点，递归刷新其下全部内容。 */
+    suspend fun scanLibrary(serverId: String, itemId: String)
     fun cachedPathTo(fileId: String, containing: Boolean): List<PikoPathBreadcrumb>?
     fun cachedParentOf(fileId: String): String?
     suspend fun playback(fileId: String): JellyfinPlayback

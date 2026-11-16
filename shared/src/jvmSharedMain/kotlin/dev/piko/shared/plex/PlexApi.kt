@@ -108,6 +108,15 @@ internal class PlexApi(
     suspend fun sections(baseUrl: String, token: String): JsonObject =
         request(base = baseUrl, path = "/library/sections", operation = "PMS library sections", token = token).jsonObject
 
+    suspend fun refreshSection(baseUrl: String, token: String, sectionId: String) {
+        request(
+            base = baseUrl,
+            path = "/library/sections/$sectionId/refresh",
+            operation = "PMS library refresh",
+            token = token,
+        )
+    }
+
     suspend fun sectionItems(
         baseUrl: String,
         token: String,
@@ -230,6 +239,7 @@ internal class PlexApi(
                 )
             }
         }
+        if (text.isBlank()) return JsonNull
         return runCatching { json.parseToJsonElement(text) }.getOrElse {
             throw PlexException("$operation returned invalid JSON")
         }

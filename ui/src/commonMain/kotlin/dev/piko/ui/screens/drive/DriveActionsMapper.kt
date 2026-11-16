@@ -147,6 +147,8 @@ internal class DriveItemActionIntents(
     val onUnmountJellyfin: (String) -> Unit,
     val onUnmountPlex: (String) -> Unit,
     val onManagePlex: () -> Unit,
+    val onScanJellyfinLibrary: (String, String) -> Unit,
+    val onScanPlexLibrary: (String, String) -> Unit,
 )
 
 internal fun buildArchiveEntryActions(
@@ -392,6 +394,30 @@ internal fun buildDriveOperations(
                             group = ActionGroup.Open,
                         ),
                     )
+                }
+                if (file.params["jellyfin_library"] == "1") {
+                    JellyfinLocation.of(file.id)?.let { jellyfin ->
+                        add(
+                            SheetAction(
+                                Icons.Outlined.Refresh,
+                                tr("扫描媒体库", "Scan library", "ライブラリをスキャン", "라이브러리 스캔", "掃描媒體庫"),
+                                { intents.onScanJellyfinLibrary(jellyfin.serverId, jellyfin.itemId) },
+                                group = ActionGroup.Manage,
+                            ),
+                        )
+                    }
+                }
+                if (file.params["plex_library"] == "1") {
+                    PlexLocation.of(file.id)?.let { plex ->
+                        add(
+                            SheetAction(
+                                Icons.Outlined.Refresh,
+                                tr("扫描媒体库", "Scan library", "ライブラリをスキャン", "라이브러리 스캔", "掃描媒體庫"),
+                                { intents.onScanPlexLibrary(plex.mountId, plex.sectionId.orEmpty()) },
+                                group = ActionGroup.Manage,
+                            ),
+                        )
+                    }
                 }
                 if (file.isLocalMountRoot) {
                     add(

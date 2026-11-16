@@ -73,6 +73,15 @@ internal class HttpPlexRepository(
 
     override fun serverName(mountId: String): String = settings.server(mountId)?.name ?: mountId
 
+    override suspend fun scanLibrary(mountId: String, sectionId: String) = withContext(Dispatchers.IO) {
+        val account = settings.accountOfServer(mountId) ?: throw PlexException("Plex server not found")
+        val server = account.servers.firstOrNull { it.mountId == mountId } ?: throw PlexException("Plex server not found")
+        val token = serverToken(account, server)
+        val base = baseUrl(server, token)
+        api.refreshSection(base, token, sectionId)
+        PikoLog.i(TAG, "已请求 Plex 扫描媒体库")
+    }
+
     override suspend fun createPin(): PlexPin = withContext(Dispatchers.IO) {
         val data = api.createPin()
         val id = data.long("id") ?: throw PlexException("Plex PIN id missing")
@@ -328,7 +337,11 @@ internal class HttpPlexRepository(
                         kind = FileKind.FOLDER,
                         size = "0",
                         phase = TaskPhase.COMPLETE,
-                        params = mapOf("plex_server" to mountId, "plex_section" to sectionId),
+                        params = mapOf(
+                            "plex_server" to mountId,
+                            "plex_section" to sectionId,
+                            "plex_library" to "1",
+                        ),
                     )
                 }
             }

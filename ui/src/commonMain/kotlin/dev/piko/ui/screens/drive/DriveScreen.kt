@@ -223,6 +223,8 @@ private class DriveViewEvents(
     val onUnmountPlexServer: (String) -> Unit,
     val onRemovePlexAccount: (String) -> Unit,
     val onManagePlex: () -> Unit,
+    val onScanJellyfinLibrary: (String, String) -> Unit,
+    val onScanPlexLibrary: (String, String) -> Unit,
 )
 
 @Stable
@@ -739,6 +741,8 @@ fun DriveScreen(
         onUnmountPlexServer = viewModel::removePlexServer,
         onRemovePlexAccount = viewModel::removePlexAccount,
         onManagePlex = { showPlexManager = true },
+        onScanJellyfinLibrary = viewModel::scanJellyfinLibrary,
+        onScanPlexLibrary = viewModel::scanPlexLibrary,
     )
 
     DriveScreenContent(
@@ -1067,6 +1071,8 @@ private fun DriveScreenContent(
         onUnmountJellyfin = events.onUnmountJellyfinServer,
         onUnmountPlex = events.onUnmountPlexServer,
         onManagePlex = events.onManagePlex,
+        onScanJellyfinLibrary = events.onScanJellyfinLibrary,
+        onScanPlexLibrary = events.onScanPlexLibrary,
     )
     remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
         RemoteSendDialog(files = targets, onDismiss = { remoteDownloadTargets = null })
