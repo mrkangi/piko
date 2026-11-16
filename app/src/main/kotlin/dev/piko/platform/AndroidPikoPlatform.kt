@@ -90,6 +90,8 @@ import dev.piko.ui.platform.DiskSpace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+
 /**
  * 共享界面在 Android 上的平台能力。动作都从 Application 的 Context 发出，所以启动 Activity
  * 一律带 FLAG_ACTIVITY_NEW_TASK；原先在屏幕里用 Activity 的 Context，界面搬进共享模块后
@@ -452,17 +454,7 @@ class AndroidPikoPlatform(
         }
 
         override fun openContainingFolder(path: String) {
-            val uri = if (path.startsWith("content:")) {
-                val fileUri = Uri.parse(path)
-                val authority = fileUri.authority ?: return
-                val documentId = runCatching { DocumentsContract.getDocumentId(fileUri) }.getOrNull() ?: return
-                val parentId = documentId.substringBeforeLast('/', documentId)
-                DocumentsContract.buildTreeDocumentUri(authority, parentId)
-            } else {
-                val file = File(path)
-                if (!file.exists()) return
-                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file.parentFile ?: file)
-            }
+            val uri = folderUri(path) ?: return
             startActivity(
                 Intent(Intent.ACTION_VIEW)
                     .setDataAndType(uri, "vnd.android.document/directory")
@@ -470,22 +462,47 @@ class AndroidPikoPlatform(
             )
         }
 
+        /**
+         * 目录打开自身，文件才取父目录。批量下载的「打开所在文件夹」传进来的是下载根目录，
+         * 再向上取一级会落到 files/，不在 FileProvider 暴露的 Piko/ 范围内而直接抛异常。
+         */
+        private fun folderUri(path: String): Uri? {
+            if (path.startsWith("content:")) {
+                val uri = Uri.parse(path)
+                val authority = uri.authority ?: return null
+                val documentId = documentIdOf(uri) ?: return null
+                val targetId = if (isDocumentDirectory(uri)) documentId else documentId.substringBeforeLast('/', documentId)
+                return runCatching {
+                    if (DocumentsContract.isTreeUri(uri)) DocumentsContract.buildDocumentUriUsingTree(uri, targetId)
+                    else DocumentsContract.buildDocumentUri(authority, targetId)
+                }.getOrNull()
+            }
+            val file = File(path)
+            if (!file.exists()) return null
+            val folder = if (file.isDirectory) file else file.parentFile ?: file
+            return localUri(folder)
+        }
+
+        private fun documentIdOf(uri: Uri): String? =
+            runCatching { DocumentsContract.getDocumentId(uri) }
+                .recoverCatching { DocumentsContract.getTreeDocumentId(uri) }
+                .getOrNull()
+
+        private fun isDocumentDirectory(uri: Uri): Boolean =
+            DocumentsContract.isTreeUri(uri) ||
+                runCatching { DocumentFile.fromSingleUri(context, uri)?.isDirectory == true }.getOrDefault(false)
+
         private fun isDirectory(path: String): Boolean =
             if (path.startsWith("content:")) {
-                DocumentFile.fromSingleUri(context, Uri.parse(path))?.isDirectory == true
+                val uri = Uri.parse(path)
+                DocumentsContract.isTreeUri(uri) ||
+                    runCatching { DocumentFile.fromSingleUri(context, uri)?.isDirectory == true }.getOrDefault(false)
             } else {
                 File(path).isDirectory
             }
 
         private fun openDirectory(path: String) {
-            val uri = if (path.startsWith("content:")) {
-                val folderUri = Uri.parse(path)
-                val authority = folderUri.authority ?: return
-                val documentId = runCatching { DocumentsContract.getDocumentId(folderUri) }.getOrNull() ?: return
-                DocumentsContract.buildTreeDocumentUri(authority, documentId)
-            } else {
-                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
-            }
+            val uri = folderUri(path) ?: return
             startActivity(
                 Intent(Intent.ACTION_VIEW)
                     .setDataAndType(uri, "vnd.android.document/directory")
@@ -499,7 +516,27 @@ class AndroidPikoPlatform(
             if (path.startsWith("content:")) return Uri.parse(path)
             val file = File(path)
             if (!file.exists()) return null
-            return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            return localUri(file)
+        }
+
+        /**
+         * FileProvider 只暴露应用私有下载目录；公共存储里的路径（例如上传来源）改用「文件」
+         * 应用的 ExternalStorageProvider 文档 URI，避免 getUriForFile 找不到根而崩溃。
+         */
+        private fun localUri(file: File): Uri? {
+            runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file) }
+                .getOrNull()
+                ?.let { return it }
+            val path = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            val primary = Environment.getExternalStorageDirectory().absolutePath
+            val documentId = when {
+                path == primary -> "primary:"
+                path.startsWith("$primary/") -> "primary:" + path.removePrefix("$primary/")
+                else -> return null
+            }
+            return runCatching {
+                DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, documentId)
+            }.getOrNull()
         }
     }
 
@@ -542,7 +579,7 @@ class AndroidPikoPlatform(
             }
             return {
                 val initialUri = DocumentsContract.buildTreeDocumentUri(
-                    "com.android.externalstorage.documents",
+                    EXTERNAL_STORAGE_AUTHORITY,
                     "primary:Download/Piko",
                 )
                 launcher.launch(

@@ -126,6 +126,8 @@ class AndroidPikoDownloadStorage(
         directoryLoaded.await()
         val tree = treeUri
         if (tree != null) {
+            // 空文件名是批量下载的根目录（见 PikoDownloadCoordinator.batchFolderPath）
+            if (fileName.isBlank()) return@withContext tree.toString()
             findInTree(tree, fileName)?.uri?.toString()
         } else {
             File(resolveDirectory(), fileName).takeIf { it.exists() }?.absolutePath
