@@ -146,6 +146,10 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - **数据目录**（SQLite、实例锁、`secret.key`、PikPak 会话）仍建议留在 Termux 内部存储。共享存储的 POSIX 文件锁不可靠，把数据目录放上去可能导致单实例锁或数据库异常。
 - 外置存储写入通常更慢，建议在管理页调低并发；SD 卡损坏或拔出会导致任务失败，恢复后重新扫描即可续传。
 
+### Termux DNS
+
+Termux 的 `ping` 使用 Android netd 解析域名，而静态 Go 二进制无法调用 bionic resolver；若纯 Go resolver 读不到 `/etc/resolv.conf`，会退回到没有服务的 `127.0.0.1/::1:53`。服务在 Termux/Android 启动时会自动读取 `$PREFIX/etc/resolv.conf`，忽略回环 DNS，并使用其中可用的非回环 DNS；文件不存在或只有回环项时回退到公共 DNS。
+
 ### 旧版本报 `hardlink ... permission denied`
 
 只有旧版本依赖硬链接。升级前若无法启动，可先把已保存的下载目录改回内部存储：

@@ -18,6 +18,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/netdns"
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
@@ -39,6 +40,8 @@ func main() {
 }
 
 func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catalog, contentOverride backend.ContentSource) error {
+	netdns.Configure()
+
 	lock, err := config.AcquireInstanceLock(cfg.DataDir)
 	if err != nil {
 		return err
