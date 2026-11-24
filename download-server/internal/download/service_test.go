@@ -168,6 +168,9 @@ func TestPauseRestartResumeAndDeliverExactBytes(t *testing.T) {
 	if err != nil || finalTask.State != store.TaskCompleted {
 		t.Fatalf("expected COMPLETED after resume, got %+v", finalTask)
 	}
+	if finalTask.Attempt != 1 {
+		t.Fatalf("expected pause/resume not to consume retry budget, attempt=%d", finalTask.Attempt)
+	}
 	if resumedOffset != 8192 {
 		t.Fatalf("expected resume from exact offset 8192, got %d", resumedOffset)
 	}

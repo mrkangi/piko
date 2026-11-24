@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import * as api from './api'
 import { formatBytes, formatSpeed } from './format'
-import type { AuthUser, FileView, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
+import type { AuthUser, FileView, NotificationChannel, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
 import { LoginView } from './components/LoginView'
 import { SetupView } from './components/SetupView'
 import { SpeedSparkline } from './components/SpeedSparkline'
@@ -39,6 +39,7 @@ export function App() {
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [speedHistory, setSpeedHistory] = useState<number[]>([0, 0])
   const [sources, setSources] = useState<Source[]>([])
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([])
   const [tasks, setTasks] = useState<TaskView[]>([])
   const [files, setFiles] = useState<FileView[]>([])
 
@@ -66,17 +67,19 @@ export function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [nextStats, nextSettings, nextSources, nextTasks, nextFiles] = await Promise.all([
+      const [nextStats, nextSettings, nextSources, nextTasks, nextFiles, nextNotifications] = await Promise.all([
         api.getStats(),
         api.getSettings(),
         api.listSources(),
         api.listTasks({ state: taskStateFilter, source_id: taskSourceFilter, q: taskSearch }),
         api.listFiles({ remote_state: fileRemoteState, source_id: fileSourceFilter, q: fileSearch }),
+        api.listNotifications(),
       ])
       setStats(nextStats)
       setSettings(nextSettings)
       setSpeedHistory((prev) => [...prev.slice(-24), nextStats.total_speed_bytes])
       setSources(nextSources.sources || [])
+      setNotificationChannels(nextNotifications.channels || [])
       const nextTaskList = nextTasks.tasks || []
       setTasks(nextTaskList)
       setInspectedTask((prev) => (prev ? nextTaskList.find((t) => t.id === prev.id) || null : null))
@@ -327,6 +330,7 @@ export function App() {
           <ManageTab
             settings={settings}
             sources={sources}
+            notificationChannels={notificationChannels}
             activeWorkers={stats?.active_workers ?? 0}
             onSaveSettings={async (patch) => {
               const updated = await api.updateSettings(patch)
@@ -383,6 +387,30 @@ export function App() {
             }}
             onChangeAdminPassword={async (currentPassword, newPassword) => {
               await api.changeAdminPassword({ current_password: currentPassword, new_password: newPassword })
+            }}
+            onCreateNotification={async (input) => {
+              await api.createNotification(input)
+              notify('ok', '通知渠道已添加')
+              await refreshAll()
+            }}
+            onUpdateNotification={async (id, input) => {
+              await api.updateNotification(id, input)
+              await refreshAll()
+            }}
+            onDeleteNotification={async (id) => {
+              await api.deleteNotification(id)
+              notify('ok', '通知渠道已删除')
+              await refreshAll()
+            }}
+            onTestNotification={async (id) => {
+              await api.testNotification(id)
+              notify('ok', '测试通知已发送')
+            }}
+            onSaveStatusInterval={async (minutes) => {
+              const updated = await api.updateSettings({ notification_status_interval_minutes: minutes })
+              setSettings(updated)
+              notify('ok', '状态汇报间隔已保存')
+              await refreshAll()
             }}
           />
         )}

@@ -316,13 +316,24 @@ func (svc *Service) dispatchAvailable(ctx context.Context) {
 			freeBytes, err := fsStore.FreeBytes()
 			if err == nil && freeBytes < uint64(opts.MinFreeSpaceBytes) {
 				svc.mu.Lock()
+				wasBlocked := svc.lowDiskBlocked
 				svc.lowDiskBlocked = true
 				svc.mu.Unlock()
+				if !wasBlocked {
+					svc.broker.Publish(events.Event{
+						Type:    "system.low_disk",
+						Message: fmt.Sprintf("下载卷可用空间低于阈值：%d MiB，已暂停派发新任务", freeBytes/1024/1024),
+					})
+				}
 				return
 			}
 			svc.mu.Lock()
+			wasBlocked := svc.lowDiskBlocked
 			svc.lowDiskBlocked = false
 			svc.mu.Unlock()
+			if wasBlocked {
+				svc.broker.Publish(events.Event{Type: "system.disk_ok", Message: "下载卷空间已恢复，继续派发任务"})
+			}
 		}
 
 		task, err := svc.store.ClaimNextTask(ctx, time.Now().Unix())
@@ -344,6 +355,7 @@ func (svc *Service) dispatchAvailable(ctx context.Context) {
 		svc.mu.Unlock()
 
 		svc.broker.Publish(events.Event{Type: "task.updated", SourceID: task.SourceID, TaskID: task.ID})
+		svc.broker.Publish(events.Event{Type: "task.started", SourceID: task.SourceID, TaskID: task.ID})
 
 		svc.wg.Add(1)
 		go func(claimed store.DownloadTask, act *activeAttempt, runCtx context.Context) {
@@ -354,10 +366,28 @@ func (svc *Service) dispatchAvailable(ctx context.Context) {
 				delete(svc.active, claimed.ID)
 				svc.mu.Unlock()
 				svc.broker.Publish(events.Event{Type: "task.updated", SourceID: claimed.SourceID, TaskID: claimed.ID})
+				svc.publishTaskOutcome(claimed)
 				svc.Signal()
 			}()
 			svc.executeAttempt(runCtx, claimed, act)
 		}(*task, state, attemptCtx)
+	}
+}
+
+func (svc *Service) publishTaskOutcome(task store.DownloadTask) {
+	latest, err := svc.store.GetTask(context.Background(), task.ID)
+	if err != nil {
+		return
+	}
+	switch latest.State {
+	case store.TaskCompleted:
+		svc.broker.Publish(events.Event{Type: "task.completed", SourceID: latest.SourceID, TaskID: latest.ID})
+	case store.TaskFailed:
+		svc.broker.Publish(events.Event{Type: "task.failed", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
+	case store.TaskConflict:
+		svc.broker.Publish(events.Event{Type: "task.conflict", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
+	case store.TaskRetryWait:
+		svc.broker.Publish(events.Event{Type: "task.retry", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
 	}
 }
 
@@ -819,6 +849,36 @@ func (svc *Service) Stats(ctx context.Context) (SystemStats, error) {
 		stats.FreeSpaceBytes = free
 	}
 	return stats, nil
+}
+
+type StatusReport struct {
+	Queued           int
+	Active           int
+	Paused           int
+	RemainingTasks   int
+	RemainingBytes   int64
+	SpeedBytesPerSec int64
+}
+
+func (svc *Service) StatusReport(ctx context.Context) (StatusReport, error) {
+	aggregate, err := svc.store.TaskAggregate(ctx)
+	if err != nil {
+		return StatusReport{}, err
+	}
+	report := StatusReport{
+		Queued:         aggregate.Queued,
+		Active:         aggregate.Active,
+		Paused:         aggregate.Paused,
+		RemainingTasks: aggregate.RemainingTasks,
+		RemainingBytes: aggregate.RemainingBytes,
+	}
+	svc.mu.Lock()
+	for _, attempt := range svc.active {
+		_, _, speed, _ := attempt.snapshot()
+		report.SpeedBytesPerSec += speed
+	}
+	svc.mu.Unlock()
+	return report, nil
 }
 
 func (act *activeAttempt) setTotals(done int64, total int64, sessionBytes int64) {

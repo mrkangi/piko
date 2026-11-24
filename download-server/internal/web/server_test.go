@@ -16,6 +16,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
 )
@@ -62,7 +63,8 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 	runtime.Configure(fake, fake)
 	controller := control.New(st, secrets, runtime, cat, dl, broker, dataDir)
 	auth := NewAuthenticator(st, false, false)
-	srv := NewServer(auth, st, cat, dl, broker, controller)
+	notifier := notify.NewManager(st, secrets, broker, nil)
+	srv := NewServer(auth, st, cat, dl, broker, controller, notifier)
 	srv.SetReady(true)
 
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -248,6 +250,44 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 		t.Fatalf("DELETE /api/sources failed: %v %v", delResp, err)
 	}
 	_ = delResp.Body.Close()
+
+	notifyCreateReq, _ := http.NewRequest(http.MethodPost, httpSrv.URL+"/api/notifications", bytes.NewBufferString(`{"name":"Ops","type":"webhook","url":"https://example.com/hook","events":["task.failed"],"enabled":true}`))
+	notifyCreateReq.Header.Set("Content-Type", "application/json")
+	notifyCreateReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
+	for _, c := range cookies {
+		notifyCreateReq.AddCookie(c)
+	}
+	notifyCreateResp, err := http.DefaultClient.Do(notifyCreateReq)
+	if err != nil || notifyCreateResp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /api/notifications failed: %v %v", notifyCreateResp, err)
+	}
+	var notifyChannel struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(notifyCreateResp.Body).Decode(&notifyChannel)
+	_ = notifyCreateResp.Body.Close()
+	if notifyChannel.ID == "" {
+		t.Fatal("notification channel id missing")
+	}
+	notifyListReq, _ := http.NewRequest(http.MethodGet, httpSrv.URL+"/api/notifications", nil)
+	for _, c := range cookies {
+		notifyListReq.AddCookie(c)
+	}
+	notifyListResp, err := http.DefaultClient.Do(notifyListReq)
+	if err != nil || notifyListResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/notifications failed: %v %v", notifyListResp, err)
+	}
+	_ = notifyListResp.Body.Close()
+	notifyDeleteReq, _ := http.NewRequest(http.MethodDelete, httpSrv.URL+"/api/notifications/"+notifyChannel.ID, nil)
+	notifyDeleteReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
+	for _, c := range cookies {
+		notifyDeleteReq.AddCookie(c)
+	}
+	notifyDeleteResp, err := http.DefaultClient.Do(notifyDeleteReq)
+	if err != nil || notifyDeleteResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE /api/notifications failed: %v %v", notifyDeleteResp, err)
+	}
+	_ = notifyDeleteResp.Body.Close()
 }
 
 func jsonQuote(v string) string {
@@ -285,7 +325,8 @@ func TestSetupEndpointCreatesFirstAdminAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(NewAuthenticator(st, false, false), st, cat, dl, broker, controller, Options{DataDir: dataDir})
+	notifier := notify.NewManager(st, secrets, broker, nil)
+	srv := NewServer(NewAuthenticator(st, false, false), st, cat, dl, broker, controller, notifier, Options{DataDir: dataDir})
 	srv.SetReady(true)
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()

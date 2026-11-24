@@ -38,7 +38,8 @@ catalog / download ──状态变更通知──▶ web / SSE ──▶ 浏览�
 | `internal/pikpak` | 从 `pikpakcli` 适配只读 API、串行刷新、预期版本检查、Range 响应验证 | 调度、写文件、Web |
 | `internal/store` | SQLite 迁移、候选发布事务、条件状态更新、查询投影 | 发网络请求、持有下载流 |
 | `internal/localfs` | 路径映射与占用、任务暂存、空间检查、不覆盖交付 | 远端目录与任务调度 |
-| `internal/web` | 管理员认证、来源/任务/文件页面、REST、SSE | 令牌存储、直接改任务表 |
+| `internal/web` | 管理员认证、来源/任务/文件页面、通知渠道管理、REST、SSE | 令牌存储、直接改任务表 |
+| `internal/notify` | 飞书与通用 Webhook 通知、事件过滤、发送重试 | 下载调度、扫描决策 |
 
 ## 3. 数据所有权
 

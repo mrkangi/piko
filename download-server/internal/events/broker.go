@@ -9,6 +9,7 @@ type Event struct {
 	Type      string `json:"type"`
 	SourceID  string `json:"source_id,omitempty"`
 	TaskID    string `json:"task_id,omitempty"`
+	Count     int    `json:"count,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Timestamp int64  `json:"timestamp"`
 }

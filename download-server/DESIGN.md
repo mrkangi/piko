@@ -18,6 +18,7 @@
 | `internal/download` | 领取任务、控制并发、管理暂存及退避、验证并交付文件、启动恢复。 |
 | `internal/store` | SQLite WAL、迁移、状态条件更新、扫描发布与任务去重。 |
 | `internal/web` + `web/` | 前后端分离：React + TypeScript + Vite + Tailwind CSS v4 独立前端（`web/`），后端提供认证、CSRF、REST 与 SSE（`internal/web`），生产可独立托管或 `-tags embed_ui` 单二进制嵌入。 |
+| `internal/notify` | 订阅任务/扫描事件，向飞书群机器人或通用 Webhook 发送通知；渠道 URL 与密钥加密存储。 |
 
 以 [`52funny/pikpakcli`](https://github.com/52funny/pikpakcli) 的 `560f263661fc55e40e508fe8e0d4b151c855dcbd` 为初始参考。真正引入代码时保留上游 MIT 许可及版权声明，记录引入的文件和改动。只取 `internal/api` 中需要的登录、刷新、列表、详情和原始流逻辑；不引入 Cobra、交互 Shell、mpb、全局配置或 `http.DefaultClient` 修改。服务不启动 `pikpakcli` 子进程。
 
@@ -50,6 +51,7 @@ SQLite 使用事务管理下列状态，凭据不进入业务表。进度按节�
 | `remote_objects` | 来源内对象 ID、当前远端路径、版本、最后出现代、缺失计数。按 `(source_id, remote_id)` 唯一。 |
 | `download_tasks` | 绑定不可变对象版本；记录任务状态、用户意图、执行次数、下次尝试时间、错误分类、暂存和目标位置。按 `(source_id, remote_id, version_key)` 去重；重试沿用任务。 |
 | `deliveries` | 已交付的对象版本、实际本地路径、大小及校验信息；同一目标路径只允许一份交付记录。 |
+| `notification_channels` | 飞书/通用 Webhook 渠道、加密 URL 与密钥、事件过滤、启停状态。 |
 
 内容版本优先使用 `GCID + 字节长度`；GCID 缺失时，可使用能证明字节身份的上游版本标识。没有可靠标识时，大小和修改时间只能作为**发现变更和入队的线索**，不能证明暂存或已有文件等同于远端。对象版本变化时，旧任务不能继续下载新版本；新版建立独立任务，已有最终文件仍不覆盖。
 
@@ -57,8 +59,8 @@ SQLite 使用事务管理下列状态，凭据不进入业务表。进度按节�
 
 | 操作 | 规则 |
 | --- | --- |
-| 暂停 | 排队任务直接暂停；运行任务先持久化暂停意图，再取消 worker 的 `context`。等响应体和文件都关闭才进入 `PAUSED`，保留暂存并释放槽位。 |
-| 继续 | 仅从 `PAUSED` 重新入队，领取前重新检查对象版本和暂存。首版从单一连续偏移续传，不预分配 `.part`。 |
+| 暂停 | 排队任务直接暂停；运行任务先持久化暂停意图，再取消 worker 的 `context`。等响应体和文件都关闭才进入 `PAUSED`，保留暂存并释放槽位。暂停不消耗重试额度。 |
+| 继续 | 仅从 `PAUSED` 重新入队，领取时跳过 `attempt` 自增，领取前重新检查对象版本和暂存。首版从单一连续偏移续传，不预分配 `.part`。 |
 | 取消 | 与暂停共享停止流程，但终态为 `CANCELED`；默认在 worker 退出后清理该任务的暂存，不触碰最终文件。扫描不会重新派发同一取消版本，用户可显式重试。 |
 | 提交 | `COMMITTING` 是控制边界：提交前受暂停/取消约束；一旦原子领取提交权，控制请求返回冲突并让 UI 刷新结果，不承诺撤回。 |
 
@@ -77,7 +79,7 @@ SQLite 使用事务管理下列状态，凭据不进入业务表。进度按节�
 ## 6. Web 与部署
 
 - **页面**：管理页提供下载根目录、并发参数、远端目录批量选择、扫描周期、扫描状态、单来源立即扫描与扫描全部已启用；任务页显示状态、进度、速度、ETA、失败原因与可用操作；文件页显示远端相对路径、本地实际路径、缺失及冲突。
-- **接口**：`GET /api/setup/status`、`POST /api/setup` 负责首次配置；`GET /api/remote/folders` 分页浏览远端目录；`GET/POST /api/sources`、`PATCH/DELETE /api/sources/{id}`、`POST /api/sources/scan`、`POST /api/sources/{id}/scan`；`GET /api/tasks`、`POST /api/tasks/{id}/{pause,resume,cancel,retry}`；`GET /api/files`、`GET /api/system/settings`、`PUT /api/system/settings`、`GET/PUT /api/system/account`、`PUT /api/system/admin-password`、`GET /api/events`、`GET /healthz`。列表分页。操作异步执行时返回已受理和当前状态，非法状态转换返回 `409`。浏览器以 SSE 事件触发合并刷新，首次连接和断线重连均重新取快照；SSE 不是持久状态来源。
+- **接口**：`GET /api/setup/status`、`POST /api/setup` 负责首次配置；`GET /api/remote/folders` 分页浏览远端目录；`GET/POST /api/sources`、`PATCH/DELETE /api/sources/{id}`、`POST /api/sources/scan`、`POST /api/sources/{id}/scan`；`GET /api/tasks`、`POST /api/tasks/{id}/{pause,resume,cancel,retry}`；`GET /api/files`、`GET /api/system/settings`、`PUT /api/system/settings`、`GET/PUT /api/system/account`、`PUT /api/system/admin-password`、`GET/POST /api/notifications`、`PATCH/DELETE /api/notifications/{id}`、`POST /api/notifications/{id}/test`、`GET /api/events`、`GET /healthz`。列表分页。操作异步执行时返回已受理和当前状态，非法状态转换返回 `409`。浏览器以 SSE 事件触发合并刷新，首次连接和断线重连均重新取快照；SSE 不是持久状态来源。
 - **会话**：每账号一个长期客户端，按请求传递 `context`；以绝对过期时间管理令牌，串行刷新并原子落盘，避免并发请求重复轮换。鉴权及验证码失败可见，不循环刷登录。服务使用独立凭据和会话文件，不读取任何桌面版或 CLI 的配置。
 - **安全**：管理员密码使用 bcrypt 哈希；PikPak 密码使用数据目录内 `secret.key` 的 AES-GCM 加密后存入数据库。默认监听 `0.0.0.0:7788`，首次配置必须提交控制台打印的 Setup Token；公网部署应放在 TLS 反代后。管理 API 与 SSE 都须鉴权，写操作校验 CSRF；配置与令牌不回显，日志不记录真实文件名、账号、令牌、验证码和带签名直链。
 - **部署**：只读取 `DOWNLOAD_SERVER_HOST`、`DOWNLOAD_SERVER_PORT`、`DOWNLOAD_SERVER_DATA_DIR` 三个环境变量。数据目录默认 `$HOME/.pikpak/downloader`，保存 SQLite、`secret.key`、会话和服务锁；下载目录默认 `$HOME/PikoDownloads`，可在 Web 管理页修改。容器用非 root 用户运行，不挂 Docker socket；不让实例共享同一个 SQLite 数据目录。NAS 可将下载目录作为本机挂载卷，但必须通过交付语义检查。

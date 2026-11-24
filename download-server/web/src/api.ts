@@ -1,4 +1,4 @@
-import type { AuthUser, FileView, LocalDirEntry, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
+import type { AuthUser, FileView, LocalDirEntry, NotificationChannel, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '')
 
@@ -151,11 +151,47 @@ export function changeAdminPassword(input: { current_password: string; new_passw
   })
 }
 
+export interface NotificationInput {
+  name?: string
+  type?: 'feishu' | 'webhook'
+  url?: string
+  secret?: string
+  events?: string[]
+  enabled?: boolean
+}
+
+export function listNotifications(): Promise<{ channels: NotificationChannel[] }> {
+  return request('/api/notifications')
+}
+
+export function createNotification(input: NotificationInput): Promise<NotificationChannel> {
+  return request('/api/notifications', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateNotification(id: string, input: NotificationInput): Promise<NotificationChannel> {
+  return request(`/api/notifications/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteNotification(id: string): Promise<{ deleted: boolean }> {
+  return request(`/api/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function testNotification(id: string): Promise<{ sent: boolean }> {
+  return request(`/api/notifications/${encodeURIComponent(id)}/test`, { method: 'POST' })
+}
+
 export function updateSettings(patch: {
   download_dir?: string
   max_concurrent_downloads?: number
   default_scan_interval_sec?: number
   min_free_space_mib?: number
+  notification_status_interval_minutes?: number
 }): Promise<SystemSettings> {
   return request<SystemSettings>('/api/system/settings', {
     method: 'PUT',

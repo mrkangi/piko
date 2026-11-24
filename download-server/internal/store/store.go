@@ -638,7 +638,10 @@ func (store *Store) ClaimNextTask(ctx context.Context, now int64) (*DownloadTask
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE download_tasks
-		SET state = 'RUNNING', attempt = attempt + 1, error_code = '', error_message = '',
+		SET state = 'RUNNING',
+			attempt = attempt + CASE WHEN resume_pending = 1 THEN 0 ELSE 1 END,
+			resume_pending = 0,
+			error_code = '', error_message = '',
 			next_retry_at = 0, started_at = ?, updated_at = ?
 		WHERE id = ? AND desired_action = '' AND (state = 'QUEUED' OR state = 'RETRY_WAIT')`,
 		now, now, taskID,
@@ -754,7 +757,9 @@ func (store *Store) RequestResume(ctx context.Context, taskID string) (DownloadT
 	}
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE download_tasks SET state = 'QUEUED', desired_action = '', error_code = '', error_message = '', next_retry_at = 0, updated_at = ?
+		UPDATE download_tasks SET state = 'QUEUED', desired_action = '',
+			resume_pending = CASE WHEN attempt > 0 THEN 1 ELSE 0 END,
+			error_code = '', error_message = '', next_retry_at = 0, updated_at = ?
 		WHERE id = ? AND state = 'PAUSED'`, now, taskID); err != nil {
 		return DownloadTask{}, err
 	}
@@ -821,7 +826,7 @@ func (store *Store) RequestRetry(ctx context.Context, taskID string) (DownloadTa
 	}
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE download_tasks SET state = 'QUEUED', desired_action = '', attempt = 0, next_retry_at = 0,
+		UPDATE download_tasks SET state = 'QUEUED', desired_action = '', attempt = 0, resume_pending = 0, next_retry_at = 0,
 			error_code = '', error_message = '', finished_at = 0, updated_at = ?
 		WHERE id = ?`, now, taskID); err != nil {
 		return DownloadTask{}, err
@@ -1027,6 +1032,31 @@ func (store *Store) ListNonTerminalTasks(ctx context.Context) ([]DownloadTask, e
 	return out, rows.Err()
 }
 
+type TaskAggregate struct {
+	Queued         int
+	Active         int
+	Paused         int
+	RemainingTasks int
+	RemainingBytes int64
+}
+
+func (store *Store) TaskAggregate(ctx context.Context) (TaskAggregate, error) {
+	var aggregate TaskAggregate
+	err := store.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN state IN ('QUEUED', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state IN ('RUNNING', 'VERIFYING', 'COMMITTING') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state IN ('PAUSED', 'PAUSING') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state IN ('QUEUED', 'RETRY_WAIT', 'RUNNING', 'PAUSED', 'PAUSING', 'VERIFYING', 'COMMITTING') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE
+				WHEN state IN ('QUEUED', 'RETRY_WAIT', 'RUNNING', 'PAUSED', 'PAUSING', 'VERIFYING', 'COMMITTING')
+					AND bytes_total > bytes_done THEN bytes_total - bytes_done
+				ELSE 0 END), 0)
+		FROM download_tasks`,
+	).Scan(&aggregate.Queued, &aggregate.Active, &aggregate.Paused, &aggregate.RemainingTasks, &aggregate.RemainingBytes)
+	return aggregate, err
+}
+
 func (store *Store) RecoverTaskState(ctx context.Context, taskID string, newState string, desiredAction string, bytesDone int64, errorCode string, errorMessage string) error {
 	now := time.Now().Unix()
 	finishedAt := int64(0)
@@ -1227,6 +1257,94 @@ func (store *Store) UpdateAdminPassword(ctx context.Context, username string, pa
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (store *Store) ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error) {
+	rows, err := store.db.QueryContext(ctx, `
+		SELECT id, name, type, url_cipher, secret_cipher, events_json, enabled, created_at, updated_at
+		FROM notification_channels ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NotificationChannel
+	for rows.Next() {
+		channel, err := scanNotificationChannelRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, channel)
+	}
+	return out, rows.Err()
+}
+
+func (store *Store) GetNotificationChannel(ctx context.Context, id string) (NotificationChannel, error) {
+	row := store.db.QueryRowContext(ctx, `
+		SELECT id, name, type, url_cipher, secret_cipher, events_json, enabled, created_at, updated_at
+		FROM notification_channels WHERE id = ?`, id)
+	channel, err := scanNotificationChannelRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NotificationChannel{}, ErrNotFound
+	}
+	return channel, err
+}
+
+func (store *Store) CreateNotificationChannel(ctx context.Context, channel NotificationChannel) (NotificationChannel, error) {
+	if channel.ID == "" {
+		channel.ID = newID("ntf")
+	}
+	now := time.Now().Unix()
+	channel.CreatedAt = now
+	channel.UpdatedAt = now
+	_, err := store.db.ExecContext(ctx, `
+		INSERT INTO notification_channels(
+			id, name, type, url_cipher, secret_cipher, events_json, enabled, created_at, updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?)`,
+		channel.ID, channel.Name, channel.Type, channel.URLCipher, channel.SecretCipher,
+		channel.EventsJSON, boolToInt(channel.Enabled), channel.CreatedAt, channel.UpdatedAt,
+	)
+	return channel, err
+}
+
+func (store *Store) UpdateNotificationChannel(ctx context.Context, channel NotificationChannel) (NotificationChannel, error) {
+	channel.UpdatedAt = time.Now().Unix()
+	res, err := store.db.ExecContext(ctx, `
+		UPDATE notification_channels SET name = ?, type = ?, url_cipher = ?, secret_cipher = ?,
+			events_json = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		channel.Name, channel.Type, channel.URLCipher, channel.SecretCipher,
+		channel.EventsJSON, boolToInt(channel.Enabled), channel.UpdatedAt, channel.ID,
+	)
+	if err != nil {
+		return NotificationChannel{}, err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return NotificationChannel{}, ErrNotFound
+	}
+	return channel, nil
+}
+
+func (store *Store) DeleteNotificationChannel(ctx context.Context, id string) error {
+	res, err := store.db.ExecContext(ctx, `DELETE FROM notification_channels WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func scanNotificationChannelRow(row rowScanner) (NotificationChannel, error) {
+	var channel NotificationChannel
+	var enabled int
+	if err := row.Scan(
+		&channel.ID, &channel.Name, &channel.Type, &channel.URLCipher, &channel.SecretCipher,
+		&channel.EventsJSON, &enabled, &channel.CreatedAt, &channel.UpdatedAt,
+	); err != nil {
+		return NotificationChannel{}, err
+	}
+	channel.Enabled = enabled == 1
+	return channel, nil
 }
 
 func (store *Store) GetSettings(ctx context.Context) (map[string]string, error) {

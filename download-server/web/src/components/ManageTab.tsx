@@ -11,8 +11,10 @@ import {
   CheckSquare,
   UserCog,
   ShieldCheck,
+  Bell,
+  Send,
 } from 'lucide-react'
-import type { Source, SystemSettings } from '../types'
+import type { NotificationChannel, Source, SystemSettings } from '../types'
 import { formatRelativeTime, formatTimestamp } from '../format'
 import { LocalDirModal } from './LocalDirModal'
 import { RemoteFolderModal, type PickedRemoteFolder } from './RemoteFolderModal'
@@ -27,9 +29,34 @@ interface DraftSource {
   minFileSizeMiB: number
 }
 
+const NOTIFY_EVENTS = [
+  { key: 'tasks.queued', label: '加入下载队列' },
+  { key: 'task.started', label: '开始下载' },
+  { key: 'task.retry', label: '失败后重试' },
+  { key: 'task.failed', label: '下载最终失败' },
+  { key: 'task.completed', label: '下载完成' },
+  { key: 'task.conflict', label: '本地路径冲突' },
+  { key: 'scan.failed', label: '来源扫描失败' },
+  { key: 'system.low_disk', label: '磁盘空间不足' },
+  { key: 'system.disk_ok', label: '磁盘空间恢复' },
+  { key: 'status.report', label: '定时状态汇报' },
+]
+
+const NOTIFY_DEFAULT_EVENTS = [
+  'tasks.queued',
+  'task.started',
+  'task.failed',
+  'task.completed',
+  'task.conflict',
+  'scan.failed',
+  'system.low_disk',
+  'status.report',
+]
+
 interface Props {
   settings: SystemSettings | null
   sources: Source[]
+  notificationChannels: NotificationChannel[]
   activeWorkers: number
   onSaveSettings: (patch: {
     download_dir?: string
@@ -52,11 +79,24 @@ interface Props {
   onDeleteSource: (id: string) => Promise<void>
   onUpdateAccount: (username: string, password: string) => Promise<void>
   onChangeAdminPassword: (currentPassword: string, newPassword: string) => Promise<void>
+  onCreateNotification: (input: {
+    name: string
+    type: 'feishu' | 'webhook'
+    url: string
+    secret: string
+    events: string[]
+    enabled: boolean
+  }) => Promise<void>
+  onUpdateNotification: (id: string, input: { enabled?: boolean }) => Promise<void>
+  onDeleteNotification: (id: string) => Promise<void>
+  onTestNotification: (id: string) => Promise<void>
+  onSaveStatusInterval: (minutes: number) => Promise<void>
 }
 
 export function ManageTab({
   settings,
   sources,
+  notificationChannels,
   activeWorkers,
   onSaveSettings,
   onCreateSources,
@@ -66,6 +106,11 @@ export function ManageTab({
   onDeleteSource,
   onUpdateAccount,
   onChangeAdminPassword,
+  onCreateNotification,
+  onUpdateNotification,
+  onDeleteNotification,
+  onTestNotification,
+  onSaveStatusInterval,
 }: Props) {
   const [downloadDir, setDownloadDir] = useState('')
   const [maxConcurrent, setMaxConcurrent] = useState(2)
@@ -101,6 +146,16 @@ export function ManageTab({
   const [adminSaving, setAdminSaving] = useState(false)
   const [adminMessage, setAdminMessage] = useState('')
 
+  const [notifyName, setNotifyName] = useState('')
+  const [notifyType, setNotifyType] = useState<'feishu' | 'webhook'>('feishu')
+  const [notifyURL, setNotifyURL] = useState('')
+  const [notifySecret, setNotifySecret] = useState('')
+  const [notifyEvents, setNotifyEvents] = useState<string[]>(NOTIFY_DEFAULT_EVENTS)
+  const [notifySaving, setNotifySaving] = useState(false)
+  const [notifyError, setNotifyError] = useState('')
+  const [statusIntervalMinutes, setStatusIntervalMinutes] = useState(30)
+  const [statusIntervalMessage, setStatusIntervalMessage] = useState('')
+
   useEffect(() => {
     if (!settings) return
     setDownloadDir(settings.download_dir)
@@ -108,6 +163,7 @@ export function ManageTab({
     setDefaultIntervalSec(settings.default_scan_interval_sec)
     setMinFreeMiB(settings.min_free_space_mib)
     setIntervalSec(settings.default_scan_interval_sec)
+    setStatusIntervalMinutes(settings.notification_status_interval_minutes ?? 30)
     setPikpakUser(settings.pikpak_username || '')
   }, [settings])
 
@@ -126,6 +182,35 @@ export function ManageTab({
     } finally {
       setSavingSettings(false)
     }
+  }
+
+  async function handleCreateNotification(event: FormEvent) {
+    event.preventDefault()
+    setNotifyError('')
+    setNotifySaving(true)
+    try {
+      await onCreateNotification({
+        name: notifyName.trim(),
+        type: notifyType,
+        url: notifyURL.trim(),
+        secret: notifySecret,
+        events: notifyEvents,
+        enabled: true,
+      })
+      setNotifyName('')
+      setNotifyURL('')
+      setNotifySecret('')
+      setNotifyType('feishu')
+      setNotifyEvents(NOTIFY_DEFAULT_EVENTS)
+    } catch (err) {
+      setNotifyError(err instanceof Error ? err.message : '添加通知渠道失败')
+    } finally {
+      setNotifySaving(false)
+    }
+  }
+
+  function toggleNotifyEvent(key: string) {
+    setNotifyEvents((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]))
   }
 
   function uniqueAlias(baseName: string, taken: Set<string>): string {
@@ -423,6 +508,237 @@ export function ManageTab({
             </button>
             {adminMessage && <div className="text-xs text-slate-400">{adminMessage}</div>}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/15 text-sky-400 shrink-0">
+            <Bell className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-slate-100">通知渠道</h2>
+            <p className="text-xs text-slate-400">
+              支持飞书群机器人和通用 Webhook；通知只包含事件数量与来源，不包含文件名，任务事件会短窗口汇总。
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+          <label className="block space-y-1.5">
+            <span className="text-xs text-slate-400">状态汇报间隔（分钟，0 关闭）</span>
+            <input
+              type="number"
+              min={0}
+              max={1440}
+              value={statusIntervalMinutes}
+              onChange={(e) => setStatusIntervalMinutes(Number(e.target.value))}
+              className="w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={async () => {
+              setStatusIntervalMessage('')
+              try {
+                await onSaveStatusInterval(Math.max(0, Math.min(1440, Number(statusIntervalMinutes) || 0)))
+                setStatusIntervalMessage('状态汇报间隔已保存')
+              } catch (err) {
+                setStatusIntervalMessage(err instanceof Error ? err.message : '保存状态汇报间隔失败')
+              }
+            }}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
+          >
+            保存间隔
+          </button>
+          <span className="text-xs text-slate-500">仅在存在队列/进行中任务时发送；内容只含数量、速度、剩余大小与 ETA。</span>
+          {statusIntervalMessage && <span className="text-xs text-slate-400">{statusIntervalMessage}</span>}
+        </div>
+
+        <form onSubmit={handleCreateNotification} className="space-y-4 rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+            <label className="block space-y-1.5">
+              <span className="text-xs text-slate-400">渠道名称</span>
+              <input
+                type="text"
+                required
+                value={notifyName}
+                onChange={(e) => setNotifyName(e.target.value)}
+                placeholder="例如 运维飞书群"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs text-slate-400">类型</span>
+              <select
+                value={notifyType}
+                onChange={(e) => setNotifyType(e.target.value as 'feishu' | 'webhook')}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+              >
+                <option value="feishu">飞书群机器人</option>
+                <option value="webhook">通用 Webhook</option>
+              </select>
+            </label>
+            <label className="block space-y-1.5 md:col-span-2">
+              <span className="text-xs text-slate-400">
+                {notifyType === 'feishu' ? '飞书 Webhook URL' : 'Webhook URL'}
+              </span>
+              <input
+                type="url"
+                required
+                value={notifyURL}
+                onChange={(e) => setNotifyURL(e.target.value)}
+                placeholder="https://..."
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block space-y-1.5 md:col-span-2">
+              <span className="text-xs text-slate-400">
+                {notifyType === 'feishu' ? '飞书签名密钥（可选）' : 'Bearer Token（可选）'}
+              </span>
+              <input
+                type="password"
+                value={notifySecret}
+                onChange={(e) => setNotifySecret(e.target.value)}
+                placeholder={notifyType === 'feishu' ? '飞书机器人加签密钥' : '发送 Authorization: Bearer <token>'}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-xs text-slate-400">通知时机</span>
+            <div className="flex flex-wrap gap-2">
+              {NOTIFY_EVENTS.map((event) => {
+                const checked = notifyEvents.includes(event.key)
+                return (
+                  <label
+                    key={event.key}
+                    className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${
+                      checked
+                        ? 'border-sky-500/50 bg-sky-500/15 text-sky-200'
+                        : 'border-slate-700 bg-slate-900 text-slate-400'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleNotifyEvent(event.key)}
+                      className="h-3.5 w-3.5 accent-sky-500"
+                    />
+                    {event.label}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-slate-500">「加入下载队列」会按扫描批次汇总发送，避免大量文件逐条刷屏。</p>
+            <button
+              type="submit"
+              disabled={notifySaving}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {notifySaving ? '添加中…' : '添加通知渠道'}
+            </button>
+          </div>
+        </form>
+
+        {notifyError && (
+          <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {notifyError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {notificationChannels.length === 0 ? (
+            <div className="col-span-full rounded-xl border border-dashed border-slate-800 py-8 text-center text-sm text-slate-500">
+              尚未配置通知渠道
+            </div>
+          ) : (
+            notificationChannels.map((channel) => (
+              <div key={channel.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate text-sm font-semibold text-slate-100">{channel.name}</h3>
+                      <span className="rounded border border-slate-700 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-400">
+                        {channel.type === 'feishu' ? '飞书' : 'Webhook'}
+                      </span>
+                      {channel.has_secret && <span className="text-[10px] text-emerald-300">已加密凭据</span>}
+                    </div>
+                    <div className="mt-1 truncate font-mono text-[11px] text-slate-500">{channel.url_masked}</div>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                      channel.enabled
+                        ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                        : 'border-slate-700 bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {channel.enabled ? '已启用' : '已停用'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {channel.events.map((event) => (
+                    <span key={event} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+                      {NOTIFY_EVENTS.find((item) => item.key === event)?.label || event}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-slate-800/80 pt-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setNotifyError('')
+                      try {
+                        await onTestNotification(channel.id)
+                      } catch (err) {
+                        setNotifyError(err instanceof Error ? err.message : '测试通知发送失败')
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    发送测试消息
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setNotifyError('')
+                      try {
+                        await onUpdateNotification(channel.id, { enabled: !channel.enabled })
+                      } catch (err) {
+                        setNotifyError(err instanceof Error ? err.message : '更新通知渠道失败')
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
+                  >
+                    <Power className="h-3.5 w-3.5" />
+                    {channel.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!window.confirm(`确定删除通知渠道「${channel.name}」吗？`)) return
+                      setNotifyError('')
+                      try {
+                        await onDeleteNotification(channel.id)
+                      } catch (err) {
+                        setNotifyError(err instanceof Error ? err.message : '删除通知渠道失败')
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </section>
 

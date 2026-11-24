@@ -136,4 +136,16 @@ var schemaMigrations = []string{
 		updated_at INTEGER NOT NULL
 	);`,
 	`ALTER TABLE sources ADD COLUMN min_file_size_bytes INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE download_tasks ADD COLUMN resume_pending INTEGER NOT NULL DEFAULT 0;`,
+	`CREATE TABLE IF NOT EXISTS notification_channels (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		type TEXT NOT NULL,
+		url_cipher TEXT NOT NULL,
+		secret_cipher TEXT NOT NULL DEFAULT '',
+		events_json TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);`,
 }

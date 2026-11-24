@@ -18,6 +18,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
 	"github.com/nihildigit/piko/download-server/internal/web"
@@ -98,6 +99,20 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	catSvc.SetOnQueued(dlSvc.Signal)
 
 	controller := control.New(st, secrets, runtime, catSvc, dlSvc, broker, cfg.DataDir)
+	notifier := notify.NewManager(st, secrets, broker, func(ctx context.Context) (notify.StatusSnapshot, error) {
+		report, err := dlSvc.StatusReport(ctx)
+		if err != nil {
+			return notify.StatusSnapshot{}, err
+		}
+		return notify.StatusSnapshot{
+			Queued:           report.Queued,
+			Active:           report.Active,
+			Paused:           report.Paused,
+			RemainingTasks:   report.RemainingTasks,
+			RemainingBytes:   report.RemainingBytes,
+			SpeedBytesPerSec: report.SpeedBytesPerSec,
+		}, nil
+	})
 	if catOverride == nil {
 		if err := controller.LoadRuntime(ctx); err != nil {
 			return err
@@ -120,7 +135,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	}
 
 	auth := web.NewAuthenticator(st, false, false)
-	webSrv := web.NewServer(auth, st, catSvc, dlSvc, broker, controller, web.Options{
+	webSrv := web.NewServer(auth, st, catSvc, dlSvc, broker, controller, notifier, web.Options{
 		DataDir: cfg.DataDir,
 	})
 	webSrv.SetReady(true)
@@ -135,6 +150,11 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	defer bgCancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		notifier.Run(bgCtx)
+	}()
 	go func() {
 		defer wg.Done()
 		catSvc.RunLoop(bgCtx)

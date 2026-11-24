@@ -101,9 +101,29 @@ GitHub Actions 已接入主项目 tag 流程：
 - **手动扫描**：单来源「立即扫描」；顶部「扫描全部已启用」安排所有启用来源立即扫描。
 - **PikPak 账号**：验证并更新账号密码；有活动下载任务时需先暂停。
 - **管理员密码**：修改 Web 管理面板登录密码。
+- **通知渠道**：添加飞书群机器人或通用 Webhook，可分别启用/停用、测试发送和选择通知事件。
 - **文件索引**：筛选远端缺失、路径变更和本地交付记录。
 
 默认扫描周期为 5 分钟。扫描仍由服务端单线程调度，避免同时打满 PikPak API。
+
+## 通知
+
+通知事件包括：
+
+- `tasks.queued`：一次扫描新增下载任务（按批次汇总，不会逐个文件刷屏）
+- `task.started`：开始下载
+- `task.retry`：失败后进入重试
+- `task.failed`：最终失败
+- `task.completed`：下载完成
+- `task.conflict`：本地路径冲突
+- `scan.failed`：来源扫描失败
+- `system.low_disk` / `system.disk_ok`：下载卷空间不足与恢复
+
+通知正文只包含事件类型、数量和来源，不包含文件名、文件路径或错误详情；开始/完成/失败/重试/冲突等任务事件会在短窗口内按渠道和来源汇总为“N 个任务”。
+
+飞书群机器人支持可选的加签密钥；通用 Webhook 会发送 JSON，`secret` 非空时作为 `Authorization: Bearer <secret>`。渠道 URL 与密钥使用数据目录中的 `secret.key` 加密保存。
+
+通知发送是尽力送达：单次发送失败会在内存中重试 3 次；服务重启后不会补发失败通知。
 
 ## 容器部署
 
@@ -113,6 +133,47 @@ GitHub Actions 已接入主项目 tag 流程：
 - `/data` 必须支持同卷硬链接、目录 fsync 和不覆盖交付；启动时会执行 `Probe()` 校验，不支持的挂载会拒绝启动。
 - 不要让多个实例共享同一数据目录；服务通过 `server.lock` 强制单实例。
 - 默认监听 `0.0.0.0:7788`，首次配置必须使用控制台打印的 Setup Token。公网部署请放在 TLS 反向代理后。
+
+### 极简镜像
+
+`Dockerfile.minimal` 使用 `scratch` 作为运行镜像，只包含：
+
+- 静态 Go 二进制（前端已嵌入）
+- CA 证书
+- 可写的 `/data` 和 `/tmp`
+
+构建与启动：
+
+```bash
+cd download-server
+docker build -f Dockerfile.minimal -t piko-download-server:minimal .
+
+docker volume create piko-download-data
+docker run -d \
+  --name piko-download-server \
+  -p 7788:7788 \
+  -v piko-download-data:/data \
+  piko-download-server:minimal
+
+docker logs -f piko-download-server
+```
+
+首次启动日志里会打印 Setup Token；打开 `http://<host>:7788/setup` 完成初始化。
+
+如果使用 `docker-compose.minimal.yml`：
+
+```bash
+docker compose -f docker-compose.minimal.yml up -d --build
+```
+
+绑定宿主机目录 `./data` 时需要保证容器用户 `10001:10001` 可写，例如：
+
+```bash
+mkdir -p data
+sudo chown -R 10001:10001 data
+```
+
+极简镜像为了体积不包含 `wget/curl`，因此没有 Docker `HEALTHCHECK`；需要健康检查时使用普通 `Dockerfile`。
 
 ## 备份与恢复
 

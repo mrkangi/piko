@@ -137,6 +137,7 @@ export interface SystemSettings {
   max_concurrent_downloads: number
   default_scan_interval_sec: number
   min_free_space_mib: number
+  notification_status_interval_minutes: number
 }
 
 export interface SetupStatus {
@@ -151,4 +152,16 @@ export interface SetupStatus {
 export interface LocalDirEntry {
   name: string
   path: string
+}
+
+export interface NotificationChannel {
+  id: string
+  name: string
+  type: 'feishu' | 'webhook'
+  url_masked: string
+  has_secret: boolean
+  events: string[]
+  enabled: boolean
+  created_at: number
+  updated_at: number
 }

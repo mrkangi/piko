@@ -144,3 +144,56 @@ func TestTaskCommitBoundaryAndControlIntents(t *testing.T) {
 		t.Fatalf("CompleteCommit failed: %v", err)
 	}
 }
+
+func TestResumeDoesNotConsumeAttemptBudget(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	src, err := st.CreateSource(ctx, Source{
+		AccountID: "acct_1", RemoteRootID: "dir_1", RemoteRootPath: "/Movies", LocalAlias: "Movies",
+		InitialMode: InitialModeDownloadExisting, Enabled: true, ScanIntervalSec: 600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := st.StartScanRun(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertScanEntries(ctx, []ScanEntry{{
+		ScanRunID: run.ID, SourceID: src.ID, RemoteID: "f1", ParentRemoteID: "dir_1",
+		RelativePath: "m.mkv", Name: "m.mkv", Size: 50, GCID: "AAA", VersionKey: "gcid:AAA:50", StrongVersion: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := st.PublishScanRun(ctx, run.ID, 5)
+	if err != nil || len(pub.EnqueuedTasks) != 1 {
+		t.Fatalf("publish failed: %+v err=%v", pub, err)
+	}
+	taskID := pub.EnqueuedTasks[0].ID
+
+	claimed, err := st.ClaimNextTask(ctx, time.Now().Unix())
+	if err != nil || claimed == nil || claimed.Attempt != 1 {
+		t.Fatalf("first claim failed: %+v err=%v", claimed, err)
+	}
+	if _, err := st.RequestPause(ctx, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.FinalizeAttemptStop(ctx, taskID, claimed.Attempt, 0, TaskPaused, "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RequestResume(ctx, taskID); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := st.ClaimNextTask(ctx, time.Now().Unix())
+	if err != nil || resumed == nil {
+		t.Fatalf("resume claim failed: %+v err=%v", resumed, err)
+	}
+	if resumed.Attempt != 1 {
+		t.Fatalf("expected resume to keep attempt at 1, got %d", resumed.Attempt)
+	}
+}

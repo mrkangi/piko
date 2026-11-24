@@ -20,6 +20,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/store"
 )
 
@@ -36,6 +37,7 @@ type Server struct {
 	download   *download.Service
 	broker     *events.Broker
 	controller *control.Controller
+	notifier   *notify.Manager
 	corsOrigin string
 	dataDir    string
 	spaFS      fs.FS
@@ -50,6 +52,7 @@ func NewServer(
 	dl *download.Service,
 	broker *events.Broker,
 	controller *control.Controller,
+	notifier *notify.Manager,
 	opts ...Options,
 ) *Server {
 	var opt Options
@@ -63,6 +66,7 @@ func NewServer(
 		download:   dl,
 		broker:     broker,
 		controller: controller,
+		notifier:   notifier,
 		corsOrigin: strings.TrimRight(strings.TrimSpace(opt.CORSOrigin), "/"),
 		dataDir:    opt.DataDir,
 		spaFS:      resolveSPAFilesystem(opt.StaticDir),
@@ -130,6 +134,11 @@ func (srv *Server) routes() {
 	srv.mux.HandleFunc("GET /api/system/account", srv.withAuth(srv.handleGetAccount))
 	srv.mux.HandleFunc("PUT /api/system/account", srv.withAuthMutation(srv.handleUpdateAccount))
 	srv.mux.HandleFunc("PUT /api/system/admin-password", srv.withAuthMutation(srv.handleAdminPassword))
+	srv.mux.HandleFunc("GET /api/notifications", srv.withAuth(srv.handleListNotifications))
+	srv.mux.HandleFunc("POST /api/notifications", srv.withAuthMutation(srv.handleCreateNotification))
+	srv.mux.HandleFunc("PATCH /api/notifications/{id}", srv.withAuthMutation(srv.handleUpdateNotification))
+	srv.mux.HandleFunc("DELETE /api/notifications/{id}", srv.withAuthMutation(srv.handleDeleteNotification))
+	srv.mux.HandleFunc("POST /api/notifications/{id}/test", srv.withAuthMutation(srv.handleTestNotification))
 	srv.mux.HandleFunc("GET /api/events", srv.withAuth(srv.handleEvents))
 
 	srv.mux.HandleFunc("/", srv.handleFallback)
@@ -423,26 +432,36 @@ func (srv *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request, _ 
 }
 
 type systemSettingsPayload struct {
-	DownloadDir            string `json:"download_dir"`
-	DataDir                string `json:"data_dir"`
-	PikPakUsername         string `json:"pikpak_username"`
-	PikPakConfigured       bool   `json:"pikpak_configured"`
-	MaxConcurrentDownloads int    `json:"max_concurrent_downloads"`
-	DefaultScanIntervalSec int    `json:"default_scan_interval_sec"`
-	MinFreeSpaceMiB        int64  `json:"min_free_space_mib"`
+	DownloadDir                       string `json:"download_dir"`
+	DataDir                           string `json:"data_dir"`
+	PikPakUsername                    string `json:"pikpak_username"`
+	PikPakConfigured                  bool   `json:"pikpak_configured"`
+	MaxConcurrentDownloads            int    `json:"max_concurrent_downloads"`
+	DefaultScanIntervalSec            int    `json:"default_scan_interval_sec"`
+	MinFreeSpaceMiB                   int64  `json:"min_free_space_mib"`
+	NotificationStatusIntervalMinutes int    `json:"notification_status_interval_minutes"`
 }
 
 func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPayload {
 	dlOpts := srv.download.CurrentOptions()
 	status, _ := srv.controller.Status(ctx)
+	statusInterval := 30
+	if settings, settingsErr := srv.store.GetSettings(ctx); settingsErr == nil {
+		if raw := strings.TrimSpace(settings["notification_status_interval_minutes"]); raw != "" {
+			if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
+				statusInterval = parsed
+			}
+		}
+	}
 	return systemSettingsPayload{
-		DownloadDir:            srv.download.DownloadDir(),
-		DataDir:                status.DataDir,
-		PikPakUsername:         status.PikPakUsername,
-		PikPakConfigured:       status.PikPakConfigured,
-		MaxConcurrentDownloads: dlOpts.MaxConcurrent,
-		DefaultScanIntervalSec: int(srv.catalog.DefaultInterval().Seconds()),
-		MinFreeSpaceMiB:        dlOpts.MinFreeSpaceBytes / (1024 * 1024),
+		DownloadDir:                       srv.download.DownloadDir(),
+		DataDir:                           status.DataDir,
+		PikPakUsername:                    status.PikPakUsername,
+		PikPakConfigured:                  status.PikPakConfigured,
+		MaxConcurrentDownloads:            dlOpts.MaxConcurrent,
+		DefaultScanIntervalSec:            int(srv.catalog.DefaultInterval().Seconds()),
+		MinFreeSpaceMiB:                   dlOpts.MinFreeSpaceBytes / (1024 * 1024),
+		NotificationStatusIntervalMinutes: statusInterval,
 	}
 }
 
@@ -452,10 +471,11 @@ func (srv *Server) handleGetSettings(w http.ResponseWriter, r *http.Request, _ s
 
 func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
 	var req struct {
-		DownloadDir            *string `json:"download_dir"`
-		MaxConcurrentDownloads *int    `json:"max_concurrent_downloads"`
-		DefaultScanIntervalSec *int    `json:"default_scan_interval_sec"`
-		MinFreeSpaceMiB        *int64  `json:"min_free_space_mib"`
+		DownloadDir                       *string `json:"download_dir"`
+		MaxConcurrentDownloads            *int    `json:"max_concurrent_downloads"`
+		DefaultScanIntervalSec            *int    `json:"default_scan_interval_sec"`
+		MinFreeSpaceMiB                   *int64  `json:"min_free_space_mib"`
+		NotificationStatusIntervalMinutes *int    `json:"notification_status_interval_minutes"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "invalid settings payload")
@@ -519,14 +539,23 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 	}
 
 	nextMinFreeBytes := nextMinFreeMiB * 1024 * 1024
+	nextStatusInterval := curr.NotificationStatusIntervalMinutes
+	if req.NotificationStatusIntervalMinutes != nil {
+		if *req.NotificationStatusIntervalMinutes < 0 || *req.NotificationStatusIntervalMinutes > 1440 {
+			writeError(w, http.StatusBadRequest, "invalid_setting", "状态汇报间隔必须在 0 到 1440 分钟之间")
+			return
+		}
+		nextStatusInterval = *req.NotificationStatusIntervalMinutes
+	}
 	srv.download.UpdateOptions(nextConcurrent, nextMinFreeBytes)
 	srv.catalog.SetDefaultInterval(time.Duration(nextInterval) * time.Second)
 
 	if err := srv.store.SaveSettings(r.Context(), map[string]string{
-		"download_dir":              nextDownloadDir,
-		"max_concurrent_downloads":  strconv.Itoa(nextConcurrent),
-		"default_scan_interval_sec": strconv.Itoa(nextInterval),
-		"min_free_space_bytes":      strconv.FormatInt(nextMinFreeBytes, 10),
+		"download_dir":                         nextDownloadDir,
+		"max_concurrent_downloads":             strconv.Itoa(nextConcurrent),
+		"default_scan_interval_sec":            strconv.Itoa(nextInterval),
+		"min_free_space_bytes":                 strconv.FormatInt(nextMinFreeBytes, 10),
+		"notification_status_interval_minutes": strconv.Itoa(nextStatusInterval),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
@@ -590,6 +619,71 @@ func (srv *Server) handleAdminPassword(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
+}
+
+func (srv *Server) handleListNotifications(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	channels, err := srv.notifier.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
+}
+
+func (srv *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	var input notify.Input
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid notification payload")
+		return
+	}
+	channel, err := srv.notifier.Create(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "notification_invalid", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, channel)
+}
+
+func (srv *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	var input notify.Input
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid notification payload")
+		return
+	}
+	channel, err := srv.notifier.Update(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "notification channel not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "notification_invalid", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, channel)
+}
+
+func (srv *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	if err := srv.notifier.Delete(r.Context(), r.PathValue("id")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "notification channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "notification_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func (srv *Server) handleTestNotification(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	if err := srv.notifier.Test(r.Context(), r.PathValue("id")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "notification channel not found")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "notification_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sent": true})
 }
 
 func (srv *Server) handleLocalDirs(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {

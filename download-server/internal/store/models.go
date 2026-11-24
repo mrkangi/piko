@@ -172,3 +172,15 @@ type AdminUser struct {
 	CreatedAt    int64  `json:"created_at"`
 	UpdatedAt    int64  `json:"updated_at"`
 }
+
+type NotificationChannel struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	URLCipher    string `json:"-"`
+	SecretCipher string `json:"-"`
+	EventsJSON   string `json:"-"`
+	Enabled      bool   `json:"enabled"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
+}
