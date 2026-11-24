@@ -125,6 +125,7 @@ export function ManageTab({
   const [minFreeMiB, setMinFreeMiB] = useState(512)
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [settingsDirty, setSettingsDirty] = useState(false)
   const [proxyInput, setProxyInput] = useState('')
   const [proxySaving, setProxySaving] = useState(false)
   const [proxyMessage, setProxyMessage] = useState('')
@@ -134,6 +135,7 @@ export function ManageTab({
   const [localAlias, setLocalAlias] = useState('')
   const [initialMode, setInitialMode] = useState<'download_existing' | 'monitor_new_only'>('download_existing')
   const [intervalSec, setIntervalSec] = useState(300)
+  const [sourceIntervalDirty, setSourceIntervalDirty] = useState(false)
   const [minFileSizeMiB, setMinFileSizeMiB] = useState(0)
   const [drafts, setDrafts] = useState<DraftSource[]>([])
   const [submittingSources, setSubmittingSources] = useState(false)
@@ -148,6 +150,7 @@ export function ManageTab({
 
   const [pikpakUser, setPikpakUser] = useState('')
   const [pikpakPass, setPikpakPass] = useState('')
+  const [pikpakUserDirty, setPikpakUserDirty] = useState(false)
   const [accountSaving, setAccountSaving] = useState(false)
   const [accountMessage, setAccountMessage] = useState('')
   const [adminCurrent, setAdminCurrent] = useState('')
@@ -164,20 +167,29 @@ export function ManageTab({
   const [notifySaving, setNotifySaving] = useState(false)
   const [notifyError, setNotifyError] = useState('')
   const [statusIntervalMinutes, setStatusIntervalMinutes] = useState(30)
+  const [statusIntervalDirty, setStatusIntervalDirty] = useState(false)
   const [statusIntervalMessage, setStatusIntervalMessage] = useState('')
 
   useEffect(() => {
     if (!settings) return
-    setDownloadDir(settings.download_dir)
-    setMaxConcurrent(settings.max_concurrent_downloads)
-    setSegmentThreads(settings.segment_threads)
-    setSegmentMinMiB(settings.segment_min_size_mib)
+    if (!settingsDirty) {
+      setDownloadDir(settings.download_dir)
+      setMaxConcurrent(settings.max_concurrent_downloads)
+      setSegmentThreads(settings.segment_threads)
+      setSegmentMinMiB(settings.segment_min_size_mib)
+      setMinFreeMiB(settings.min_free_space_mib)
+    }
     setDefaultIntervalSec(settings.default_scan_interval_sec)
-    setMinFreeMiB(settings.min_free_space_mib)
-    setIntervalSec(settings.default_scan_interval_sec)
-    setStatusIntervalMinutes(settings.notification_status_interval_minutes ?? 30)
-    setPikpakUser(settings.pikpak_username || '')
-  }, [settings])
+    if (!sourceIntervalDirty) {
+      setIntervalSec(settings.default_scan_interval_sec)
+    }
+    if (!statusIntervalDirty) {
+      setStatusIntervalMinutes(settings.notification_status_interval_minutes ?? 30)
+    }
+    if (!pikpakUserDirty) {
+      setPikpakUser(settings.pikpak_username || '')
+    }
+  }, [settings, settingsDirty, sourceIntervalDirty, statusIntervalDirty, pikpakUserDirty])
 
   async function handleSaveSettings(event: FormEvent) {
     event.preventDefault()
@@ -191,6 +203,7 @@ export function ManageTab({
         segment_min_size_mib: Number(segmentMinMiB) || 16,
         min_free_space_mib: Number(minFreeMiB) || 0,
       })
+      setSettingsDirty(false)
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : '保存设置失败')
     } finally {
@@ -283,6 +296,7 @@ export function ManageTab({
       ])
       setRemoteRootId('')
       setLocalAlias('')
+      setSourceIntervalDirty(false)
     } catch (err) {
       setSourceError(err instanceof Error ? err.message : '添加监控目录失败')
     } finally {
@@ -349,7 +363,10 @@ export function ManageTab({
                   type="text"
                   required
                   value={downloadDir}
-                  onChange={(e) => setDownloadDir(e.target.value)}
+                  onChange={(e) => {
+                    setDownloadDir(e.target.value)
+                    setSettingsDirty(true)
+                  }}
                   placeholder="/downloads"
                   className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
                 />
@@ -371,7 +388,10 @@ export function ManageTab({
                 min={1}
                 max={16}
                 value={maxConcurrent}
-                onChange={(e) => setMaxConcurrent(Number(e.target.value))}
+                onChange={(e) => {
+                  setMaxConcurrent(Number(e.target.value))
+                  setSettingsDirty(true)
+                }}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -382,7 +402,10 @@ export function ManageTab({
                 type="number"
                 min={0}
                 value={minFreeMiB}
-                onChange={(e) => setMinFreeMiB(Number(e.target.value))}
+                onChange={(e) => {
+                  setMinFreeMiB(Number(e.target.value))
+                  setSettingsDirty(true)
+                }}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -396,7 +419,10 @@ export function ManageTab({
                 min={1}
                 max={16}
                 value={segmentThreads}
-                onChange={(e) => setSegmentThreads(Number(e.target.value))}
+                onChange={(e) => {
+                  setSegmentThreads(Number(e.target.value))
+                  setSettingsDirty(true)
+                }}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -407,7 +433,10 @@ export function ManageTab({
                 min={1}
                 max={4096}
                 value={segmentMinMiB}
-                onChange={(e) => setSegmentMinMiB(Number(e.target.value))}
+                onChange={(e) => {
+                  setSegmentMinMiB(Number(e.target.value))
+                  setSettingsDirty(true)
+                }}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -531,7 +560,10 @@ export function ManageTab({
             <input
               type="text"
               value={pikpakUser}
-              onChange={(e) => setPikpakUser(e.target.value)}
+              onChange={(e) => {
+                setPikpakUser(e.target.value)
+                setPikpakUserDirty(true)
+              }}
               placeholder="PikPak 用户名 / 邮箱"
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             />
@@ -550,6 +582,7 @@ export function ManageTab({
                 setAccountSaving(true)
                 try {
                   await onUpdateAccount(pikpakUser.trim(), pikpakPass)
+                  setPikpakUserDirty(false)
                   setPikpakPass('')
                   setAccountMessage('PikPak 账号已验证并保存')
                 } catch (err) {
@@ -652,7 +685,10 @@ export function ManageTab({
               min={0}
               max={1440}
               value={statusIntervalMinutes}
-              onChange={(e) => setStatusIntervalMinutes(Number(e.target.value))}
+              onChange={(e) => {
+                setStatusIntervalMinutes(Number(e.target.value))
+                setStatusIntervalDirty(true)
+              }}
               className="w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
             />
           </label>
@@ -662,6 +698,7 @@ export function ManageTab({
               setStatusIntervalMessage('')
               try {
                 await onSaveStatusInterval(Math.max(0, Math.min(1440, Number(statusIntervalMinutes) || 0)))
+                setStatusIntervalDirty(false)
                 setStatusIntervalMessage('状态汇报间隔已保存')
               } catch (err) {
                 setStatusIntervalMessage(err instanceof Error ? err.message : '保存状态汇报间隔失败')
@@ -1029,7 +1066,10 @@ export function ManageTab({
               type="number"
               min={10}
               value={intervalSec}
-              onChange={(e) => setIntervalSec(Number(e.target.value))}
+              onChange={(e) => {
+                setIntervalSec(Number(e.target.value))
+                setSourceIntervalDirty(true)
+              }}
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
             />
           </label>
@@ -1243,7 +1283,10 @@ export function ManageTab({
         open={localModalOpen}
         initialPath={downloadDir || '/'}
         onClose={() => setLocalModalOpen(false)}
-        onPick={(picked) => setDownloadDir(picked)}
+        onPick={(picked) => {
+          setDownloadDir(picked)
+          setSettingsDirty(true)
+        }}
       />
 
       <RemoteFolderModal
