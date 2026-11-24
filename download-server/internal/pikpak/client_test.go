@@ -179,6 +179,17 @@ func TestOpenOriginalRangeValidation(t *testing.T) {
 				w.Header().Set("Content-Range", "bytes 10-19/20")
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write(payload[10:])
+			case "bounded206":
+				w.Header().Set("Content-Range", "bytes 10-14/20")
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(payload[10:15])
+			case "boundedShort206":
+				w.Header().Set("Content-Range", "bytes 10-12/20")
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(payload[10:13])
+			case "boundedForced200":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(payload)
 			case "forgedRange":
 				w.Header().Set("Content-Range", "bytes 0-19/20")
 				w.WriteHeader(http.StatusPartialContent)
@@ -215,6 +226,36 @@ func TestOpenOriginalRangeValidation(t *testing.T) {
 	_ = stream.Reader.Close()
 	if string(data) != "abcdefghij" {
 		t.Fatalf("unexpected ranged body %q", string(data))
+	}
+
+	mode = "bounded206"
+	bounded := exp
+	bounded.Length = 5
+	stream, err = client.OpenOriginal(context.Background(), bounded)
+	if err != nil {
+		t.Fatalf("expected valid bounded range, got %v", err)
+	}
+	data, _ = io.ReadAll(stream.Reader)
+	_ = stream.Reader.Close()
+	if string(data) != "abcde" {
+		t.Fatalf("unexpected bounded range body %q", string(data))
+	}
+
+	mode = "boundedShort206"
+	stream, err = client.OpenOriginal(context.Background(), bounded)
+	if err != nil {
+		t.Fatalf("expected shorter bounded range to be accepted, got %v", err)
+	}
+	data, _ = io.ReadAll(stream.Reader)
+	_ = stream.Reader.Close()
+	if string(data) != "abc" {
+		t.Fatalf("unexpected shorter bounded range body %q", string(data))
+	}
+
+	mode = "boundedForced200"
+	bounded.Offset = 0
+	if _, err := client.OpenOriginal(context.Background(), bounded); backend.KindOf(err) != backend.ErrRangeNotSupported {
+		t.Fatalf("expected bounded range to require 206, got %v", err)
 	}
 
 	mode = "forgedRange"

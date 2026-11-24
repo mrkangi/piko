@@ -16,6 +16,8 @@ const (
 	DefaultHost               = "0.0.0.0"
 	DefaultPort               = 7788
 	DefaultMaxConcurrent      = 2
+	DefaultSegmentThreads     = 4
+	DefaultSegmentMinBytes    = 16 * 1024 * 1024
 	DefaultScanInterval       = 5 * time.Minute
 	DefaultMinFreeSpaceBytes  = 512 * 1024 * 1024
 	DefaultNoProgressTimeout  = 5 * time.Minute

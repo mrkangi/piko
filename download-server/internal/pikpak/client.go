@@ -239,6 +239,9 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 	if expectation.Offset < 0 {
 		return nil, &backend.Error{Kind: backend.ErrRangeInvalid, Message: "negative offset"}
 	}
+	if expectation.Length < 0 {
+		return nil, &backend.Error{Kind: backend.ErrRangeInvalid, Message: "negative range length"}
+	}
 	detail, err := client.getFileDetail(ctx, expectation.ObjectID)
 	if err != nil {
 		return nil, err
@@ -262,6 +265,9 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 	if expectation.Offset > entry.Size {
 		return nil, &backend.Error{Kind: backend.ErrRangeInvalid, Message: "resume offset exceeds remote file size"}
 	}
+	if expectation.Length > 0 && expectation.Offset+expectation.Length > entry.Size {
+		return nil, &backend.Error{Kind: backend.ErrRangeInvalid, Message: "requested range exceeds remote file size"}
+	}
 
 	rawURL := strings.TrimSpace(detail.Links.ApplicationOctetStream.URL)
 	if rawURL == "" {
@@ -274,7 +280,10 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept-Encoding", "identity")
-	if expectation.Offset > 0 {
+	if expectation.Length > 0 {
+		endOffset := expectation.Offset + expectation.Length - 1
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", expectation.Offset, endOffset))
+	} else if expectation.Offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", expectation.Offset))
 	}
 
@@ -283,7 +292,7 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 		return nil, &backend.Error{Kind: backend.ErrTransient, Message: "open download stream failed", Cause: err}
 	}
 
-	if err := validateStreamResponse(resp, expectation.Offset, entry.Size); err != nil {
+	if err := validateStreamResponse(resp, expectation.Offset, expectation.Length, entry.Size); err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
@@ -297,7 +306,7 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 	}, nil
 }
 
-func validateStreamResponse(resp *http.Response, offset int64, expectedTotal int64) error {
+func validateStreamResponse(resp *http.Response, offset int64, length int64, expectedTotal int64) error {
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests:
 		return &backend.Error{
@@ -323,7 +332,7 @@ func validateStreamResponse(resp *http.Response, offset int64, expectedTotal int
 		return &backend.Error{Kind: backend.ErrNotFound, StatusCode: resp.StatusCode, Message: fmt.Sprintf("download target HTTP %d", resp.StatusCode)}
 	}
 
-	if offset > 0 {
+	if offset > 0 || length > 0 {
 		if resp.StatusCode == http.StatusOK {
 			return &backend.Error{Kind: backend.ErrRangeNotSupported, StatusCode: resp.StatusCode, Message: "download node ignored Range header"}
 		}
@@ -339,6 +348,24 @@ func validateStreamResponse(resp *http.Response, offset int64, expectedTotal int
 				Kind:       backend.ErrRangeInvalid,
 				StatusCode: resp.StatusCode,
 				Message:    fmt.Sprintf("Content-Range mismatch: got %d-%d/%d expected start=%d total=%d", parsed.Start, parsed.End, parsed.Total, offset, expectedTotal),
+			}
+		}
+		expectedEnd := expectedTotal - 1
+		if length > 0 {
+			expectedEnd = offset + length - 1
+		}
+		if length > 0 && parsed.End > expectedEnd {
+			return &backend.Error{
+				Kind:       backend.ErrRangeInvalid,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("Content-Range end exceeds requested range: got %d expected <= %d", parsed.End, expectedEnd),
+			}
+		}
+		if length == 0 && parsed.End != expectedEnd {
+			return &backend.Error{
+				Kind:       backend.ErrRangeInvalid,
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("Content-Range end mismatch: got %d expected %d", parsed.End, expectedEnd),
 			}
 		}
 		expectedSpan := parsed.End - parsed.Start + 1

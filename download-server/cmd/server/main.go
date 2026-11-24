@@ -57,6 +57,8 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	}
 
 	maxConcurrent := config.DefaultMaxConcurrent
+	segmentThreads := config.DefaultSegmentThreads
+	segmentMinBytes := int64(config.DefaultSegmentMinBytes)
 	scanInterval := config.DefaultScanInterval
 	minFreeSpace := int64(config.DefaultMinFreeSpaceBytes)
 	defaultDownloadDir := cfg.DownloadDir
@@ -66,6 +68,12 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 		}
 		if v, err := strconv.Atoi(saved["max_concurrent_downloads"]); err == nil && v >= 1 && v <= 16 {
 			maxConcurrent = v
+		}
+		if v, err := strconv.Atoi(saved["segment_threads"]); err == nil && v >= 1 && v <= 16 {
+			segmentThreads = v
+		}
+		if v, err := strconv.ParseInt(saved["segment_min_bytes"], 10, 64); err == nil && v >= 1024*1024 {
+			segmentMinBytes = v
 		}
 		if v, err := strconv.Atoi(saved["default_scan_interval_sec"]); err == nil && v >= 10 {
 			scanInterval = time.Duration(v) * time.Second
@@ -91,6 +99,8 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	dlSvc := download.NewService(st, fsStore, runtime, runtime, broker, download.Options{
 		MaxConcurrent:     maxConcurrent,
 		MinFreeSpaceBytes: minFreeSpace,
+		SegmentThreads:    segmentThreads,
+		SegmentMinBytes:   segmentMinBytes,
 		NoProgressTimeout: config.DefaultNoProgressTimeout,
 		MaxRetries:        config.DefaultMaxRetries,
 	})

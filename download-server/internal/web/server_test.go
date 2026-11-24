@@ -213,7 +213,7 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 
 	// Settings read/update, local-dirs browse, and source delete.
 	nextDownloadDir := t.TempDir()
-	putSettingsReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/settings", bytes.NewBufferString(`{"download_dir":`+jsonQuote(nextDownloadDir)+`,"max_concurrent_downloads":4,"default_scan_interval_sec":120,"min_free_space_mib":256}`))
+	putSettingsReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/settings", bytes.NewBufferString(`{"download_dir":`+jsonQuote(nextDownloadDir)+`,"max_concurrent_downloads":4,"segment_threads":6,"segment_min_size_mib":8,"default_scan_interval_sec":120,"min_free_space_mib":256}`))
 	putSettingsReq.Header.Set("Content-Type", "application/json")
 	putSettingsReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
 	for _, c := range cookies {
@@ -226,7 +226,11 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 	var updatedSettings systemSettingsPayload
 	_ = json.NewDecoder(putSettingsResp.Body).Decode(&updatedSettings)
 	_ = putSettingsResp.Body.Close()
-	if updatedSettings.DownloadDir != nextDownloadDir || updatedSettings.MaxConcurrentDownloads != 4 || updatedSettings.DefaultScanIntervalSec != 120 {
+	if updatedSettings.DownloadDir != nextDownloadDir ||
+		updatedSettings.MaxConcurrentDownloads != 4 ||
+		updatedSettings.SegmentThreads != 6 ||
+		updatedSettings.SegmentMinSizeMiB != 8 ||
+		updatedSettings.DefaultScanIntervalSec != 120 {
 		t.Fatalf("unexpected updated settings: %+v", updatedSettings)
 	}
 

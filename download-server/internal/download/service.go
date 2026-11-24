@@ -18,6 +18,8 @@ import (
 type Options struct {
 	MaxConcurrent     int
 	MinFreeSpaceBytes int64
+	SegmentThreads    int
+	SegmentMinBytes   int64
 	NoProgressTimeout time.Duration
 	MaxRetries        int
 }
@@ -86,6 +88,12 @@ func NewService(
 	if opts.MaxConcurrent < 1 {
 		opts.MaxConcurrent = 2
 	}
+	if opts.SegmentThreads < 1 {
+		opts.SegmentThreads = 4
+	}
+	if opts.SegmentMinBytes < 1 {
+		opts.SegmentMinBytes = 16 * 1024 * 1024
+	}
 	if opts.NoProgressTimeout < 5*time.Second {
 		opts.NoProgressTimeout = 5 * time.Minute
 	}
@@ -127,13 +135,19 @@ func (svc *Service) CurrentOptions() Options {
 	return svc.opts
 }
 
-func (svc *Service) UpdateOptions(maxConcurrent int, minFreeSpaceBytes int64) {
+func (svc *Service) UpdateOptions(maxConcurrent int, minFreeSpaceBytes int64, segmentThreads int, segmentMinBytes int64) {
 	svc.mu.Lock()
 	if maxConcurrent >= 1 && maxConcurrent <= 16 {
 		svc.opts.MaxConcurrent = maxConcurrent
 	}
 	if minFreeSpaceBytes >= 0 {
 		svc.opts.MinFreeSpaceBytes = minFreeSpaceBytes
+	}
+	if segmentThreads >= 1 && segmentThreads <= 16 {
+		svc.opts.SegmentThreads = segmentThreads
+	}
+	if segmentMinBytes >= 1024*1024 {
+		svc.opts.SegmentMinBytes = segmentMinBytes
 	}
 	svc.mu.Unlock()
 	svc.Signal()
@@ -243,12 +257,18 @@ func (svc *Service) recoverOne(ctx context.Context, task store.DownloadTask) err
 	if task.StrongVersion && stagingExists && stagingSize >= 0 {
 		reconciledBytes = stagingSize
 	}
+	if segments, segmentErr := svc.store.ListSegments(ctx, task.ID); segmentErr == nil && len(segments) > 0 {
+		if isMultiSegmentPlan(segments, task.BytesTotal) {
+			reconciledBytes = segmentDoneTotal(segments)
+		}
+	}
 
 	switch task.State {
 	case store.TaskPausing:
 		return svc.store.RecoverTaskState(ctx, task.ID, store.TaskPaused, store.DesiredNone, reconciledBytes, "", "")
 	case store.TaskCanceling:
 		_ = fsStore.RemoveStaging(task.ID)
+		_ = svc.store.DeleteSegments(ctx, task.ID)
 		return svc.store.RecoverTaskState(ctx, task.ID, store.TaskCanceled, store.DesiredCancel, 0, "", "")
 	case store.TaskCommitting:
 		verified, err := fsStore.VerifyCommittedFile(task.ID, task.TargetRelPath, task.BytesTotal, task.CommitSHA256)
@@ -308,6 +328,7 @@ func (svc *Service) recoverOne(ctx context.Context, task store.DownloadTask) err
 	case store.TaskRunning, store.TaskVerifying:
 		if task.DesiredAction == store.DesiredCancel {
 			_ = fsStore.RemoveStaging(task.ID)
+			_ = svc.store.DeleteSegments(ctx, task.ID)
 			return svc.store.RecoverTaskState(ctx, task.ID, store.TaskCanceled, store.DesiredCancel, 0, "", "")
 		}
 		if task.DesiredAction == store.DesiredPause {
@@ -456,6 +477,7 @@ func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask,
 			_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskFailed, "complete_existing_error", err.Error(), 0)
 		}
 		_ = fsStore.RemoveStaging(task.ID)
+		_ = svc.store.DeleteSegments(context.Background(), task.ID)
 		return
 	}
 
@@ -469,38 +491,36 @@ func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask,
 		return
 	}
 
-	stagingSize, stagingExists, err := fsStore.StagingSize(task.ID)
+	segments, err := svc.store.ListSegments(ctx, task.ID)
 	if err != nil {
-		_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, 0, store.TaskFailed, "staging_error", err.Error(), 0)
+		_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskFailed, "segment_state_error", err.Error(), 0)
 		return
 	}
-
-	offset := int64(0)
-	truncate := true
-	if stagingExists && stagingSize > 0 && task.StrongVersion && entry.HasStrongVersion() && stagingSize <= entry.Size {
-		offset = stagingSize
-		truncate = false
+	forcedSingle := isSingleSegmentMarker(segments, entry.Size)
+	segmented := isMultiSegmentPlan(segments, entry.Size) || (!forcedSingle && svc.shouldSegment(task, entry))
+	if !segmented && !forcedSingle && len(segments) > 0 {
+		_ = fsStore.RemoveStaging(task.ID)
+		_ = svc.store.DeleteSegments(context.Background(), task.ID)
+		segments = nil
 	}
 
-	act.setTotals(offset, entry.Size, 0)
-
-	if offset < entry.Size {
-		stream, openedOffset, err := svc.openWithRangeFallback(ctx, task, entry, offset)
-		if err != nil {
-			svc.handleAttemptError(task, act, offset, err)
-			return
+	var writtenTotal int64
+	var transferErr error
+	if segmented {
+		writtenTotal, transferErr = svc.downloadSegmented(ctx, fsStore, task, entry, act, segments)
+		if errors.Is(transferErr, errRangeUnsupported) {
+			if fallbackErr := svc.forceSingleStreamFallback(ctx, fsStore, task, entry.Size); fallbackErr != nil {
+				svc.handleAttemptError(task, act, writtenTotal, fallbackErr)
+				return
+			}
+			writtenTotal, transferErr = svc.downloadSingle(ctx, fsStore, task, entry, act)
 		}
-		if openedOffset == 0 && offset > 0 {
-			offset = 0
-			truncate = true
-			act.setTotals(0, entry.Size, 0)
-		}
-
-		writtenTotal, streamErr := svc.copyStreamToStaging(ctx, fsStore, task, act, stream, offset, truncate, entry.Size)
-		if streamErr != nil {
-			svc.handleAttemptError(task, act, writtenTotal, streamErr)
-			return
-		}
+	} else {
+		writtenTotal, transferErr = svc.downloadSingle(ctx, fsStore, task, entry, act)
+	}
+	if transferErr != nil {
+		svc.handleAttemptError(task, act, writtenTotal, transferErr)
+		return
 	}
 
 	if err := svc.store.TransitionToVerifying(ctx, task.ID, task.Attempt, entry.Size); err != nil {
@@ -552,6 +572,61 @@ func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask,
 		return
 	}
 	_ = fsStore.RemoveStaging(task.ID)
+}
+
+func (svc *Service) downloadSingle(
+	ctx context.Context,
+	fsStore *localfs.Store,
+	task store.DownloadTask,
+	entry backend.Entry,
+	act *activeAttempt,
+) (int64, error) {
+	stagingSize, stagingExists, err := fsStore.StagingSize(task.ID)
+	if err != nil {
+		return 0, err
+	}
+	offset := int64(0)
+	truncate := true
+	if stagingExists && stagingSize > 0 && task.StrongVersion && entry.HasStrongVersion() && stagingSize <= entry.Size {
+		offset = stagingSize
+		truncate = false
+	}
+	act.setTotals(offset, entry.Size, 0)
+	if offset >= entry.Size {
+		return offset, nil
+	}
+
+	stream, openedOffset, err := svc.openWithRangeFallback(ctx, task, entry, offset)
+	if err != nil {
+		return offset, err
+	}
+	if openedOffset == 0 && offset > 0 {
+		offset = 0
+		truncate = true
+		act.setTotals(0, entry.Size, 0)
+	}
+	return svc.copyStreamToStaging(ctx, fsStore, task, act, stream, offset, truncate, entry.Size)
+}
+
+func (svc *Service) forceSingleStreamFallback(
+	ctx context.Context,
+	fsStore *localfs.Store,
+	task store.DownloadTask,
+	total int64,
+) error {
+	if err := fsStore.RemoveStaging(task.ID); err != nil {
+		return err
+	}
+	if total <= 0 {
+		return svc.store.DeleteSegments(ctx, task.ID)
+	}
+	return svc.store.ReplaceSegments(ctx, task.ID, []store.DownloadSegment{{
+		TaskID:      task.ID,
+		Index:       0,
+		StartOffset: 0,
+		EndOffset:   total,
+		DoneOffset:  0,
+	}})
 }
 
 func (svc *Service) openWithRangeFallback(ctx context.Context, task store.DownloadTask, entry backend.Entry, offset int64) (*backend.OpenedStream, int64, error) {
@@ -782,6 +857,7 @@ func (svc *Service) CancelTask(ctx context.Context, taskID string) (store.Downlo
 	svc.cancelActive(taskID)
 	if task.State == store.TaskCanceled {
 		_ = svc.fsStore().RemoveStaging(task.ID)
+		_ = svc.store.DeleteSegments(ctx, task.ID)
 	}
 	svc.broker.Publish(events.Event{Type: "task.updated", SourceID: task.SourceID, TaskID: task.ID})
 	return task, nil

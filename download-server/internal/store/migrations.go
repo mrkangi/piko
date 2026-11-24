@@ -150,4 +150,12 @@ var schemaMigrations = []string{
 	);`,
 	`ALTER TABLE download_tasks ADD COLUMN local_existing INTEGER NOT NULL DEFAULT 0;`,
 	`ALTER TABLE deliveries ADD COLUMN preexisting INTEGER NOT NULL DEFAULT 0;`,
+	`CREATE TABLE IF NOT EXISTS download_task_segments (
+		task_id TEXT NOT NULL REFERENCES download_tasks(id) ON DELETE CASCADE,
+		segment_index INTEGER NOT NULL,
+		start_offset INTEGER NOT NULL,
+		end_offset INTEGER NOT NULL,
+		done_offset INTEGER NOT NULL,
+		PRIMARY KEY (task_id, segment_index)
+	);`,
 }

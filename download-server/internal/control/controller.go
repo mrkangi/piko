@@ -208,6 +208,8 @@ func (c *Controller) Setup(ctx context.Context, input SetupInput) (store.AdminUs
 		"account_id":                accountID,
 		"download_dir":              switchedDir,
 		"max_concurrent_downloads":  fmt.Sprintf("%d", config.DefaultMaxConcurrent),
+		"segment_threads":           fmt.Sprintf("%d", config.DefaultSegmentThreads),
+		"segment_min_bytes":         fmt.Sprintf("%d", config.DefaultSegmentMinBytes),
 		"default_scan_interval_sec": fmt.Sprintf("%d", int(config.DefaultScanInterval.Seconds())),
 		"min_free_space_bytes":      fmt.Sprintf("%d", config.DefaultMinFreeSpaceBytes),
 	}); err != nil {

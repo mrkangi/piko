@@ -175,6 +175,31 @@ func (store *Store) OpenStagingForAppend(taskID string, truncate bool) (*os.File
 	return file, info.Size(), nil
 }
 
+// OpenStagingForWriteAt 打开暂存文件供多个 goroutine 通过 WriteAt 并发写入。
+// 不调整文件偏移，也不创建稀疏文件之外的任何分片临时文件。
+func (store *Store) OpenStagingForWriteAt(taskID string, truncate bool) (*os.File, error) {
+	rel, err := StagingRelPath(taskID)
+	if err != nil {
+		return nil, err
+	}
+	dirRel := path.Dir(rel)
+	if err := store.mkdirAllConfined(dirRel); err != nil {
+		return nil, err
+	}
+	if err := store.rejectSymlinks(rel); err != nil {
+		return nil, err
+	}
+	flags := os.O_CREATE | os.O_RDWR
+	if truncate {
+		flags |= os.O_TRUNC
+	}
+	file, err := store.root.OpenFile(rel, flags, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
 func (store *Store) RemoveStaging(taskID string) error {
 	cleaned := strings.TrimSpace(taskID)
 	if cleaned == "" || strings.ContainsAny(cleaned, "/\\\x00") || cleaned == "." || cleaned == ".." {

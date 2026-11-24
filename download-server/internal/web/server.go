@@ -437,6 +437,8 @@ type systemSettingsPayload struct {
 	PikPakUsername                    string `json:"pikpak_username"`
 	PikPakConfigured                  bool   `json:"pikpak_configured"`
 	MaxConcurrentDownloads            int    `json:"max_concurrent_downloads"`
+	SegmentThreads                    int    `json:"segment_threads"`
+	SegmentMinSizeMiB                 int64  `json:"segment_min_size_mib"`
 	DefaultScanIntervalSec            int    `json:"default_scan_interval_sec"`
 	MinFreeSpaceMiB                   int64  `json:"min_free_space_mib"`
 	NotificationStatusIntervalMinutes int    `json:"notification_status_interval_minutes"`
@@ -459,6 +461,8 @@ func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPay
 		PikPakUsername:                    status.PikPakUsername,
 		PikPakConfigured:                  status.PikPakConfigured,
 		MaxConcurrentDownloads:            dlOpts.MaxConcurrent,
+		SegmentThreads:                    dlOpts.SegmentThreads,
+		SegmentMinSizeMiB:                 dlOpts.SegmentMinBytes / (1024 * 1024),
 		DefaultScanIntervalSec:            int(srv.catalog.DefaultInterval().Seconds()),
 		MinFreeSpaceMiB:                   dlOpts.MinFreeSpaceBytes / (1024 * 1024),
 		NotificationStatusIntervalMinutes: statusInterval,
@@ -473,6 +477,8 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 	var req struct {
 		DownloadDir                       *string `json:"download_dir"`
 		MaxConcurrentDownloads            *int    `json:"max_concurrent_downloads"`
+		SegmentThreads                    *int    `json:"segment_threads"`
+		SegmentMinSizeMiB                 *int64  `json:"segment_min_size_mib"`
 		DefaultScanIntervalSec            *int    `json:"default_scan_interval_sec"`
 		MinFreeSpaceMiB                   *int64  `json:"min_free_space_mib"`
 		NotificationStatusIntervalMinutes *int    `json:"notification_status_interval_minutes"`
@@ -506,6 +512,22 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		nextMinFreeMiB = *req.MinFreeSpaceMiB
+	}
+	nextSegmentThreads := curr.SegmentThreads
+	if req.SegmentThreads != nil {
+		if *req.SegmentThreads < 1 || *req.SegmentThreads > 16 {
+			writeError(w, http.StatusBadRequest, "invalid_setting", "单文件分片连接数必须在 1 到 16 之间")
+			return
+		}
+		nextSegmentThreads = *req.SegmentThreads
+	}
+	nextSegmentMinMiB := curr.SegmentMinSizeMiB
+	if req.SegmentMinSizeMiB != nil {
+		if *req.SegmentMinSizeMiB < 1 || *req.SegmentMinSizeMiB > 4096 {
+			writeError(w, http.StatusBadRequest, "invalid_setting", "最小分片大小必须在 1 到 4096 MiB 之间")
+			return
+		}
+		nextSegmentMinMiB = *req.SegmentMinSizeMiB
 	}
 
 	nextDownloadDir := curr.DownloadDir
@@ -547,12 +569,14 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 		}
 		nextStatusInterval = *req.NotificationStatusIntervalMinutes
 	}
-	srv.download.UpdateOptions(nextConcurrent, nextMinFreeBytes)
+	srv.download.UpdateOptions(nextConcurrent, nextMinFreeBytes, nextSegmentThreads, nextSegmentMinMiB*1024*1024)
 	srv.catalog.SetDefaultInterval(time.Duration(nextInterval) * time.Second)
 
 	if err := srv.store.SaveSettings(r.Context(), map[string]string{
 		"download_dir":                         nextDownloadDir,
 		"max_concurrent_downloads":             strconv.Itoa(nextConcurrent),
+		"segment_threads":                      strconv.Itoa(nextSegmentThreads),
+		"segment_min_bytes":                    strconv.FormatInt(nextSegmentMinMiB*1024*1024, 10),
 		"default_scan_interval_sec":            strconv.Itoa(nextInterval),
 		"min_free_space_bytes":                 strconv.FormatInt(nextMinFreeBytes, 10),
 		"notification_status_interval_minutes": strconv.Itoa(nextStatusInterval),

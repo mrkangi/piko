@@ -949,6 +949,9 @@ func (store *Store) CompleteCommit(ctx context.Context, taskID string, attempt i
 	); err != nil {
 		return err
 	}
+	if err := deleteSegmentsTx(ctx, tx, taskID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -993,6 +996,9 @@ func (store *Store) CompleteExisting(ctx context.Context, taskID string, attempt
 		WHERE id = ?`,
 		now, now, taskID,
 	); err != nil {
+		return err
+	}
+	if err := deleteSegmentsTx(ctx, tx, taskID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1057,6 +1063,11 @@ func (store *Store) FinalizeAttemptStop(ctx context.Context, taskID string, atte
 		resolvedState, resolvedState, bytesDone, errorCode, errorMessage, nextRetryAt, finishedAt, now, taskID,
 	); err != nil {
 		return DownloadTask{}, err
+	}
+	if resolvedState == TaskCanceled {
+		if err := deleteSegmentsTx(ctx, tx, taskID); err != nil {
+			return DownloadTask{}, err
+		}
 	}
 	updated, err := getTaskTx(ctx, tx, taskID)
 	if err != nil {

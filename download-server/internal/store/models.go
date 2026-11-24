@@ -137,6 +137,18 @@ type DownloadTask struct {
 	FinishedAt     int64  `json:"finished_at"`
 }
 
+type DownloadSegment struct {
+	TaskID      string `json:"-"`
+	Index       int    `json:"index"`
+	StartOffset int64  `json:"start_offset"`
+	EndOffset   int64  `json:"end_offset"`
+	DoneOffset  int64  `json:"done_offset"`
+}
+
+func (segment DownloadSegment) Complete() bool {
+	return segment.DoneOffset >= segment.EndOffset
+}
+
 type Delivery struct {
 	ID                 string `json:"id"`
 	SourceID           string `json:"source_id"`

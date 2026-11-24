@@ -61,6 +61,8 @@ interface Props {
   onSaveSettings: (patch: {
     download_dir?: string
     max_concurrent_downloads?: number
+    segment_threads?: number
+    segment_min_size_mib?: number
     default_scan_interval_sec?: number
     min_free_space_mib?: number
   }) => Promise<void>
@@ -114,6 +116,8 @@ export function ManageTab({
 }: Props) {
   const [downloadDir, setDownloadDir] = useState('')
   const [maxConcurrent, setMaxConcurrent] = useState(2)
+  const [segmentThreads, setSegmentThreads] = useState(4)
+  const [segmentMinMiB, setSegmentMinMiB] = useState(16)
   const [defaultIntervalSec, setDefaultIntervalSec] = useState(300)
   const [minFreeMiB, setMinFreeMiB] = useState(512)
   const [savingSettings, setSavingSettings] = useState(false)
@@ -160,6 +164,8 @@ export function ManageTab({
     if (!settings) return
     setDownloadDir(settings.download_dir)
     setMaxConcurrent(settings.max_concurrent_downloads)
+    setSegmentThreads(settings.segment_threads)
+    setSegmentMinMiB(settings.segment_min_size_mib)
     setDefaultIntervalSec(settings.default_scan_interval_sec)
     setMinFreeMiB(settings.min_free_space_mib)
     setIntervalSec(settings.default_scan_interval_sec)
@@ -175,6 +181,8 @@ export function ManageTab({
       await onSaveSettings({
         download_dir: downloadDir.trim(),
         max_concurrent_downloads: Number(maxConcurrent) || 2,
+        segment_threads: Number(segmentThreads) || 1,
+        segment_min_size_mib: Number(segmentMinMiB) || 16,
         min_free_space_mib: Number(minFreeMiB) || 0,
       })
     } catch (err) {
@@ -372,6 +380,34 @@ export function ManageTab({
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
               />
             </label>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <label className="block space-y-1.5 lg:col-span-3">
+              <span className="text-xs text-slate-400">单文件分片连接数 (1–16)</span>
+              <input
+                type="number"
+                min={1}
+                max={16}
+                value={segmentThreads}
+                onChange={(e) => setSegmentThreads(Number(e.target.value))}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block space-y-1.5 lg:col-span-3">
+              <span className="text-xs text-slate-400">最小分片大小 (MiB)</span>
+              <input
+                type="number"
+                min={1}
+                max={4096}
+                value={segmentMinMiB}
+                onChange={(e) => setSegmentMinMiB(Number(e.target.value))}
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <p className="text-xs leading-relaxed text-slate-400 lg:col-span-6">
+              大于等于两倍最小分片大小的文件会按连续 Range 分片并发下载；设为 1 可关闭分片。实际连接数还会受文件大小限制，总连接数约为“最大并发下载 × 单文件分片连接数”。
+            </p>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">

@@ -23,6 +23,7 @@ type FakeBackend struct {
 	listHook     func(parentID string, cursor string, attempt int) error
 	statHook     func(objectID string, attempt int) error
 	openHook     func(expectation OpenExpectation, attempt int) (*OpenedStream, error)
+	rangeOK      bool
 	listAttempts map[string]int
 	statAttempts map[string]int
 	openAttempts map[string]int
@@ -36,6 +37,7 @@ func NewFakeBackend() *FakeBackend {
 		},
 		children:     make(map[string][]string),
 		pageSize:     50,
+		rangeOK:      true,
 		listAttempts: make(map[string]int),
 		statAttempts: make(map[string]int),
 		openAttempts: make(map[string]int),
@@ -66,6 +68,12 @@ func (fake *FakeBackend) SetOpenHook(fn func(expectation OpenExpectation, attemp
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.openHook = fn
+}
+
+func (fake *FakeBackend) SetRangeSupported(supported bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.rangeOK = supported
 }
 
 func (fake *FakeBackend) PutDir(id, parentID, name string) {
@@ -243,6 +251,7 @@ func (fake *FakeBackend) OpenOriginal(ctx context.Context, expectation OpenExpec
 	attempt := fake.openAttempts[expectation.ObjectID]
 	hook := fake.openHook
 	node, ok := fake.nodes[expectation.ObjectID]
+	rangeOK := fake.rangeOK
 	fake.mu.Unlock()
 
 	if hook != nil {
@@ -258,10 +267,20 @@ func (fake *FakeBackend) OpenOriginal(ctx context.Context, expectation OpenExpec
 		return nil, &Error{Kind: ErrVersionMismatch, Message: "remote object version changed"}
 	}
 	total := int64(len(node.Payload))
-	if expectation.Offset < 0 || expectation.Offset > total {
+	if expectation.Offset < 0 || expectation.Offset > total || expectation.Length < 0 {
 		return nil, &Error{Kind: ErrRangeInvalid, StatusCode: 416, Message: "offset out of range"}
 	}
-	slice := slices.Clone(node.Payload[expectation.Offset:])
+	end := total
+	if expectation.Length > 0 {
+		if expectation.Offset+expectation.Length > total {
+			return nil, &Error{Kind: ErrRangeInvalid, StatusCode: 416, Message: "requested range exceeds file size"}
+		}
+		end = expectation.Offset + expectation.Length
+	}
+	if !rangeOK && (expectation.Offset > 0 || expectation.Length > 0) {
+		return nil, &Error{Kind: ErrRangeNotSupported, StatusCode: 200, Message: "fake backend ignored Range header"}
+	}
+	slice := slices.Clone(node.Payload[expectation.Offset:end])
 	return &OpenedStream{
 		Reader:          io.NopCloser(bytes.NewReader(slice)),
 		Offset:          expectation.Offset,

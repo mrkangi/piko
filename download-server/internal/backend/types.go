@@ -104,6 +104,9 @@ type OpenExpectation struct {
 	ExpectedGCID       string
 	ExpectedSize       int64
 	Offset             int64
+	// Length 为 0 时表示从 Offset 一直读到文件末尾；大于 0 时只读取
+	// [Offset, Offset+Length) 这一段，供多连接分片下载使用。
+	Length int64
 }
 
 type OpenedStream struct {
