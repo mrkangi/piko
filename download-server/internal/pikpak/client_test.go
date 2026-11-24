@@ -157,6 +157,43 @@ func TestConcurrentRefreshSerializesSingleRotation(t *testing.T) {
 	}
 }
 
+func TestListPageUsesConfiguredHTTPProxy(t *testing.T) {
+	var proxyCalls atomic.Int32
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalls.Add(1)
+		switch r.URL.Path {
+		case "/v1/shield/captcha/init":
+			_ = json.NewEncoder(w).Encode(map[string]any{"captcha_token": "cap"})
+		case "/v1/auth/signin":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "refresh_token": "ref", "expires_in": 3600})
+		case "/drive/v1/files":
+			_ = json.NewEncoder(w).Encode(map[string]any{"next_page_token": "", "files": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer proxySrv.Close()
+
+	client, err := NewClient(Options{
+		Username:     "user@example.com",
+		Password:     "secret",
+		ProxyURL:     proxySrv.URL,
+		AuthBaseURL:  "http://auth.pikpak.invalid",
+		DriveBaseURL: "http://drive.pikpak.invalid",
+		RatePerSec:   100,
+		RateBurst:    100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListPage(context.Background(), "", ""); err != nil {
+		t.Fatalf("ListPage through HTTP proxy failed: %v", err)
+	}
+	if proxyCalls.Load() == 0 {
+		t.Fatalf("expected requests to use configured HTTP proxy")
+	}
+}
+
 func TestOpenOriginalRangeValidation(t *testing.T) {
 	payload := []byte("0123456789abcdefghij")
 	mode := "ok206"

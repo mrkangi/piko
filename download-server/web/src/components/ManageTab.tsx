@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Bell,
   Send,
+  Network,
 } from 'lucide-react'
 import type { NotificationChannel, Source, SystemSettings } from '../types'
 import { formatRelativeTime, formatTimestamp } from '../format'
@@ -66,6 +67,7 @@ interface Props {
     default_scan_interval_sec?: number
     min_free_space_mib?: number
   }) => Promise<void>
+  onSaveProxy: (proxyURL: string | null) => Promise<void>
   onCreateSources: (
     items: Array<{
       remote_root_id: string
@@ -101,6 +103,7 @@ export function ManageTab({
   notificationChannels,
   activeWorkers,
   onSaveSettings,
+  onSaveProxy,
   onCreateSources,
   onUpdateSource,
   onScanSource,
@@ -122,6 +125,9 @@ export function ManageTab({
   const [minFreeMiB, setMinFreeMiB] = useState(512)
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [proxyInput, setProxyInput] = useState('')
+  const [proxySaving, setProxySaving] = useState(false)
+  const [proxyMessage, setProxyMessage] = useState('')
   const [localModalOpen, setLocalModalOpen] = useState(false)
 
   const [remoteRootId, setRemoteRootId] = useState('')
@@ -430,6 +436,84 @@ export function ManageTab({
             {settingsError}
           </div>
         )}
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/15 text-sky-400 shrink-0">
+              <Network className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-100">网络代理</h2>
+              <p className="text-xs text-slate-400">
+                统一用于 PikPak API 与原始文件下载节点。支持 HTTP、HTTPS 和 SOCKS5；修改后新请求立即生效，正在传输的连接会在下次重试时切换。
+              </p>
+            </div>
+          </div>
+          <span className={`rounded-lg border px-2.5 py-1 text-xs ${
+            settings?.proxy_configured
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-slate-700 bg-slate-950 text-slate-400'
+          }`}>
+            {settings?.proxy_configured ? `已启用 ${settings.proxy_url_masked}` : '当前直连'}
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            type="text"
+            value={proxyInput}
+            onChange={(e) => setProxyInput(e.target.value)}
+            placeholder="例如 socks5://127.0.0.1:1080 或 http://user:pass@host:8080"
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={proxySaving || !proxyInput.trim()}
+            onClick={async () => {
+              setProxyMessage('')
+              setProxySaving(true)
+              try {
+                await onSaveProxy(proxyInput.trim())
+                setProxyInput('')
+                setProxyMessage('代理已验证并保存')
+              } catch (err) {
+                setProxyMessage(err instanceof Error ? err.message : '保存代理失败')
+              } finally {
+                setProxySaving(false)
+              }
+            }}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 cursor-pointer"
+          >
+            <Save className="h-3.5 w-3.5" />
+            {proxySaving ? '验证中…' : '验证并启用'}
+          </button>
+          <button
+            type="button"
+            disabled={proxySaving || !settings?.proxy_configured}
+            onClick={async () => {
+              setProxyMessage('')
+              setProxySaving(true)
+              try {
+                await onSaveProxy(null)
+                setProxyInput('')
+                setProxyMessage('已关闭代理，恢复直连')
+              } catch (err) {
+                setProxyMessage(err instanceof Error ? err.message : '关闭代理失败')
+              } finally {
+                setProxySaving(false)
+              }
+            }}
+            className="inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+          >
+            关闭代理
+          </button>
+        </div>
+        <p className="text-xs text-slate-400">
+          地址中可包含用户名和密码，服务端会加密保存，页面只显示脱敏结果。留空并关闭代理即恢复直连。
+        </p>
+        {proxyMessage && <div className="text-xs text-slate-400">{proxyMessage}</div>}
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">

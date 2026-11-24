@@ -20,6 +20,7 @@ type fakeRemoteClient struct {
 }
 
 func (fakeRemoteClient) Verify(context.Context) error { return nil }
+func (fakeRemoteClient) Probe(context.Context) error  { return nil }
 
 func newTestController(t *testing.T) (*Controller, *store.Store) {
 	t.Helper()
@@ -44,7 +45,7 @@ func newTestController(t *testing.T) (*Controller, *store.Store) {
 	dl := download.NewService(st, fsStore, runtime, runtime, broker, download.Options{MaxConcurrent: 1})
 	controller := New(st, secrets, runtime, cat, dl, broker, dataDir)
 	fake := backend.NewFakeBackend()
-	controller.SetClientFactory(func(username, password string) (RemoteClient, string, error) {
+	controller.SetClientFactory(func(username, password, proxyURL string) (RemoteClient, string, error) {
 		return fakeRemoteClient{FakeBackend: fake}, config.AccountIDFor(username), nil
 	})
 	return controller, st
@@ -111,5 +112,60 @@ func TestSetupCreatesAdminConfiguresRuntimeAndRejectsReplay(t *testing.T) {
 		DownloadDir:    downloadDir,
 	}); err != ErrSetupAlreadyDone {
 		t.Fatalf("expected setup replay rejection, got %v", err)
+	}
+}
+
+func TestConfigureProxyEncryptsAndAppliesClient(t *testing.T) {
+	ctx := context.Background()
+	controller, st := newTestController(t)
+	token, err := controller.EnsureSetupToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Setup(ctx, SetupInput{
+		Token:          token,
+		AdminUsername:  "admin",
+		AdminPassword:  "password-123",
+		PikPakUsername: "user@example.com",
+		PikPakPassword: "pikpak-pass",
+		DownloadDir:    t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var appliedProxy string
+	fake := backend.NewFakeBackend()
+	controller.SetClientFactory(func(username, password, proxyURL string) (RemoteClient, string, error) {
+		appliedProxy = proxyURL
+		return fakeRemoteClient{FakeBackend: fake}, config.AccountIDFor(username), nil
+	})
+
+	if err := controller.ConfigureProxy(ctx, "SOCKS5://alice:secret@127.0.0.1:1080", false); err != nil {
+		t.Fatalf("ConfigureProxy failed: %v", err)
+	}
+	if appliedProxy != "socks5://alice:secret@127.0.0.1:1080" {
+		t.Fatalf("client did not receive normalized proxy: %q", appliedProxy)
+	}
+	status, err := controller.ProxyStatus(ctx)
+	if err != nil || !status.Configured || status.MaskedURL != "socks5://alice:***@127.0.0.1:1080" {
+		t.Fatalf("unexpected proxy status: %+v err=%v", status, err)
+	}
+	settings, err := st.GetSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings["proxy_url_cipher"] == "" || settings["proxy_url_cipher"] == appliedProxy {
+		t.Fatalf("proxy URL must be encrypted at rest: %q", settings["proxy_url_cipher"])
+	}
+
+	if err := controller.ConfigureProxy(ctx, "", true); err != nil {
+		t.Fatalf("clear proxy failed: %v", err)
+	}
+	if appliedProxy != "" {
+		t.Fatalf("clearing proxy should rebuild direct client, got %q", appliedProxy)
+	}
+	status, err = controller.ProxyStatus(ctx)
+	if err != nil || status.Configured {
+		t.Fatalf("expected proxy to be disabled: %+v err=%v", status, err)
 	}
 }

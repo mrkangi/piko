@@ -15,6 +15,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/config"
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
+	"github.com/nihildigit/piko/download-server/internal/netproxy"
 	"github.com/nihildigit/piko/download-server/internal/pikpak"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
@@ -41,9 +42,15 @@ type RemoteClient interface {
 	backend.Catalog
 	backend.ContentSource
 	Verify(context.Context) error
+	Probe(context.Context) error
 }
 
-type ClientFactory func(username string, password string) (RemoteClient, string, error)
+type ClientFactory func(username string, password string, proxyURL string) (RemoteClient, string, error)
+
+type ProxyStatus struct {
+	Configured bool
+	MaskedURL  string
+}
 
 type Status struct {
 	NeedsSetup       bool   `json:"needs_setup"`
@@ -178,7 +185,7 @@ func (c *Controller) Setup(ctx context.Context, input SetupInput) (store.AdminUs
 		return store.AdminUser{}, fmt.Errorf("PikPak 账号和密码不能为空")
 	}
 
-	client, accountID, err := c.newClient(pikpakUsername, input.PikPakPassword)
+	client, accountID, err := c.newClient(pikpakUsername, input.PikPakPassword, "")
 	if err != nil {
 		return store.AdminUser{}, err
 	}
@@ -241,7 +248,11 @@ func (c *Controller) LoadRuntime(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("decrypt PikPak credentials: %w", err)
 	}
-	client, accountID, err := c.newClient(username, password)
+	proxyURL, err := c.currentProxyURL(ctx, settings)
+	if err != nil {
+		return err
+	}
+	client, accountID, err := c.newClient(username, password, proxyURL)
 	if err != nil {
 		return err
 	}
@@ -273,6 +284,10 @@ func (c *Controller) ConfigurePikPak(ctx context.Context, username string, passw
 	if err != nil {
 		return err
 	}
+	proxyURL, err := c.currentProxyURL(ctx, settings)
+	if err != nil {
+		return err
+	}
 	oldUsername := strings.TrimSpace(settings["pikpak_username"])
 	if oldUsername != "" && oldUsername != username {
 		sources, listErr := c.store.ListSources(ctx)
@@ -283,7 +298,7 @@ func (c *Controller) ConfigurePikPak(ctx context.Context, username string, passw
 			return ErrAccountChange
 		}
 	}
-	client, accountID, err := c.newClient(username, password)
+	client, accountID, err := c.newClient(username, password, proxyURL)
 	if err != nil {
 		return err
 	}
@@ -307,6 +322,87 @@ func (c *Controller) ConfigurePikPak(ctx context.Context, username string, passw
 	return nil
 }
 
+func (c *Controller) ProxyStatus(ctx context.Context) (ProxyStatus, error) {
+	settings, err := c.store.GetSettings(ctx)
+	if err != nil {
+		return ProxyStatus{}, err
+	}
+	encrypted := strings.TrimSpace(settings["proxy_url_cipher"])
+	if encrypted == "" {
+		return ProxyStatus{}, nil
+	}
+	plain, err := c.secrets.Decrypt(encrypted)
+	if err != nil {
+		return ProxyStatus{}, fmt.Errorf("decrypt proxy URL: %w", err)
+	}
+	masked, err := netproxy.Mask(plain)
+	if err != nil {
+		return ProxyStatus{}, err
+	}
+	return ProxyStatus{Configured: true, MaskedURL: masked}, nil
+}
+
+func (c *Controller) ConfigureProxy(ctx context.Context, rawURL string, clear bool) error {
+	hasAdmin, err := c.store.HasAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	if !hasAdmin {
+		return ErrSetupIncomplete
+	}
+	if clear && strings.TrimSpace(rawURL) != "" {
+		return fmt.Errorf("不能同时设置和清除代理")
+	}
+	proxyURL := ""
+	if !clear {
+		proxyURL, err = netproxy.Normalize(rawURL)
+		if err != nil {
+			return err
+		}
+	}
+
+	settings, err := c.store.GetSettings(ctx)
+	if err != nil {
+		return err
+	}
+	username := strings.TrimSpace(settings["pikpak_username"])
+	encryptedPassword := strings.TrimSpace(settings["pikpak_password_cipher"])
+	var client RemoteClient
+	var accountID string
+	if username != "" && encryptedPassword != "" {
+		password, decryptErr := c.secrets.Decrypt(encryptedPassword)
+		if decryptErr != nil {
+			return fmt.Errorf("decrypt PikPak credentials: %w", decryptErr)
+		}
+		client, accountID, err = c.newClient(username, password, proxyURL)
+		if err != nil {
+			return err
+		}
+		if proxyURL != "" {
+			if err := client.Probe(ctx); err != nil {
+				return fmt.Errorf("代理连接验证失败: %w", err)
+			}
+		}
+	}
+
+	encryptedProxy := ""
+	if proxyURL != "" {
+		encryptedProxy, err = c.secrets.Encrypt(proxyURL)
+		if err != nil {
+			return err
+		}
+	}
+	if err := c.store.SaveSettings(ctx, map[string]string{"proxy_url_cipher": encryptedProxy}); err != nil {
+		return err
+	}
+	if client != nil {
+		c.runtime.Configure(client, client)
+		c.catalog.SetAccountID(accountID)
+	}
+	c.broker.Publish(events.Event{Type: "settings.updated"})
+	return nil
+}
+
 func (c *Controller) ChangeAdminPassword(ctx context.Context, currentPassword string, newPassword string) error {
 	admin, err := c.store.GetAdmin(ctx)
 	if err != nil {
@@ -325,11 +421,24 @@ func (c *Controller) ChangeAdminPassword(ctx context.Context, currentPassword st
 	return c.store.UpdateAdminPassword(ctx, admin.Username, hash)
 }
 
-func (c *Controller) buildRealClient(username string, password string) (RemoteClient, string, error) {
+func (c *Controller) currentProxyURL(ctx context.Context, settings map[string]string) (string, error) {
+	encrypted := strings.TrimSpace(settings["proxy_url_cipher"])
+	if encrypted == "" {
+		return "", nil
+	}
+	plain, err := c.secrets.Decrypt(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("decrypt proxy URL: %w", err)
+	}
+	return netproxy.Normalize(plain)
+}
+
+func (c *Controller) buildRealClient(username string, password string, proxyURL string) (RemoteClient, string, error) {
 	accountID := config.AccountIDFor(username)
 	client, err := pikpak.NewClient(pikpak.Options{
 		Username:   username,
 		Password:   password,
+		ProxyURL:   proxyURL,
 		DataDir:    c.dataDir,
 		AccountID:  accountID,
 		RatePerSec: config.DefaultAPIRatePerSecond,

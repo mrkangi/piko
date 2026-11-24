@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nihildigit/piko/download-server/internal/backend"
+	"github.com/nihildigit/piko/download-server/internal/netproxy"
 	"golang.org/x/time/rate"
 )
 
@@ -92,12 +93,17 @@ func NewClient(opts Options) (*Client, error) {
 		opts.Now = time.Now
 	}
 
-	proxyFunc := http.ProxyFromEnvironment
+	var proxyFunc func(*http.Request) (*url.URL, error)
 	if strings.TrimSpace(opts.ProxyURL) != "" {
-		parsed, err := url.Parse(opts.ProxyURL)
+		normalized, err := netproxy.Normalize(opts.ProxyURL)
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := url.Parse(normalized)
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy url: %w", err)
 		}
+		opts.ProxyURL = normalized
 		proxyFunc = http.ProxyURL(parsed)
 	}
 
@@ -143,6 +149,11 @@ func NewClient(opts Options) (*Client, error) {
 
 func (client *Client) Verify(ctx context.Context) error {
 	_, _, _, err := client.ensureAuth(ctx, "")
+	return err
+}
+
+func (client *Client) Probe(ctx context.Context) error {
+	_, err := client.ListPage(ctx, "", "")
 	return err
 }
 

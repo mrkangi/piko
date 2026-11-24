@@ -133,6 +133,7 @@ func (srv *Server) routes() {
 	srv.mux.HandleFunc("GET /api/system/local-dirs", srv.withAuth(srv.handleLocalDirs))
 	srv.mux.HandleFunc("GET /api/system/account", srv.withAuth(srv.handleGetAccount))
 	srv.mux.HandleFunc("PUT /api/system/account", srv.withAuthMutation(srv.handleUpdateAccount))
+	srv.mux.HandleFunc("PUT /api/system/proxy", srv.withAuthMutation(srv.handleUpdateProxy))
 	srv.mux.HandleFunc("PUT /api/system/admin-password", srv.withAuthMutation(srv.handleAdminPassword))
 	srv.mux.HandleFunc("GET /api/notifications", srv.withAuth(srv.handleListNotifications))
 	srv.mux.HandleFunc("POST /api/notifications", srv.withAuthMutation(srv.handleCreateNotification))
@@ -436,6 +437,8 @@ type systemSettingsPayload struct {
 	DataDir                           string `json:"data_dir"`
 	PikPakUsername                    string `json:"pikpak_username"`
 	PikPakConfigured                  bool   `json:"pikpak_configured"`
+	ProxyConfigured                   bool   `json:"proxy_configured"`
+	ProxyURLMasked                    string `json:"proxy_url_masked"`
 	MaxConcurrentDownloads            int    `json:"max_concurrent_downloads"`
 	SegmentThreads                    int    `json:"segment_threads"`
 	SegmentMinSizeMiB                 int64  `json:"segment_min_size_mib"`
@@ -447,6 +450,7 @@ type systemSettingsPayload struct {
 func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPayload {
 	dlOpts := srv.download.CurrentOptions()
 	status, _ := srv.controller.Status(ctx)
+	proxyStatus, _ := srv.controller.ProxyStatus(ctx)
 	statusInterval := 30
 	if settings, settingsErr := srv.store.GetSettings(ctx); settingsErr == nil {
 		if raw := strings.TrimSpace(settings["notification_status_interval_minutes"]); raw != "" {
@@ -460,6 +464,8 @@ func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPay
 		DataDir:                           status.DataDir,
 		PikPakUsername:                    status.PikPakUsername,
 		PikPakConfigured:                  status.PikPakConfigured,
+		ProxyConfigured:                   proxyStatus.Configured,
+		ProxyURLMasked:                    proxyStatus.MaskedURL,
 		MaxConcurrentDownloads:            dlOpts.MaxConcurrent,
 		SegmentThreads:                    dlOpts.SegmentThreads,
 		SegmentMinSizeMiB:                 dlOpts.SegmentMinBytes / (1024 * 1024),
@@ -626,6 +632,31 @@ func (srv *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, _
 	writeJSON(w, http.StatusOK, map[string]any{
 		"pikpak_username":   strings.TrimSpace(req.Username),
 		"pikpak_configured": true,
+	})
+}
+
+func (srv *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	var req struct {
+		ProxyURL string `json:"proxy_url"`
+		Clear    bool   `json:"clear"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid proxy payload")
+		return
+	}
+	if err := srv.controller.ConfigureProxy(r.Context(), req.ProxyURL, req.Clear); err != nil {
+		writeError(w, http.StatusBadRequest, "proxy_update_failed", err.Error())
+		return
+	}
+	proxyStatus, err := srv.controller.ProxyStatus(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	srv.broker.Publish(events.Event{Type: "settings.updated"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"proxy_configured": proxyStatus.Configured,
+		"proxy_url_masked": proxyStatus.MaskedURL,
 	})
 }
 

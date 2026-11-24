@@ -54,6 +54,8 @@ SQLite 使用事务管理下列状态，凭据不进入业务表。进度按节�
 | `deliveries` | 已交付的对象版本、实际本地路径、大小及校验信息；同一目标路径只允许一份交付记录。 |
 | `notification_channels` | 飞书/通用 Webhook 渠道、加密 URL 与密钥、事件过滤、启停状态。 |
 
+PikPak 网络代理使用 `app_settings.proxy_url_cipher` 保存 AES-GCM 密文，不保存明文地址。代理支持 `http://`、`https://`、`socks5://`（以及等价的 `socks5h://`），可包含用户名和密码；SOCKS5 由代理端解析目标域名。空值表示直连，不读取进程环境中的 `HTTP_PROXY`/`HTTPS_PROXY`。
+
 内容版本优先使用 `GCID + 字节长度`；GCID 缺失时，可使用能证明字节身份的上游版本标识。没有可靠标识时，大小和修改时间只能作为**发现变更和入队的线索**，不能证明暂存或已有文件等同于远端。对象版本变化时，旧任务不能继续下载新版本；新版建立独立任务，已有最终文件仍不覆盖。
 
 任务状态：`QUEUED → RUNNING → VERIFYING → COMMITTING → COMPLETED`。其他状态为 `PAUSING`、`PAUSED`、`CANCELING`、`CANCELED`、`RETRY_WAIT`、`FAILED`、`CONFLICT`。远端可见性与本地交付状态单独记录，不用远端消失来改写已完成的下载历史。
@@ -80,9 +82,9 @@ SQLite 使用事务管理下列状态，凭据不进入业务表。进度按节�
 ## 6. Web 与部署
 
 - **页面**：管理页提供下载根目录、任务并发、单文件分片连接数、最小分片大小、远端目录批量选择、扫描周期、扫描状态、单来源立即扫描与扫描全部已启用；任务页显示状态、进度、速度、ETA、失败原因、「本地已存在」标记与可用操作；文件页显示远端相对路径、本地实际路径、缺失及冲突。
-- **接口**：`GET /api/setup/status`、`POST /api/setup` 负责首次配置；`GET /api/remote/folders` 分页浏览远端目录；`GET/POST /api/sources`、`PATCH/DELETE /api/sources/{id}`、`POST /api/sources/scan`、`POST /api/sources/{id}/scan`；`GET /api/tasks`、`POST /api/tasks/{id}/{pause,resume,cancel,retry}`；`GET /api/files`、`GET /api/system/settings`、`PUT /api/system/settings`、`GET/PUT /api/system/account`、`PUT /api/system/admin-password`、`GET/POST /api/notifications`、`PATCH/DELETE /api/notifications/{id}`、`POST /api/notifications/{id}/test`、`GET /api/events`、`GET /healthz`。列表分页。操作异步执行时返回已受理和当前状态，非法状态转换返回 `409`。浏览器以 SSE 事件触发合并刷新，首次连接和断线重连均重新取快照；SSE 不是持久状态来源。
+- **接口**：`GET /api/setup/status`、`POST /api/setup` 负责首次配置；`GET /api/remote/folders` 分页浏览远端目录；`GET/POST /api/sources`、`PATCH/DELETE /api/sources/{id}`、`POST /api/sources/scan`、`POST /api/sources/{id}/scan`；`GET /api/tasks`、`POST /api/tasks/{id}/{pause,resume,cancel,retry}`；`GET /api/files`、`GET /api/system/settings`、`PUT /api/system/settings`、`GET/PUT /api/system/account`、`PUT /api/system/proxy`、`PUT /api/system/admin-password`、`GET/POST /api/notifications`、`PATCH/DELETE /api/notifications/{id}`、`POST /api/notifications/{id}/test`、`GET /api/events`、`GET /healthz`。列表分页。操作异步执行时返回已受理和当前状态，非法状态转换返回 `409`。浏览器以 SSE 事件触发合并刷新，首次连接和断线重连均重新取快照；SSE 不是持久状态来源。
 - **会话**：每账号一个长期客户端，按请求传递 `context`；以绝对过期时间管理令牌，串行刷新并原子落盘，避免并发请求重复轮换。鉴权及验证码失败可见，不循环刷登录。服务使用独立凭据和会话文件，不读取任何桌面版或 CLI 的配置。
-- **安全**：管理员密码使用 bcrypt 哈希；PikPak 密码使用数据目录内 `secret.key` 的 AES-GCM 加密后存入数据库。默认监听 `0.0.0.0:7788`，首次配置必须提交控制台打印的 Setup Token；公网部署应放在 TLS 反代后。管理 API 与 SSE 都须鉴权，写操作校验 CSRF；配置与令牌不回显，日志不记录真实文件名、账号、令牌、验证码和带签名直链。
+- **安全**：管理员密码使用 bcrypt 哈希；PikPak 密码和网络代理 URL 使用数据目录内 `secret.key` 的 AES-GCM 加密后存入数据库，代理只向管理页返回脱敏地址。默认监听 `0.0.0.0:7788`，首次配置必须提交控制台打印的 Setup Token；公网部署应放在 TLS 反代后。管理 API 与 SSE 都须鉴权，写操作校验 CSRF；配置与令牌不回显，日志不记录真实文件名、账号、令牌、验证码、代理凭据和带签名直链。
 - **部署**：只读取 `DOWNLOAD_SERVER_HOST`、`DOWNLOAD_SERVER_PORT`、`DOWNLOAD_SERVER_DATA_DIR` 三个环境变量。数据目录默认 `$HOME/.pikpak/downloader`，保存 SQLite、`secret.key`、会话和服务锁；下载目录默认 `$HOME/PikoDownloads`，可在 Web 管理页修改。容器用非 root 用户运行，不挂 Docker socket；不让实例共享同一个 SQLite 数据目录。NAS 可将下载目录作为本机挂载卷，但必须通过交付语义检查。
 
 ## 7. 完整阶段计划

@@ -136,6 +136,8 @@ export interface SystemSettings {
   data_dir: string
   pikpak_username: string
   pikpak_configured: boolean
+  proxy_configured: boolean
+  proxy_url_masked: string
   max_concurrent_downloads: number
   segment_threads: number
   segment_min_size_mib: number

@@ -338,6 +338,13 @@ export function App() {
               notify('ok', '设置已保存并生效')
               await refreshAll()
             }}
+            onSaveProxy={async (proxyURL) => {
+              const updated = await api.updateProxy(
+                proxyURL === null ? { clear: true } : { proxy_url: proxyURL },
+              )
+              notify('ok', updated.proxy_configured ? '代理已启用并通过连接验证' : '代理已关闭')
+              await refreshAll()
+            }}
             onCreateSources={async (items) => {
               for (const item of items) {
                 await api.createSource(item)

@@ -26,6 +26,7 @@ type setupStubClient struct {
 }
 
 func (setupStubClient) Verify(context.Context) error { return nil }
+func (setupStubClient) Probe(context.Context) error  { return nil }
 
 func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 	ctx := context.Background()
@@ -234,6 +235,38 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 		t.Fatalf("unexpected updated settings: %+v", updatedSettings)
 	}
 
+	putProxyReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/proxy", bytes.NewBufferString(`{"proxy_url":"socks5://alice:secret@127.0.0.1:1080"}`))
+	putProxyReq.Header.Set("Content-Type", "application/json")
+	putProxyReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
+	for _, c := range cookies {
+		putProxyReq.AddCookie(c)
+	}
+	putProxyResp, err := http.DefaultClient.Do(putProxyReq)
+	if err != nil || putProxyResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/system/proxy failed: %v %v", putProxyResp, err)
+	}
+	var proxyPayload struct {
+		ProxyConfigured bool   `json:"proxy_configured"`
+		ProxyURLMasked  string `json:"proxy_url_masked"`
+	}
+	_ = json.NewDecoder(putProxyResp.Body).Decode(&proxyPayload)
+	_ = putProxyResp.Body.Close()
+	if !proxyPayload.ProxyConfigured || proxyPayload.ProxyURLMasked != "socks5://alice:***@127.0.0.1:1080" {
+		t.Fatalf("unexpected proxy response: %+v", proxyPayload)
+	}
+
+	clearProxyReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/proxy", bytes.NewBufferString(`{"clear":true}`))
+	clearProxyReq.Header.Set("Content-Type", "application/json")
+	clearProxyReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
+	for _, c := range cookies {
+		clearProxyReq.AddCookie(c)
+	}
+	clearProxyResp, err := http.DefaultClient.Do(clearProxyReq)
+	if err != nil || clearProxyResp.StatusCode != http.StatusOK {
+		t.Fatalf("clear proxy failed: %v %v", clearProxyResp, err)
+	}
+	_ = clearProxyResp.Body.Close()
+
 	localDirsReq, _ := http.NewRequest(http.MethodGet, httpSrv.URL+"/api/system/local-dirs?path="+nextDownloadDir, nil)
 	for _, c := range cookies {
 		localDirsReq.AddCookie(c)
@@ -322,7 +355,7 @@ func TestSetupEndpointCreatesFirstAdminAndSession(t *testing.T) {
 	cat := catalog.NewService(st, runtime, broker, "", 5*time.Minute, 5)
 	dl := download.NewService(st, fsStore, runtime, runtime, broker, download.Options{MaxConcurrent: 1})
 	controller := control.New(st, secrets, runtime, cat, dl, broker, dataDir)
-	controller.SetClientFactory(func(username, password string) (control.RemoteClient, string, error) {
+	controller.SetClientFactory(func(username, password, proxyURL string) (control.RemoteClient, string, error) {
 		return setupStubClient{FakeBackend: fake}, "acct_setup_test", nil
 	})
 	token, err := controller.EnsureSetupToken(ctx)

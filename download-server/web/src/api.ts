@@ -144,6 +144,13 @@ export function updateAccount(input: { username: string; password: string }): Pr
   })
 }
 
+export function updateProxy(input: { proxy_url?: string; clear?: boolean }): Promise<{ proxy_configured: boolean; proxy_url_masked: string }> {
+  return request('/api/system/proxy', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
 export function changeAdminPassword(input: { current_password: string; new_password: string }): Promise<{ updated: boolean }> {
   return request('/api/system/admin-password', {
     method: 'PUT',
