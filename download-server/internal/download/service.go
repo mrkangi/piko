@@ -583,6 +583,32 @@ func (svc *Service) downloadSingle(
 	entry backend.Entry,
 	act *activeAttempt,
 ) (int64, error) {
+	reconnects := 0
+	for {
+		written, err := svc.downloadSingleOnce(ctx, fsStore, task, entry, act)
+		if err == nil {
+			return written, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return written, ctxErr
+		}
+		if !backend.IsRetryable(err) || reconnects >= maxSingleStreamReconnects {
+			return written, err
+		}
+		reconnects++
+		if sleepErr := sleepWithContext(ctx, segmentRetryDelay(err, reconnects)); sleepErr != nil {
+			return written, sleepErr
+		}
+	}
+}
+
+func (svc *Service) downloadSingleOnce(
+	ctx context.Context,
+	fsStore *localfs.Store,
+	task store.DownloadTask,
+	entry backend.Entry,
+	act *activeAttempt,
+) (int64, error) {
 	stagingSize, stagingExists, err := fsStore.StagingSize(task.ID)
 	if err != nil {
 		return 0, err
@@ -725,13 +751,23 @@ func (svc *Service) copyStreamToStaging(
 		}
 		if readErr != nil {
 			_ = file.Sync()
-			if errors.Is(readErr, io.EOF) {
-				if writtenTotal != expectedSize {
-					return writtenTotal, &backend.Error{Kind: backend.ErrTransient, Message: fmt.Sprintf("stream ended early at %d/%d", writtenTotal, expectedSize)}
-				}
+			if writtenTotal == expectedSize {
 				return writtenTotal, nil
 			}
-			return writtenTotal, readErr
+			if errors.Is(readErr, io.EOF) {
+				return writtenTotal, &backend.Error{Kind: backend.ErrTransient, Message: fmt.Sprintf("stream ended early at %d/%d", writtenTotal, expectedSize)}
+			}
+			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+				return writtenTotal, readErr
+			}
+			if backend.KindOf(readErr) != "" {
+				return writtenTotal, readErr
+			}
+			return writtenTotal, &backend.Error{
+				Kind:    backend.ErrTransient,
+				Message: fmt.Sprintf("stream interrupted at %d/%d", writtenTotal, expectedSize),
+				Cause:   readErr,
+			}
 		}
 	}
 }

@@ -22,6 +22,7 @@ const (
 	segmentBufferBytes           = 128 * 1024
 	maxSegmentConnectionAttempts = 3
 	maxStreamCongestionRetries   = 3
+	maxSingleStreamReconnects    = 4
 	segmentStartStagger          = 150 * time.Millisecond
 	segmentStartJitter           = 50 * time.Millisecond
 )
@@ -677,6 +678,13 @@ func (svc *Service) copySegment(
 			}
 			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
 				return readErr
+			}
+			if errors.Is(readErr, io.ErrUnexpectedEOF) {
+				return &backend.Error{
+					Kind:    backend.ErrTransient,
+					Message: fmt.Sprintf("segment interrupted at %d/%d", *current, end),
+					Cause:   readErr,
+				}
 			}
 			if backend.KindOf(readErr) != "" {
 				return readErr

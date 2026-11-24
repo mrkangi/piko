@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +53,29 @@ func (reader *gatedReader) Read(p []byte) (int, error) {
 }
 
 func (reader *gatedReader) Close() error {
+	return nil
+}
+
+type eofAfterReader struct {
+	data  []byte
+	limit int
+	sent  int
+}
+
+func (reader *eofAfterReader) Read(p []byte) (int, error) {
+	if reader.sent >= reader.limit {
+		return 0, io.ErrUnexpectedEOF
+	}
+	end := reader.sent + len(p)
+	if end > reader.limit {
+		end = reader.limit
+	}
+	n := copy(p, reader.data[reader.sent:end])
+	reader.sent += n
+	return n, nil
+}
+
+func (reader *eofAfterReader) Close() error {
 	return nil
 }
 
@@ -281,6 +306,96 @@ func TestCommitCrashRecoveryAndDestinationConflict(t *testing.T) {
 		t.Fatalf("completed task version should not be re-enqueued: %+v err=%v", pub3.EnqueuedTasks, err)
 	}
 	_ = errors.New("")
+}
+
+func TestSingleStreamReconnectsAfterUnexpectedEOF(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	payload := bytes.Repeat([]byte("PIKO-EOF-BLOCK-"), 8192)
+	total := int64(len(payload))
+	interruptAt := total / 3
+
+	fake := backend.NewFakeBackend()
+	fake.PutDir("d_eof", "", "Eof")
+	fake.PutFile("f_eof", "d_eof", "movie.bin", "GCIDEOF", payload, time.Now())
+	versionKey := "gcid:GCIDEOF:" + fmt.Sprint(total)
+
+	var opens atomic.Int32
+	fake.SetOpenHook(func(exp backend.OpenExpectation, _ int) (*backend.OpenedStream, error) {
+		start := exp.Offset
+		end := total
+		if exp.Length > 0 {
+			end = exp.Offset + exp.Length
+		}
+		data := payload[start:end]
+		var reader io.ReadCloser = io.NopCloser(bytes.NewReader(data))
+		if opens.Add(1) == 1 {
+			reader = &eofAfterReader{data: data, limit: int(interruptAt)}
+		}
+		return &backend.OpenedStream{
+			Reader:          reader,
+			Offset:          exp.Offset,
+			TotalSize:       total,
+			VerifiedVersion: versionKey,
+			Verifiable:      true,
+		}, nil
+	})
+
+	dataDir := t.TempDir()
+	downloadDir := t.TempDir()
+	st, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fsStore, err := localfs.Open(downloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsStore.Close()
+
+	broker := events.NewBroker()
+	cat := catalog.NewService(st, fake, broker, "acct_1", 10*time.Minute, 5)
+	source, err := cat.CreateSource(ctx, catalog.CreateSourceInput{
+		RemoteRootID: "d_eof",
+		LocalAlias:   "Eof",
+		InitialMode:  store.InitialModeDownloadExisting,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := cat.ScanSource(ctx, source.ID)
+	if err != nil || len(published.EnqueuedTasks) != 1 {
+		t.Fatalf("scan failed: %v tasks=%d", err, len(published.EnqueuedTasks))
+	}
+	task := published.EnqueuedTasks[0]
+
+	dl := NewService(st, fsStore, fake, catRemote(fake), broker, Options{
+		MaxConcurrent:     1,
+		SegmentThreads:    1,
+		SegmentMinBytes:   256 * 1024,
+		NoProgressTimeout: 10 * time.Second,
+		MaxRetries:        2,
+	})
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go dl.RunLoop(runCtx)
+
+	completed := waitForTaskState(ctx, st, task.ID, store.TaskCompleted)
+	if completed.State != store.TaskCompleted {
+		t.Fatalf("expected stream reconnect to complete, got %+v", completed)
+	}
+	if completed.Attempt != 1 {
+		t.Fatalf("stream reconnect should not consume a task attempt, attempt=%d", completed.Attempt)
+	}
+	if opens.Load() < 2 {
+		t.Fatalf("expected at least two stream opens, got %d", opens.Load())
+	}
+	delivered, err := os.ReadFile(filepath.Join(downloadDir, "Eof", "movie.bin"))
+	if err != nil || !bytes.Equal(delivered, payload) {
+		t.Fatalf("reconnected bytes mismatch: err=%v len=%d expected=%d", err, len(delivered), len(payload))
+	}
 }
 
 func catRemote(fake *backend.FakeBackend) backend.Catalog {
