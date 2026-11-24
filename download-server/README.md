@@ -83,7 +83,7 @@ npm run dev
 - macOS：`amd64`、`arm64`
 - Windows：`amd64`、`arm64`
 - FreeBSD：`amd64`
-- Android/Termux：`arm64`
+- Android/Termux：`arm64` 二进制、`termux-aarch64.deb` 安装包与 `install-termux.sh` 一键常驻脚本
 
 产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt` 与 `BUILD-INFO.txt`。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
 
@@ -92,6 +92,56 @@ GitHub Actions 已接入主项目 tag 流程：
 - 推 `test-*` tag：`build.yml` 的 `download-server` job 构建全部平台，产物并入测试构建 Pre-release。
 - 推 `v*` tag：`release.yml` 的 `download-server` job 构建全部平台，产物并入正式草稿 Release。
 - 产物命名为 `download-server-<版本>-<平台>`，并带 `BUILD-INFO.txt` 与最终汇总的 `SHA256SUMS.txt`。
+
+## Termux 常驻部署（Android）
+
+支持 **`pkg` 直接安装 `.deb` 包** 或 **一键安装脚本** 两种方式，均基于官方 `termux-services`（`runit`）实现后台常驻与崩溃自启。
+
+### 方式一：使用 `pkg` 安装 `.deb` 包（推荐）
+
+下载构建产物中的 `download-server-<版本>-termux-aarch64.deb` 后，在 Termux 中执行：
+
+```bash
+pkg update
+pkg install ./download-server-*-termux-aarch64.deb
+```
+
+安装过程会自动：
+- 拉取并安装依赖 `termux-services`
+- 将二进制安装到 `$PREFIX/bin/download-server`
+- 写入环境配置文件 `$PREFIX/etc/default/download-server`（升级包时保留用户修改）
+- 注册 `$PREFIX/var/service/download-server` 服务并立即启动
+- 申请 `termux-wake-lock` 防止锁屏休眠断连
+
+卸载时直接执行 `pkg uninstall piko-download-server` 即可自动停止并移除服务。
+
+### 方式二：一键安装脚本 `install-termux.sh`
+
+如果本地已有 `download-server-android-arm64` 二进制或 `.deb` 包，或者希望自动从 GitHub Releases 拉取最新版：
+
+```bash
+# 自动检测同目录下的 .deb / android-arm64 二进制，若无则从 GitHub Releases 拉取最新版
+sh install-termux.sh
+
+# 或指定本地二进制、自定义端口并写入 Termux:Boot 开机自启脚本
+sh install-termux.sh --bin ./download-server-android-arm64 --port 7788 --boot
+```
+
+### 常用服务管理命令
+
+```bash
+sv status download-server    # 查看运行状态
+sv restart download-server   # 重启服务（修改 $PREFIX/etc/default/download-server 后执行）
+sv down download-server      # 停止服务
+sv up download-server        # 启动服务
+cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Setup Token
+```
+
+### Termux 下载目录注意事项
+
+- 服务启动时会对下载目录执行 `Probe()`，校验同卷原子硬链接（`link`）和目录 `fsync`。
+- Android 共享存储（`/sdcard`、`/storage/emulated/0`、`~/storage/downloads`）采用 FUSE/sdcardfs，**不支持硬链接**，设为下载目录会导致探测失败。
+- 请保持下载目录位于 Termux 内部存储（如默认的 `$HOME/PikoDownloads`）。
 
 ## 管理页
 

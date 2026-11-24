@@ -46,6 +46,20 @@ build_target windows arm64 windows-arm64
 build_target freebsd amd64 freebsd-amd64
 build_target android arm64 android-arm64
 
+DEB_NAME="${PREFIX}-termux-aarch64.deb"
+echo "==> termux/aarch64 (.deb) -> ${DEB_NAME}"
+go run "$ROOT/cmd/termuxdeb" \
+  -binary "$OUT/${PREFIX}-android-arm64" \
+  -output "$OUT/${DEB_NAME}" \
+  -version "${PACKAGE_VERSION:-$PREFIX}"
+ARTIFACTS+=("${DEB_NAME}")
+
+INSTALLER_NAME="${PREFIX}-install-termux.sh"
+echo "==> termux installer -> ${INSTALLER_NAME}"
+cp "$ROOT/scripts/install-termux.sh" "$OUT/${INSTALLER_NAME}"
+chmod +x "$OUT/${INSTALLER_NAME}"
+ARTIFACTS+=("${INSTALLER_NAME}")
+
 echo "==> checksums"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$OUT" && sha256sum "${ARTIFACTS[@]}" > SHA256SUMS.txt)
