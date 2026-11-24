@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -211,6 +212,242 @@ func TestSegmentedDownloadFallsBackToSingleStream(t *testing.T) {
 	delivered, err := os.ReadFile(filepath.Join(downloadDir, "Fallback", "movie.bin"))
 	if err != nil || !bytes.Equal(delivered, payload) {
 		t.Fatalf("fallback delivered bytes mismatch: err=%v len=%d expected=%d", err, len(delivered), len(payload))
+	}
+}
+
+func TestSegmentedDownloadReducesConcurrencyAndRetriesAfter503(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	const maxAllowedConcurrency = 2
+	payload := bytes.Repeat([]byte("PIKPAK-503-BACKOFF-"), 100000)
+	total := int64(len(payload))
+	fake := backend.NewFakeBackend()
+	fake.PutDir("d_503", "", "Busy")
+	fake.PutFile("f_503", "d_503", "movie.bin", "GCID503", payload, time.Now())
+	versionKey := "gcid:GCID503:" + fmt.Sprint(total)
+
+	var active atomic.Int32
+	var peak atomic.Int32
+	var congestion atomic.Int32
+	releaseReaders := make(chan struct{})
+	var releaseOnce sync.Once
+	fake.SetOpenHook(func(exp backend.OpenExpectation, _ int) (*backend.OpenedStream, error) {
+		current := active.Add(1)
+		for {
+			observed := peak.Load()
+			if current <= observed || peak.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		if current > maxAllowedConcurrency {
+			active.Add(-1)
+			congestion.Add(1)
+			releaseOnce.Do(func() { close(releaseReaders) })
+			return nil, &backend.Error{
+				Kind:       backend.ErrTransient,
+				StatusCode: http.StatusServiceUnavailable,
+				Message:    "download node is temporarily busy",
+			}
+		}
+		reader := &trackedGateReader{
+			reader:  bytes.NewReader(payload[exp.Offset : exp.Offset+exp.Length]),
+			release: releaseReaders,
+			onClose: func() { active.Add(-1) },
+		}
+		return &backend.OpenedStream{
+			Reader:          reader,
+			Offset:          exp.Offset,
+			TotalSize:       total,
+			VerifiedVersion: versionKey,
+			Verifiable:      true,
+		}, nil
+	})
+
+	dataDir := t.TempDir()
+	downloadDir := t.TempDir()
+	st, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fsStore, err := localfs.Open(downloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsStore.Close()
+
+	broker := events.NewBroker()
+	cat := catalog.NewService(st, fake, broker, "acct_1", 10*time.Minute, 5)
+	source, err := cat.CreateSource(ctx, catalog.CreateSourceInput{
+		RemoteRootID: "d_503",
+		LocalAlias:   "Busy",
+		InitialMode:  store.InitialModeDownloadExisting,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := cat.ScanSource(ctx, source.ID)
+	if err != nil || len(published.EnqueuedTasks) != 1 {
+		t.Fatalf("scan failed: %v tasks=%d", err, len(published.EnqueuedTasks))
+	}
+	task := published.EnqueuedTasks[0]
+
+	dl := NewService(st, fsStore, fake, catRemote(fake), broker, Options{
+		MaxConcurrent:     1,
+		SegmentThreads:    4,
+		SegmentMinBytes:   256 * 1024,
+		NoProgressTimeout: 10 * time.Second,
+		MaxRetries:        2,
+	})
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go dl.RunLoop(runCtx)
+
+	completed := waitForTaskState(ctx, st, task.ID, store.TaskCompleted)
+	if completed.State != store.TaskCompleted {
+		t.Fatalf("expected adaptive 503 retry to complete, got %+v", completed)
+	}
+	if completed.Attempt != 1 {
+		t.Fatalf("adaptive 503 backoff should not consume a task retry, attempt=%d", completed.Attempt)
+	}
+	if congestion.Load() == 0 {
+		t.Fatalf("expected hook to simulate at least one 503")
+	}
+	if peak.Load() <= maxAllowedConcurrency {
+		t.Fatalf("expected initial concurrent requests to exceed safe limit, peak=%d", peak.Load())
+	}
+	delivered, err := os.ReadFile(filepath.Join(downloadDir, "Busy", "movie.bin"))
+	if err != nil || !bytes.Equal(delivered, payload) {
+		t.Fatalf("503 retry delivered bytes mismatch: err=%v len=%d expected=%d", err, len(delivered), len(payload))
+	}
+}
+
+func TestSegmentedDownloadAppliesLowerConcurrencyWhileRunning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	payload := bytes.Repeat([]byte("PIKPAK-LIVE-CONCURRENCY-"), 100000)
+	total := int64(len(payload))
+	fake := backend.NewFakeBackend()
+	fake.PutDir("d_live", "", "Live")
+	fake.PutFile("f_live", "d_live", "movie.bin", "GCIDLIVE", payload, time.Now())
+	versionKey := "gcid:GCIDLIVE:" + fmt.Sprint(total)
+
+	var active atomic.Int32
+	var opened atomic.Int32
+	var afterUpdatePeak atomic.Int32
+	var updated atomic.Bool
+	releaseReaders := make(chan struct{})
+	allOpened := make(chan struct{})
+	var openedOnce sync.Once
+	fake.SetOpenHook(func(exp backend.OpenExpectation, _ int) (*backend.OpenedStream, error) {
+		current := active.Add(1)
+		if updated.Load() {
+			for {
+				observed := afterUpdatePeak.Load()
+				if current <= observed || afterUpdatePeak.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+		}
+		if opened.Add(1) >= 4 {
+			openedOnce.Do(func() { close(allOpened) })
+		}
+		end := total
+		if exp.Length > 0 {
+			end = exp.Offset + exp.Length
+		}
+		reader := &trackedGateReader{
+			reader:  bytes.NewReader(payload[exp.Offset:end]),
+			release: releaseReaders,
+			onClose: func() { active.Add(-1) },
+		}
+		return &backend.OpenedStream{
+			Reader:          reader,
+			Offset:          exp.Offset,
+			TotalSize:       total,
+			VerifiedVersion: versionKey,
+			Verifiable:      true,
+		}, nil
+	})
+
+	dataDir := t.TempDir()
+	downloadDir := t.TempDir()
+	st, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fsStore, err := localfs.Open(downloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsStore.Close()
+
+	broker := events.NewBroker()
+	cat := catalog.NewService(st, fake, broker, "acct_1", 10*time.Minute, 5)
+	source, err := cat.CreateSource(ctx, catalog.CreateSourceInput{
+		RemoteRootID: "d_live",
+		LocalAlias:   "Live",
+		InitialMode:  store.InitialModeDownloadExisting,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := cat.ScanSource(ctx, source.ID)
+	if err != nil || len(published.EnqueuedTasks) != 1 {
+		t.Fatalf("scan failed: %v tasks=%d", err, len(published.EnqueuedTasks))
+	}
+	task := published.EnqueuedTasks[0]
+
+	dl := NewService(st, fsStore, fake, catRemote(fake), broker, Options{
+		MaxConcurrent:     1,
+		SegmentThreads:    4,
+		SegmentMinBytes:   256 * 1024,
+		NoProgressTimeout: 10 * time.Second,
+		MaxRetries:        2,
+	})
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go dl.RunLoop(runCtx)
+
+	select {
+	case <-allOpened:
+	case <-ctx.Done():
+		close(releaseReaders)
+		t.Fatal("timed out waiting for initial four readers")
+	}
+	updated.Store(true)
+	dl.UpdateOptions(1, 0, 1, 256*1024)
+
+	reduceDeadline := time.Now().Add(4 * time.Second)
+	reduced := false
+	for time.Now().Before(reduceDeadline) {
+		if active.Load() <= 1 {
+			reduced = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(releaseReaders)
+	if !reduced {
+		t.Fatalf("running segmented transfer did not lower concurrency after settings update, active=%d", active.Load())
+	}
+
+	completed := waitForTaskState(ctx, st, task.ID, store.TaskCompleted)
+	if completed.State != store.TaskCompleted {
+		t.Fatalf("expected live concurrency change to complete, got %+v", completed)
+	}
+	if completed.Attempt != 1 {
+		t.Fatalf("live concurrency change should not consume a retry, attempt=%d", completed.Attempt)
+	}
+	if peak := afterUpdatePeak.Load(); peak > 1 {
+		t.Fatalf("expected at most one range connection after setting segment_threads=1, peak=%d", peak)
+	}
+	delivered, err := os.ReadFile(filepath.Join(downloadDir, "Live", "movie.bin"))
+	if err != nil || !bytes.Equal(delivered, payload) {
+		t.Fatalf("live concurrency change delivered bytes mismatch: err=%v len=%d expected=%d", err, len(delivered), len(payload))
 	}
 }
 
@@ -467,5 +704,23 @@ func (reader *gateAfterBytesReader) Read(p []byte) (int, error) {
 }
 
 func (reader *gateAfterBytesReader) Close() error {
+	return nil
+}
+
+type trackedGateReader struct {
+	reader  *bytes.Reader
+	release <-chan struct{}
+	onClose func()
+	once    sync.Once
+	close   sync.Once
+}
+
+func (reader *trackedGateReader) Read(p []byte) (int, error) {
+	reader.once.Do(func() { <-reader.release })
+	return reader.reader.Read(p)
+}
+
+func (reader *trackedGateReader) Close() error {
+	reader.close.Do(reader.onClose)
 	return nil
 }

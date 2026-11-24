@@ -89,7 +89,7 @@ func NewService(
 		opts.MaxConcurrent = 2
 	}
 	if opts.SegmentThreads < 1 {
-		opts.SegmentThreads = 4
+		opts.SegmentThreads = 1
 	}
 	if opts.SegmentMinBytes < 1 {
 		opts.SegmentMinBytes = 16 * 1024 * 1024
@@ -508,7 +508,9 @@ func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask,
 	var transferErr error
 	if segmented {
 		writtenTotal, transferErr = svc.downloadSegmented(ctx, fsStore, task, entry, act, segments)
-		if errors.Is(transferErr, errRangeUnsupported) {
+		if errors.Is(transferErr, errSingleStreamRequested) {
+			writtenTotal, transferErr = svc.downloadSingle(ctx, fsStore, task, entry, act)
+		} else if errors.Is(transferErr, errRangeUnsupported) {
 			if fallbackErr := svc.forceSingleStreamFallback(ctx, fsStore, task, entry.Size); fallbackErr != nil {
 				svc.handleAttemptError(task, act, writtenTotal, fallbackErr)
 				return

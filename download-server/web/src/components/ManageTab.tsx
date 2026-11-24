@@ -119,7 +119,7 @@ export function ManageTab({
 }: Props) {
   const [downloadDir, setDownloadDir] = useState('')
   const [maxConcurrent, setMaxConcurrent] = useState(2)
-  const [segmentThreads, setSegmentThreads] = useState(4)
+  const [segmentThreads, setSegmentThreads] = useState(1)
   const [segmentMinMiB, setSegmentMinMiB] = useState(16)
   const [defaultIntervalSec, setDefaultIntervalSec] = useState(300)
   const [minFreeMiB, setMinFreeMiB] = useState(512)
@@ -412,7 +412,7 @@ export function ManageTab({
               />
             </label>
             <p className="text-xs leading-relaxed text-slate-400 lg:col-span-6">
-              大于等于两倍最小分片大小的文件会按连续 Range 分片并发下载；设为 1 可关闭分片。实际连接数还会受文件大小限制，总连接数约为“最大并发下载 × 单文件分片连接数”。
+              默认使用单流下载。只有将分片连接数调到 2 以上，且文件达到两倍最小分片大小时，才会启用 Range 分片并发；改回 1 会立即降级为真正的单流。分片遇到 429/503 时会自动暂停整组、减半并发并退避重试；总连接数约为“最大并发下载 × 单文件分片连接数”。
             </p>
           </div>
 

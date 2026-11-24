@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -20,7 +21,10 @@ const (
 	maxSegmentConnectionAttempts = 3
 )
 
-var errRangeUnsupported = errors.New("download node does not support range requests")
+var (
+	errRangeUnsupported      = errors.New("download node does not support range requests")
+	errSingleStreamRequested = errors.New("single stream requested by settings")
+)
 
 func planSegments(total int64, threads int, minSegmentBytes int64) []store.DownloadSegment {
 	if total <= 0 || threads < 2 || minSegmentBytes <= 0 {
@@ -188,6 +192,12 @@ func (progress *segmentProgress) snapshot() (int64, []int64) {
 	return progress.done, currents
 }
 
+func (progress *segmentProgress) current(index int) int64 {
+	progress.mu.Lock()
+	defer progress.mu.Unlock()
+	return progress.currents[index]
+}
+
 func (svc *Service) downloadSegmented(
 	ctx context.Context,
 	fsStore *localfs.Store,
@@ -217,25 +227,6 @@ func (svc *Service) downloadSegmented(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	results := make(chan error, len(segments))
-	var wg sync.WaitGroup
-	workers := 0
-	for index, segment := range segments {
-		if segment.Complete() {
-			continue
-		}
-		workers++
-		wg.Add(1)
-		go func(localIndex int, work store.DownloadSegment) {
-			defer wg.Done()
-			runErr := svc.runSegment(runCtx, file, task, entry, act, work, localIndex, progress)
-			if runErr != nil {
-				cancel()
-			}
-			results <- runErr
-		}(index, segment)
-	}
-
 	stopProgress := make(chan struct{})
 	progressStopped := make(chan struct{})
 	go func() {
@@ -258,40 +249,107 @@ func (svc *Service) downloadSegmented(
 		}
 	}()
 
-	wg.Wait()
+	limit := svc.configuredSegmentLimit(len(segments))
+	congestionRounds := 0
+	var runErr error
+	for {
+		pending := pendingSegmentIndices(segments, progress)
+		if len(pending) == 0 {
+			break
+		}
+		configuredLimit := svc.configuredSegmentLimit(len(segments))
+		if svc.CurrentOptions().SegmentThreads <= 1 {
+			runErr = errSingleStreamRequested
+			break
+		}
+		if configuredLimit < limit {
+			limit = configuredLimit
+		}
+		roundLimit := limit
+		if roundLimit > len(pending) {
+			roundLimit = len(pending)
+		}
+		roundCtx, roundCancel := context.WithCancel(runCtx)
+		preempted := make(chan struct{}, 1)
+		monitorDone := make(chan struct{})
+		go func() {
+			defer close(monitorDone)
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-roundCtx.Done():
+					return
+				case <-ticker.C:
+					if svc.configuredSegmentLimit(len(segments)) < roundLimit {
+						select {
+						case preempted <- struct{}{}:
+						default:
+						}
+						roundCancel()
+						return
+					}
+				}
+			}
+		}()
+		runErr = svc.runSegmentRound(roundCtx, file, task, entry, act, segments, pending, roundLimit, progress)
+		roundCancel()
+		<-monitorDone
+		select {
+		case <-preempted:
+			configuredLimit = svc.configuredSegmentLimit(len(segments))
+			if configuredLimit < limit {
+				limit = configuredLimit
+			}
+			runErr = nil
+			continue
+		default:
+		}
+		if runErr == nil {
+			continue
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			runErr = ctxErr
+			break
+		}
+		if !isCongestionError(runErr) || limit <= 1 {
+			break
+		}
+		nextLimit := limit / 2
+		if nextLimit < 1 {
+			nextLimit = 1
+		}
+		if nextLimit >= limit {
+			nextLimit = limit - 1
+		}
+		limit = nextLimit
+		congestionRounds++
+		if sleepErr := sleepWithContext(runCtx, congestionRetryDelay(runErr, congestionRounds)); sleepErr != nil {
+			runErr = sleepErr
+			break
+		}
+	}
 	close(stopProgress)
 	<-progressStopped
 
-	var firstErr error
-	for index := 0; index < workers; index++ {
-		runErr := <-results
-		if runErr == nil || firstErr != nil {
-			continue
+	if errors.Is(runErr, errSingleStreamRequested) {
+		downgraded, err := svc.downgradeSegmentedToSingle(ctx, file, task, segments, progress, entry.Size)
+		if err != nil {
+			return downgraded, err
 		}
-		if errors.Is(runErr, context.Canceled) && ctx.Err() == nil {
-			continue
-		}
-		firstErr = runErr
+		return downgraded, errSingleStreamRequested
 	}
-	if firstErr == nil {
+
+	if runErr == nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			firstErr = ctxErr
-		}
-	}
-	if firstErr == nil {
-		_, currents := progress.snapshot()
-		for index, segment := range segments {
-			if index >= len(currents) || currents[index] < segment.EndOffset {
-				firstErr = context.Canceled
-				break
-			}
+			runErr = ctxErr
 		}
 	}
 
-	if firstErr != nil {
+	if runErr != nil {
 		_ = file.Sync()
 		svc.persistSegmentProgress(task, segments, progress, entry.Size)
-		return progress.done, firstErr
+		return progress.done, runErr
 	}
 
 	if err := file.Truncate(entry.Size); err != nil {
@@ -302,6 +360,143 @@ func (svc *Service) downloadSegmented(
 	}
 	svc.persistSegmentProgress(task, segments, progress, entry.Size)
 	return progress.done, nil
+}
+
+func (svc *Service) downgradeSegmentedToSingle(
+	ctx context.Context,
+	file *os.File,
+	task store.DownloadTask,
+	segments []store.DownloadSegment,
+	progress *segmentProgress,
+	total int64,
+) (int64, error) {
+	_, currents := progress.snapshot()
+	prefix := int64(0)
+	for index, segment := range segments {
+		current := segment.StartOffset
+		if index < len(currents) {
+			current = currents[index]
+		}
+		if current >= segment.EndOffset {
+			prefix = segment.EndOffset
+			continue
+		}
+		prefix = current
+		break
+	}
+	if err := file.Truncate(prefix); err != nil {
+		return prefix, err
+	}
+	if err := file.Sync(); err != nil {
+		return prefix, err
+	}
+	if err := svc.store.DeleteSegments(ctx, task.ID); err != nil {
+		return prefix, err
+	}
+	_ = svc.store.UpdateAttemptProgress(context.Background(), task.ID, task.Attempt, prefix, total)
+	return prefix, nil
+}
+
+func (svc *Service) configuredSegmentLimit(segmentCount int) int {
+	limit := svc.CurrentOptions().SegmentThreads
+	if limit > segmentCount {
+		limit = segmentCount
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	return limit
+}
+
+func pendingSegmentIndices(segments []store.DownloadSegment, progress *segmentProgress) []int {
+	pending := make([]int, 0, len(segments))
+	for index, segment := range segments {
+		if progress.current(index) < segment.EndOffset {
+			pending = append(pending, index)
+		}
+	}
+	return pending
+}
+
+func (svc *Service) runSegmentRound(
+	parent context.Context,
+	file *os.File,
+	task store.DownloadTask,
+	entry backend.Entry,
+	act *activeAttempt,
+	segments []store.DownloadSegment,
+	pending []int,
+	limit int,
+	progress *segmentProgress,
+) error {
+	roundCtx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	jobs := make(chan int, len(pending))
+	for _, index := range pending {
+		jobs <- index
+	}
+	close(jobs)
+
+	results := make(chan error, limit)
+	var wg sync.WaitGroup
+	for worker := 0; worker < limit; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var workerErr error
+			for index := range jobs {
+				if err := roundCtx.Err(); err != nil {
+					workerErr = err
+					break
+				}
+				current := progress.current(index)
+				work := segments[index]
+				work.DoneOffset = current
+				if work.Complete() {
+					continue
+				}
+				if err := svc.runSegment(roundCtx, file, task, entry, act, work, index, progress); err != nil {
+					workerErr = err
+					cancel()
+					break
+				}
+			}
+			results <- workerErr
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var firstErr error
+	var canceledErr error
+	for err := range results {
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, context.Canceled) {
+			if canceledErr == nil {
+				canceledErr = err
+			}
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if len(pendingSegmentIndices(segments, progress)) == 0 {
+		return nil
+	}
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if canceledErr != nil {
+		return canceledErr
+	}
+	return context.Canceled
 }
 
 func (svc *Service) persistSegmentProgress(
@@ -351,6 +546,9 @@ func (svc *Service) runSegment(
 			if backend.KindOf(err) == backend.ErrRangeNotSupported {
 				return fmt.Errorf("%w: %v", errRangeUnsupported, err)
 			}
+			if isCongestionError(err) {
+				return err
+			}
 			if backend.IsRetryable(err) && connectionFailures+1 < maxSegmentConnectionAttempts {
 				connectionFailures++
 				if sleepErr := sleepWithContext(ctx, segmentRetryDelay(err, connectionFailures)); sleepErr != nil {
@@ -376,6 +574,9 @@ func (svc *Service) runSegment(
 		}
 		if backend.KindOf(err) == backend.ErrRangeNotSupported {
 			return fmt.Errorf("%w: %v", errRangeUnsupported, err)
+		}
+		if isCongestionError(err) {
+			return err
 		}
 		if current > attemptStart {
 			connectionFailures = 0
@@ -450,6 +651,34 @@ func (svc *Service) copySegment(
 func segmentRetryDelay(err error, attempt int) time.Duration {
 	var backendErr *backend.Error
 	if errors.As(err, &backendErr) && backendErr.RetryAfter > 0 {
+		return backendErr.RetryAfter
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Duration(1<<(attempt-1)) * time.Second
+	if delay > 8*time.Second {
+		delay = 8 * time.Second
+	}
+	return delay
+}
+
+func isCongestionError(err error) bool {
+	var backendErr *backend.Error
+	if !errors.As(err, &backendErr) {
+		return false
+	}
+	return backendErr.Kind == backend.ErrRateLimited ||
+		backendErr.StatusCode == http.StatusTooManyRequests ||
+		backendErr.StatusCode == http.StatusServiceUnavailable
+}
+
+func congestionRetryDelay(err error, attempt int) time.Duration {
+	var backendErr *backend.Error
+	if errors.As(err, &backendErr) && backendErr.RetryAfter > 0 {
+		if backendErr.RetryAfter > 60*time.Second {
+			return 60 * time.Second
+		}
 		return backendErr.RetryAfter
 	}
 	if attempt < 1 {
