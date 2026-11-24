@@ -8,7 +8,7 @@
 | 用途 | 触发方式 | 工作流 | 产物去向 |
 | --- | --- | --- | --- |
 | 正式发版 | 推 `vMAJOR.MINOR.PATCH` tag | `release.yml` | 草稿 Release，人工核对后公开 |
-| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包；带 `mac` 加 macOS，带 `desktop` 加三平台 |
+| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包；带 `mac` 加 macOS，带 `desktop` 加三平台，带 `server` 只出下载服务 |
 | 只拿产物 | 手动 `workflow_dispatch` | `build.yml` | Actions Artifacts，保留 7 天 |
 | 全量测试 | push / PR / 手动 | `test.yml` | 无安装包，只有结论 |
 | 本机调试 | 本地 Gradle | — | `app/build/outputs/...` |
@@ -38,6 +38,13 @@ git push origin test-20261111-vr-mac
 ```bash
 git tag test-20261111-vr-desktop   # Android + 桌面三平台
 git push origin test-20261111-vr-desktop
+```
+
+只构建 PikPak 下载服务时，在 tag 里带 `server`：
+
+```bash
+git tag test-20261124-proxy-server
+git push origin test-20261124-proxy-server
 ```
 
 只出 Android 时整轮通常 6～8 分钟；带桌面端则取决于 runner 排队情况。Windows arm64

@@ -6,7 +6,8 @@ name: Build
 # 两种用法：
 # 1. 推一个 test-* tag（如 test-20261111-vr）：默认只打 Android，完成后自动建一个
 #    Pre-release，手机上点链接就能装。tag 里带 mac（如 test-20261111-vr-mac）只加 macOS；
-#    带 desktop（如 test-20261111-vr-desktop）才打 Windows x64 / macOS / Linux 三平台。
+#    带 desktop（如 test-20261111-vr-desktop）才打 Windows x64 / macOS / Linux 三平台；
+#    带 server（如 test-20261124-proxy-server）只构建 download-server。
 # 2. 手动触发：只跑构建、把产物留在 workflow 的 Artifacts 里（保留 7 天），不建 Release。
 #    适合只想拿某一个平台的包、或先确认能编过再打 tag。
 # SDK main 已进入 3.0 传输层重构，PikoStreamReader 的 readAheadLimit / urgent /
@@ -85,6 +86,8 @@ jobs:
               platforms="all"
             elif [[ "$suffix" == *mac* ]]; then
               platforms="android-macos"
+            elif [[ "$suffix" == *server* ]]; then
+              platforms="download-server"
             fi
             if [[ "$suffix" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})-(.+)$ ]]; then
               title="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}（${BASH_REMATCH[4]}）"
