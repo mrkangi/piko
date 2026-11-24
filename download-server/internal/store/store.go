@@ -687,7 +687,7 @@ func (store *Store) ListTasks(ctx context.Context, stateFilter string, sourceID 
 		query += ` AND source_id = ?`
 		args = append(args, strings.TrimSpace(sourceID))
 	}
-	query += ` ORDER BY updated_at DESC, created_at DESC LIMIT ? OFFSET ?`
+	query += ` ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
 	rows, err := store.db.QueryContext(ctx, query, args...)

@@ -278,3 +278,53 @@ func TestResumeDoesNotConsumeAttemptBudget(t *testing.T) {
 		t.Fatalf("expected resume to keep attempt at 1, got %d", resumed.Attempt)
 	}
 }
+
+func TestListTasksOrdersByCreationInsteadOfLastUpdate(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	src, err := st.CreateSource(ctx, Source{
+		AccountID: "acct_1", RemoteRootID: "dir_1", RemoteRootPath: "/Movies", LocalAlias: "Movies",
+		InitialMode: InitialModeDownloadExisting, Enabled: true, ScanIntervalSec: 600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, taskID := range []string{"tsk_1", "tsk_2", "tsk_3"} {
+		if _, err := st.db.ExecContext(ctx, `
+			INSERT INTO download_tasks(
+				id, source_id, remote_id, version_key, gcid, strong_version,
+				remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
+				priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
+				error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+			) VALUES(?,?,?,?,?,1,?,?,?,?,0,5,0,100,0,?,?,?,?,0,1000,?,0,0)`,
+			taskID, src.ID, taskID, "gcid:"+taskID+":100", taskID,
+			taskID+".mkv", "Movies/"+taskID+".mkv", TaskQueued, DesiredNone,
+			"staging/"+taskID, "", "", "", int64(1000+index),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE download_tasks SET updated_at = 5000 WHERE id = 'tsk_1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.ListTasks(ctx, "", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d", len(tasks))
+	}
+	got := []string{tasks[0].ID, tasks[1].ID, tasks[2].ID}
+	want := []string{"tsk_3", "tsk_2", "tsk_1"}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("task order changed after progress update: got %v want %v", got, want)
+		}
+	}
+}
