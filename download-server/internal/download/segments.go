@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nihildigit/piko/download-server/internal/backend"
@@ -19,6 +21,9 @@ import (
 const (
 	segmentBufferBytes           = 128 * 1024
 	maxSegmentConnectionAttempts = 3
+	maxStreamCongestionRetries   = 3
+	segmentStartStagger          = 150 * time.Millisecond
+	segmentStartJitter           = 50 * time.Millisecond
 )
 
 var (
@@ -251,6 +256,7 @@ func (svc *Service) downloadSegmented(
 
 	limit := svc.configuredSegmentLimit(len(segments))
 	congestionRounds := 0
+	singleStreamCongestionRetries := 0
 	var runErr error
 	for {
 		pending := pendingSegmentIndices(segments, progress)
@@ -306,14 +312,27 @@ func (svc *Service) downloadSegmented(
 		default:
 		}
 		if runErr == nil {
+			singleStreamCongestionRetries = 0
 			continue
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			runErr = ctxErr
 			break
 		}
-		if !isCongestionError(runErr) || limit <= 1 {
+		if !isCongestionError(runErr) {
 			break
+		}
+		if limit <= 1 {
+			if singleStreamCongestionRetries >= maxStreamCongestionRetries {
+				break
+			}
+			singleStreamCongestionRetries++
+			congestionRounds++
+			if sleepErr := sleepWithContext(runCtx, congestionRetryDelay(runErr, congestionRounds)); sleepErr != nil {
+				runErr = sleepErr
+				break
+			}
+			continue
 		}
 		nextLimit := limit / 2
 		if nextLimit < 1 {
@@ -440,14 +459,30 @@ func (svc *Service) runSegmentRound(
 
 	results := make(chan error, limit)
 	var wg sync.WaitGroup
+	var congested atomic.Bool
 	for worker := 0; worker < limit; worker++ {
 		wg.Add(1)
-		go func() {
+		go func(worker int) {
 			defer wg.Done()
+			if worker > 0 {
+				delay := time.Duration(worker)*segmentStartStagger +
+					time.Duration(rand.Int64N(int64(segmentStartJitter)))
+				timer := time.NewTimer(delay)
+				select {
+				case <-roundCtx.Done():
+					timer.Stop()
+					results <- roundCtx.Err()
+					return
+				case <-timer.C:
+				}
+			}
 			var workerErr error
 			for index := range jobs {
 				if err := roundCtx.Err(); err != nil {
 					workerErr = err
+					break
+				}
+				if congested.Load() {
 					break
 				}
 				current := progress.current(index)
@@ -458,12 +493,16 @@ func (svc *Service) runSegmentRound(
 				}
 				if err := svc.runSegment(roundCtx, file, task, entry, act, work, index, progress); err != nil {
 					workerErr = err
-					cancel()
+					if isCongestionError(err) {
+						congested.Store(true)
+					} else if shouldAbortSegmentRound(err) {
+						cancel()
+					}
 					break
 				}
 			}
 			results <- workerErr
-		}()
+		}(worker)
 	}
 	wg.Wait()
 	close(results)
@@ -651,7 +690,7 @@ func (svc *Service) copySegment(
 func segmentRetryDelay(err error, attempt int) time.Duration {
 	var backendErr *backend.Error
 	if errors.As(err, &backendErr) && backendErr.RetryAfter > 0 {
-		return backendErr.RetryAfter
+		return addRetryJitter(backendErr.RetryAfter)
 	}
 	if attempt < 1 {
 		attempt = 1
@@ -660,7 +699,7 @@ func segmentRetryDelay(err error, attempt int) time.Duration {
 	if delay > 8*time.Second {
 		delay = 8 * time.Second
 	}
-	return delay
+	return addRetryJitter(delay)
 }
 
 func isCongestionError(err error) bool {
@@ -677,9 +716,9 @@ func congestionRetryDelay(err error, attempt int) time.Duration {
 	var backendErr *backend.Error
 	if errors.As(err, &backendErr) && backendErr.RetryAfter > 0 {
 		if backendErr.RetryAfter > 60*time.Second {
-			return 60 * time.Second
+			return addRetryJitter(60 * time.Second)
 		}
-		return backendErr.RetryAfter
+		return addRetryJitter(backendErr.RetryAfter)
 	}
 	if attempt < 1 {
 		attempt = 1
@@ -688,7 +727,27 @@ func congestionRetryDelay(err error, attempt int) time.Duration {
 	if delay > 8*time.Second {
 		delay = 8 * time.Second
 	}
-	return delay
+	return addRetryJitter(delay)
+}
+
+func addRetryJitter(delay time.Duration) time.Duration {
+	return delay + time.Duration(rand.Int64N(int64(250*time.Millisecond)))
+}
+
+func shouldAbortSegmentRound(err error) bool {
+	if errors.Is(err, errRangeUnsupported) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch backend.KindOf(err) {
+	case backend.ErrVersionMismatch, backend.ErrRangeInvalid, backend.ErrProtocol,
+		backend.ErrNotFound, backend.ErrAuth, backend.ErrQuotaExceeded:
+		return true
+	default:
+		return false
+	}
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) error {

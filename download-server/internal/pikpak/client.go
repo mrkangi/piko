@@ -22,14 +22,15 @@ import (
 )
 
 const (
-	defaultAuthBaseURL  = "https://user.mypikpak.com"
-	defaultDriveBaseURL = "https://api-drive.mypikpak.com"
-	userAgent           = "ANDROID-com.pikcloud.pikpak/1.21.0"
-	packageName         = "com.pikcloud.pikpak"
-	clientVersion       = "1.21.0"
-	clientID            = "YNxT9w7GMdWvEOKa"
-	clientSecret        = "dbw2OtmVEeuUvIptb1Coyg"
-	fileKindFolder      = "drive#folder"
+	defaultAuthBaseURL    = "https://user.mypikpak.com"
+	defaultDriveBaseURL   = "https://api-drive.mypikpak.com"
+	userAgent             = "ANDROID-com.pikcloud.pikpak/1.21.0"
+	packageName           = "com.pikcloud.pikpak"
+	clientVersion         = "1.21.0"
+	clientID              = "YNxT9w7GMdWvEOKa"
+	clientSecret          = "dbw2OtmVEeuUvIptb1Coyg"
+	fileKindFolder        = "drive#folder"
+	maxStreamConnsPerHost = 5
 )
 
 var captchaSalts = []string{
@@ -117,7 +118,8 @@ func NewClient(opts Options) (*Client, error) {
 		Proxy:               proxyFunc,
 		DisableCompression:  true,
 		MaxIdleConns:        16,
-		MaxIdleConnsPerHost: 8,
+		MaxIdleConnsPerHost: maxStreamConnsPerHost,
+		MaxConnsPerHost:     maxStreamConnsPerHost,
 		IdleConnTimeout:     90 * time.Second,
 	}
 
@@ -305,6 +307,11 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 
 	if err := validateStreamResponse(resp, expectation.Offset, expectation.Length, entry.Size); err != nil {
 		_ = resp.Body.Close()
+		if backendErr, ok := err.(*backend.Error); ok && backendErr.StatusCode == http.StatusServiceUnavailable {
+			if hints := downloadURLHints(rawURL); hints != "" {
+				backendErr.Message += hints
+			}
+		}
 		return nil, err
 	}
 
@@ -315,6 +322,33 @@ func (client *Client) OpenOriginal(ctx context.Context, expectation backend.Open
 		VerifiedVersion: entry.VersionKey(),
 		Verifiable:      entry.HasStrongVersion(),
 	}, nil
+}
+
+func downloadURLHints(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	query := parsed.Query()
+	hints := make([]string, 0, 2)
+	if query.Get("x_limited") == "1" {
+		hints = append(hints, "x_limited=1")
+	}
+	if expire := query.Get("expire"); expire != "" {
+		if seconds, err := strconv.ParseInt(expire, 10, 64); err == nil {
+			remaining := time.Until(time.Unix(seconds, 0))
+			switch {
+			case remaining <= 0:
+				hints = append(hints, "url_expired")
+			case remaining < 10*time.Minute:
+				hints = append(hints, "url_expires_soon")
+			}
+		}
+	}
+	if len(hints) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(hints, ", ") + ")"
 }
 
 func validateStreamResponse(resp *http.Response, offset int64, length int64, expectedTotal int64) error {
@@ -408,6 +442,7 @@ func validateStreamResponse(resp *http.Response, offset int64, length int64, exp
 func (client *Client) getFileDetail(ctx context.Context, objectID string) (apiFileDetail, error) {
 	query := url.Values{}
 	query.Set("thumbnail_size", "SIZE_MEDIUM")
+	query.Set("usage", "FETCH")
 	endpoint := client.opts.DriveBaseURL + "/drive/v1/files/" + url.PathEscape(objectID) + "?" + query.Encode()
 
 	var lastErr error

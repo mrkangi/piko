@@ -3,6 +3,7 @@ package pikpak
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,6 +90,53 @@ func TestListPageRetriesSamePageOnCaptchaAndRejectsErrorAsEmpty(t *testing.T) {
 	}
 	if page2Calls.Load() != 2 {
 		t.Fatalf("expected exact 2 calls to page 2, got %d", page2Calls.Load())
+	}
+}
+
+func TestDownloadURLHints(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "clean",
+			url:  fmt.Sprintf("https://dl.example.com/file?x_limited=0&expire=%d", now.Add(time.Hour).Unix()),
+			want: "",
+		},
+		{
+			name: "limited",
+			url:  "https://dl.example.com/file?x_limited=1",
+			want: " (x_limited=1)",
+		},
+		{
+			name: "expired",
+			url:  fmt.Sprintf("https://dl.example.com/file?expire=%d", now.Add(-time.Minute).Unix()),
+			want: " (url_expired)",
+		},
+		{
+			name: "expires soon",
+			url:  fmt.Sprintf("https://dl.example.com/file?expire=%d", now.Add(5*time.Minute).Unix()),
+			want: " (url_expires_soon)",
+		},
+		{
+			name: "limited and expired",
+			url:  fmt.Sprintf("https://dl.example.com/file?x_limited=1&expire=%d", now.Add(-time.Minute).Unix()),
+			want: " (x_limited=1, url_expired)",
+		},
+		{
+			name: "invalid",
+			url:  "://bad",
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := downloadURLHints(tc.url); got != tc.want {
+				t.Fatalf("downloadURLHints(%q) = %q, want %q", tc.url, got, tc.want)
+			}
+		})
 	}
 }
 
