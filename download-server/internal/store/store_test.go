@@ -96,6 +96,87 @@ func TestScanPublishBaselineAndConsecutiveMisses(t *testing.T) {
 	}
 }
 
+func TestCompleteExistingMarksTaskAndUpsertsDelivery(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open store failed: %v", err)
+	}
+	defer st.Close()
+
+	src, err := st.CreateSource(ctx, Source{
+		AccountID:       "acct_1",
+		RemoteRootID:    "dir_1",
+		RemoteRootPath:  "/Movies",
+		LocalAlias:      "Movies",
+		InitialMode:     InitialModeDownloadExisting,
+		Enabled:         true,
+		ScanIntervalSec: 600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enqueue := func(versionKey string, size int64) DownloadTask {
+		run, _, err := st.StartScanRun(ctx, src.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.InsertScanEntries(ctx, []ScanEntry{{
+			ScanRunID: run.ID, SourceID: src.ID, RemoteID: "f1", ParentRemoteID: "dir_1",
+			RelativePath: "movie.mkv", Name: "movie.mkv", Size: size, GCID: "G1",
+			VersionKey: versionKey, StrongVersion: true, RemoteModifiedAt: time.Now().Unix(),
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		pub, err := st.PublishScanRun(ctx, run.ID, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pub.EnqueuedTasks) != 1 {
+			t.Fatalf("expected 1 enqueued task, got %d", len(pub.EnqueuedTasks))
+		}
+		return pub.EnqueuedTasks[0]
+	}
+	adopt := func(task DownloadTask, size int64) {
+		claimed, err := st.ClaimNextTask(ctx, time.Now().Unix())
+		if err != nil || claimed == nil {
+			t.Fatalf("ClaimNextTask failed: %v", err)
+		}
+		if err := st.CompleteExisting(ctx, claimed.ID, claimed.Attempt, Delivery{
+			SourceID:     claimed.SourceID,
+			RemoteID:     claimed.RemoteID,
+			VersionKey:   claimed.VersionKey,
+			LocalRelPath: claimed.TargetRelPath,
+			Size:         size,
+			RemoteGCID:   claimed.GCID,
+		}); err != nil {
+			t.Fatalf("CompleteExisting failed: %v", err)
+		}
+	}
+
+	task1 := enqueue("gcid:G1:10", 10)
+	adopt(task1, 10)
+	got1, err := st.GetTask(ctx, task1.ID)
+	if err != nil || got1.State != TaskCompleted || !got1.LocalExisting {
+		t.Fatalf("expected COMPLETED local_existing task, got %+v err=%v", got1, err)
+	}
+
+	task2 := enqueue("gcid:G1:20", 20)
+	adopt(task2, 20)
+	views, err := st.ListFileViews(ctx, "", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 || views[0].Delivery == nil {
+		t.Fatalf("expected one file view with delivery, got %+v", views)
+	}
+	dlv := views[0].Delivery
+	if !dlv.Preexisting || dlv.VersionKey != "gcid:G1:20" || dlv.Size != 20 {
+		t.Fatalf("delivery was not upserted for the new version: %+v", dlv)
+	}
+}
+
 func TestTaskCommitBoundaryAndControlIntents(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(t.TempDir())

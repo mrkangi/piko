@@ -194,7 +194,43 @@ func (svc *Service) StartupRecover(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return svc.reconcileExistingConflicts(ctx)
+}
+
+// reconcileExistingConflicts 把旧版本遗留的「目标已存在」冲突直接标记为完成，
+// 采用本地文件。路径不可读或符号链接等异常仍保留冲突状态。
+func (svc *Service) reconcileExistingConflicts(ctx context.Context) error {
+	for {
+		tasks, err := svc.store.ListTasks(ctx, store.TaskConflict, "", 200, 0)
+		if err != nil {
+			return err
+		}
+		adopted := 0
+		for _, task := range tasks {
+			exists, regular, size, statErr := svc.fsStore().DestinationInfo(task.TargetRelPath)
+			if statErr != nil || !exists || !regular {
+				continue
+			}
+			if err := svc.adoptExisting(ctx, task, size); err == nil {
+				_ = svc.fsStore().RemoveStaging(task.ID)
+				adopted++
+			}
+		}
+		if adopted == 0 {
+			return nil
+		}
+	}
+}
+
+func (svc *Service) adoptExisting(ctx context.Context, task store.DownloadTask, localSize int64) error {
+	return svc.store.CompleteExisting(ctx, task.ID, 0, store.Delivery{
+		SourceID:     task.SourceID,
+		RemoteID:     task.RemoteID,
+		VersionKey:   task.VersionKey,
+		LocalRelPath: task.TargetRelPath,
+		Size:         localSize,
+		RemoteGCID:   task.GCID,
+	})
 }
 
 func (svc *Service) recoverOne(ctx context.Context, task store.DownloadTask) error {
@@ -232,8 +268,14 @@ func (svc *Service) recoverOne(ctx context.Context, task store.DownloadTask) err
 			_ = fsStore.RemoveStaging(task.ID)
 			return nil
 		}
-		exists, _, _ := fsStore.DestinationExists(task.TargetRelPath)
-		if exists {
+		exists, regular, destSize, statErr := fsStore.DestinationInfo(task.TargetRelPath)
+		if statErr == nil && exists && regular {
+			if adoptErr := svc.adoptExisting(ctx, task, destSize); adoptErr == nil {
+				_ = fsStore.RemoveStaging(task.ID)
+				return nil
+			}
+		}
+		if statErr == nil && exists {
 			return svc.store.RecoverTaskState(ctx, task.ID, store.TaskConflict, store.DesiredNone, reconciledBytes, "conflict", "destination path occupied with mismatched content")
 		}
 		if stagingExists && stagingSize == task.BytesTotal && task.CommitSHA256 != "" {
@@ -251,6 +293,13 @@ func (svc *Service) recoverOne(ctx context.Context, task store.DownloadTask) err
 					}); compErr == nil {
 						_ = fsStore.RemoveStaging(task.ID)
 						return nil
+					}
+				} else if errors.Is(commitErr, localfs.ErrConflict) {
+					if exists, regular, size, statErr := fsStore.DestinationInfo(task.TargetRelPath); statErr == nil && exists && regular {
+						if adoptErr := svc.adoptExisting(ctx, task, size); adoptErr == nil {
+							_ = fsStore.RemoveStaging(task.ID)
+							return nil
+						}
 					}
 				}
 			}
@@ -393,13 +442,20 @@ func (svc *Service) publishTaskOutcome(task store.DownloadTask) {
 
 func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask, act *activeAttempt) {
 	fsStore := svc.fsStore()
-	exists, _, err := fsStore.DestinationExists(task.TargetRelPath)
+	exists, regular, localSize, err := fsStore.DestinationInfo(task.TargetRelPath)
 	if err != nil {
 		_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskFailed, "filesystem_error", err.Error(), 0)
 		return
 	}
 	if exists {
-		_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskConflict, "conflict", "destination path already exists", 0)
+		if !regular {
+			_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskConflict, "conflict", "destination path occupied by a non-file", 0)
+			return
+		}
+		if err := svc.adoptExisting(ctx, task, localSize); err != nil {
+			_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, task.BytesDone, store.TaskFailed, "complete_existing_error", err.Error(), 0)
+		}
+		_ = fsStore.RemoveStaging(task.ID)
 		return
 	}
 
@@ -469,6 +525,12 @@ func (svc *Service) executeAttempt(ctx context.Context, task store.DownloadTask,
 
 	if err := fsStore.CommitStaging(task.ID, task.TargetRelPath); err != nil {
 		if errors.Is(err, localfs.ErrConflict) {
+			if exists, regular, localSize, statErr := fsStore.DestinationInfo(task.TargetRelPath); statErr == nil && exists && regular {
+				if adoptErr := svc.adoptExisting(context.Background(), task, localSize); adoptErr == nil {
+					_ = fsStore.RemoveStaging(task.ID)
+					return
+				}
+			}
 			_, _ = svc.store.FinalizeAttemptStop(context.Background(), task.ID, task.Attempt, entry.Size, store.TaskConflict, "conflict", "destination path occupied during commit", 0)
 			return
 		}

@@ -68,6 +68,43 @@ func TestProbeAndNonOverwritingCommit(t *testing.T) {
 	}
 }
 
+func TestCommitDoesNotOverwriteExistingDestination(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Probe(); err != nil {
+		t.Fatalf("Probe failed: %v", err)
+	}
+
+	target := filepath.Join(store.RootPath(), "Movies/2024/clip.mp4")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("user-owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	file, _, err := store.OpenStagingForAppend("task-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("downloaded-bytes"); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+
+	if err := store.CommitStaging("task-1", "Movies/2024/clip.mp4"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict on existing target, got %v", err)
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || string(raw) != "user-owned" {
+		t.Fatalf("existing target modified: %q err=%v", string(raw), err)
+	}
+}
+
 func TestRejectSymlinkEscapeAndTraversal(t *testing.T) {
 	rootDir := t.TempDir()
 	outsideDir := t.TempDir()

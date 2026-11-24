@@ -165,6 +165,65 @@ func TestM5TwoSourcesRecursiveDownloadSoftDeleteAndRestart(t *testing.T) {
 	}
 }
 
+func TestRunServerFallsBackWhenSavedDownloadDirUnusable(t *testing.T) {
+	dataDir := t.TempDir()
+	goodDir := t.TempDir()
+	badDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	preparedStore, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminHash, err := secret.HashPassword("smoke-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preparedStore.CreateAdmin(context.Background(), "admin", adminHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := preparedStore.SaveSettings(context.Background(), map[string]string{"download_dir": badDir}); err != nil {
+		t.Fatal(err)
+	}
+	_ = preparedStore.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	cfg := config.Config{
+		ListenAddr:  addr,
+		DataDir:     dataDir,
+		DownloadDir: goodDir,
+	}
+	fake := backend.NewFakeBackend()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runServer(ctx, cfg, fake, fake) }()
+
+	baseURL := "http://" + addr
+	waitReady(t, baseURL)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	cookies, _ := loginAPI(t, client, baseURL, "admin", "smoke-pass")
+	settings := getJSON(t, client, baseURL+"/api/system/settings", cookies)
+	if settings["download_dir"] != goodDir {
+		t.Fatalf("expected fallback download_dir %q, got %v", goodDir, settings["download_dir"])
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("shutdown error: %v", err)
+	}
+}
+
 func waitReady(t *testing.T, baseURL string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

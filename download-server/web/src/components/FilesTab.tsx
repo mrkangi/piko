@@ -138,10 +138,17 @@ export function FilesTab({
                                   远端路径已变更
                                 </span>
                               )}
+                              {item.delivery.preexisting && (
+                                <span className="rounded border border-cyan-500/30 bg-cyan-500/15 px-1.5 py-0.5 text-[11px] text-cyan-300">
+                                  本地已存在
+                                </span>
+                              )}
                             </div>
-                            <div className="text-[11px] font-mono text-slate-500">
-                              SHA256: {item.delivery.local_sha256.slice(0, 16)}…
-                            </div>
+                            {item.delivery.local_sha256 && (
+                              <div className="text-[11px] font-mono text-slate-500">
+                                SHA256: {item.delivery.local_sha256.slice(0, 16)}…
+                              </div>
+                            )}
                           </div>
                         ) : item.latest_task ? (
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${TASK_STATE_META[item.latest_task.state].badgeClass}`}>

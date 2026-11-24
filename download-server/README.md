@@ -137,11 +137,28 @@ sv up download-server        # 启动服务
 cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Setup Token
 ```
 
-### Termux 下载目录注意事项
+### 外置存储与 SD 卡
 
-- 服务启动时会对下载目录执行 `Probe()`，校验同卷原子硬链接（`link`）和目录 `fsync`。
-- Android 共享存储（`/sdcard`、`/storage/emulated/0`、`~/storage/downloads`）采用 FUSE/sdcardfs，**不支持硬链接**，设为下载目录会导致探测失败。
-- 请保持下载目录位于 Termux 内部存储（如默认的 `$HOME/PikoDownloads`）。
+- 下载目录支持 Android 共享存储（FUSE）与 exFAT/FAT32 SD 卡：交付只依赖同卷改名，不再要求硬链接。
+- 目标路径已有文件时直接采用本地文件，任务标记 `COMPLETED` 并带「本地已存在」标记，不下载、不覆盖；远端后续更新也不会改写它。
+- 目录 `fsync` 不被文件系统支持时自动降级；崩溃后启动恢复会用已持久化的提交摘要重新核对目标文件。
+- Android 共享存储可直接选 `/sdcard`、`/storage/emulated/0` 或 `~/storage/shared` 下的目录，例如 `~/storage/shared/Download/Piko`。
+- **数据目录**（SQLite、实例锁、`secret.key`、PikPak 会话）仍建议留在 Termux 内部存储。共享存储的 POSIX 文件锁不可靠，把数据目录放上去可能导致单实例锁或数据库异常。
+- 外置存储写入通常更慢，建议在管理页调低并发；SD 卡损坏或拔出会导致任务失败，恢复后重新扫描即可续传。
+
+### 旧版本报 `hardlink ... permission denied`
+
+只有旧版本依赖硬链接。升级前若无法启动，可先把已保存的下载目录改回内部存储：
+
+```bash
+sv down download-server
+pkg install -y sqlite
+sqlite3 "$HOME/.pikpak/downloader/download-server.db" \
+  "UPDATE app_settings SET value = '$HOME/PikoDownloads' WHERE key = 'download_dir';"
+sv up download-server
+```
+
+升级后的版本在共享存储上可直接启动，也可以留在外部目录。
 
 ## 管理页
 
@@ -152,7 +169,7 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - **PikPak 账号**：验证并更新账号密码；有活动下载任务时需先暂停。
 - **管理员密码**：修改 Web 管理面板登录密码。
 - **通知渠道**：添加飞书群机器人或通用 Webhook，可分别启用/停用、测试发送和选择通知事件。
-- **文件索引**：筛选远端缺失、路径变更和本地交付记录。
+- **文件索引**：筛选远端缺失、路径变更和本地交付记录；采用本地文件的任务与文件会显示「本地已存在」标记。
 
 默认扫描周期为 5 分钟。扫描仍由服务端单线程调度，避免同时打满 PikPak API。
 
@@ -180,7 +197,7 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - 参考 `Dockerfile` 与 `docker-compose.example.yml`。
 - 容器以非 root 用户（`10001:10001`）运行，不挂载 Docker socket。
 - 数据目录挂载到 `/data/.pikpak/downloader`，下载目录默认位于 `/data/PikoDownloads`，可在 Web 管理页修改。
-- `/data` 必须支持同卷硬链接、目录 fsync 和不覆盖交付；启动时会执行 `Probe()` 校验，不支持的挂载会拒绝启动。
+- `/data` 必须支持同卷改名与文件 `fsync`；启动时会执行 `Probe()` 校验，不满足的挂载会拒绝启动。目录 fsync 不支持时会自动降级。
 - 不要让多个实例共享同一数据目录；服务通过 `server.lock` 强制单实例。
 - 默认监听 `0.0.0.0:7788`，首次配置必须使用控制台打印的 Setup Token。公网部署请放在 TLS 反向代理后。
 

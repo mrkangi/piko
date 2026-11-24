@@ -676,7 +676,7 @@ func (store *Store) ListTasks(ctx context.Context, stateFilter string, sourceID 
 	query := `SELECT id, source_id, remote_id, version_key, gcid, strong_version,
 		remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
 		priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
-		error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+		local_existing, error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
 		FROM download_tasks WHERE 1=1`
 	var args []any
 	if strings.TrimSpace(stateFilter) != "" {
@@ -939,27 +939,87 @@ func (store *Store) CompleteCommit(ctx context.Context, taskID string, attempt i
 	if delivery.DeliveredAt == 0 {
 		delivery.DeliveredAt = now
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO deliveries(
-			id, source_id, remote_id, version_key, task_id, local_rel_path,
-			size, local_sha256, remote_gcid, verified_remote_hash, delivered_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		delivery.ID, delivery.SourceID, delivery.RemoteID, delivery.VersionKey, taskID, delivery.LocalRelPath,
-		delivery.Size, delivery.LocalSHA256, delivery.RemoteGCID, boolToInt(delivery.VerifiedRemoteHash), delivery.DeliveredAt,
-	); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return localfs.ErrConflict
-		}
+	if err := upsertDeliveryTx(ctx, tx, taskID, delivery); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE download_tasks SET state = 'COMPLETED', bytes_done = ?, bytes_total = ?, finished_at = ?, updated_at = ?
+		UPDATE download_tasks SET state = 'COMPLETED', local_existing = 0, bytes_done = ?, bytes_total = ?, finished_at = ?, updated_at = ?
 		WHERE id = ?`,
 		delivery.Size, delivery.Size, now, now, taskID,
 	); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// CompleteExisting 记录「目标文件已存在，直接采用本地文件」：任务标记完成，
+// 交付记录带 preexisting 标记，不下载也不覆盖。
+func (store *Store) CompleteExisting(ctx context.Context, taskID string, attempt int, delivery Delivery) error {
+	tx, err := store.beginImmediate(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	task, err := getTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if attempt > 0 && task.Attempt != attempt {
+		return ErrConflict
+	}
+	switch task.State {
+	case TaskQueued, TaskRunning, TaskVerifying, TaskCommitting, TaskConflict, TaskRetryWait, TaskFailed:
+	default:
+		return ErrConflict
+	}
+	if delivery.ID == "" {
+		delivery.ID = newID("dlv")
+	}
+	now := time.Now().Unix()
+	if delivery.DeliveredAt == 0 {
+		delivery.DeliveredAt = now
+	}
+	delivery.Preexisting = true
+	if err := upsertDeliveryTx(ctx, tx, taskID, delivery); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE download_tasks
+		SET state = 'COMPLETED', local_existing = 1, desired_action = '',
+			bytes_done = bytes_total, commit_sha256 = '',
+			error_code = '', error_message = '', next_retry_at = 0,
+			finished_at = ?, updated_at = ?
+		WHERE id = ?`,
+		now, now, taskID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func upsertDeliveryTx(ctx context.Context, tx *sql.Tx, taskID string, delivery Delivery) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO deliveries(
+			id, source_id, remote_id, version_key, task_id, local_rel_path,
+			size, local_sha256, remote_gcid, verified_remote_hash, preexisting, delivered_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(local_rel_path) DO UPDATE SET
+			source_id = excluded.source_id,
+			remote_id = excluded.remote_id,
+			version_key = excluded.version_key,
+			task_id = excluded.task_id,
+			size = excluded.size,
+			local_sha256 = excluded.local_sha256,
+			remote_gcid = excluded.remote_gcid,
+			verified_remote_hash = excluded.verified_remote_hash,
+			preexisting = excluded.preexisting,
+			delivered_at = excluded.delivered_at`,
+		delivery.ID, delivery.SourceID, delivery.RemoteID, delivery.VersionKey, taskID, delivery.LocalRelPath,
+		delivery.Size, delivery.LocalSHA256, delivery.RemoteGCID, boolToInt(delivery.VerifiedRemoteHash),
+		boolToInt(delivery.Preexisting), delivery.DeliveredAt,
+	)
+	return err
 }
 
 func (store *Store) FinalizeAttemptStop(ctx context.Context, taskID string, attempt int, bytesDone int64, finalState string, errorCode string, errorMessage string, nextRetryAt int64) (DownloadTask, error) {
@@ -1013,7 +1073,7 @@ func (store *Store) ListNonTerminalTasks(ctx context.Context) ([]DownloadTask, e
 		SELECT id, source_id, remote_id, version_key, gcid, strong_version,
 			remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
 			priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
-			error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+			local_existing, error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
 		FROM download_tasks
 		WHERE state NOT IN ('COMPLETED', 'CANCELED', 'FAILED', 'CONFLICT')
 		ORDER BY created_at ASC`)
@@ -1139,18 +1199,19 @@ func (store *Store) ListFileViews(ctx context.Context, sourceID string, remoteSt
 
 func (store *Store) getLatestDelivery(ctx context.Context, sourceID string, remoteID string) (*Delivery, error) {
 	var dlv Delivery
-	var verified int
+	var verified, preexisting int
 	err := store.db.QueryRowContext(ctx, `
-		SELECT id, source_id, remote_id, version_key, task_id, local_rel_path, size, local_sha256, remote_gcid, verified_remote_hash, delivered_at
+		SELECT id, source_id, remote_id, version_key, task_id, local_rel_path, size, local_sha256, remote_gcid, verified_remote_hash, preexisting, delivered_at
 		FROM deliveries WHERE source_id = ? AND remote_id = ?
 		ORDER BY delivered_at DESC LIMIT 1`, sourceID, remoteID).Scan(
 		&dlv.ID, &dlv.SourceID, &dlv.RemoteID, &dlv.VersionKey, &dlv.TaskID, &dlv.LocalRelPath,
-		&dlv.Size, &dlv.LocalSHA256, &dlv.RemoteGCID, &verified, &dlv.DeliveredAt,
+		&dlv.Size, &dlv.LocalSHA256, &dlv.RemoteGCID, &verified, &preexisting, &dlv.DeliveredAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	dlv.VerifiedRemoteHash = verified == 1
+	dlv.Preexisting = preexisting == 1
 	return &dlv, nil
 }
 
@@ -1159,7 +1220,7 @@ func (store *Store) getLatestTask(ctx context.Context, sourceID string, remoteID
 		SELECT id, source_id, remote_id, version_key, gcid, strong_version,
 			remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
 			priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
-			error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+			local_existing, error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
 		FROM download_tasks WHERE source_id = ? AND remote_id = ?
 		ORDER BY created_at DESC LIMIT 1`, sourceID, remoteID)
 	task, err := scanTaskRow(row)
@@ -1474,7 +1535,7 @@ func getTaskQuery(ctx context.Context, runner queryRunner, id string) (DownloadT
 		SELECT id, source_id, remote_id, version_key, gcid, strong_version,
 			remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
 			priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
-			error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+			local_existing, error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
 		FROM download_tasks WHERE id = ?`, id)
 	task, err := scanTaskRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1485,17 +1546,18 @@ func getTaskQuery(ctx context.Context, runner queryRunner, id string) (DownloadT
 
 func scanTaskRow(row rowScanner) (DownloadTask, error) {
 	var task DownloadTask
-	var strong int
+	var strong, localExisting int
 	err := row.Scan(
 		&task.ID, &task.SourceID, &task.RemoteID, &task.VersionKey, &task.GCID, &strong,
 		&task.RemotePath, &task.TargetRelPath, &task.State, &task.DesiredAction, &task.Attempt, &task.MaxAttempts,
 		&task.Priority, &task.BytesTotal, &task.BytesDone, &task.StagingRelPath, &task.CommitSHA256,
-		&task.ErrorCode, &task.ErrorMessage, &task.NextRetryAt, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.FinishedAt,
+		&localExisting, &task.ErrorCode, &task.ErrorMessage, &task.NextRetryAt, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.FinishedAt,
 	)
 	if err != nil {
 		return DownloadTask{}, err
 	}
 	task.StrongVersion = strong == 1
+	task.LocalExisting = localExisting == 1
 	return task, nil
 }
 

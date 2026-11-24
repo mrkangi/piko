@@ -59,6 +59,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	maxConcurrent := config.DefaultMaxConcurrent
 	scanInterval := config.DefaultScanInterval
 	minFreeSpace := int64(config.DefaultMinFreeSpaceBytes)
+	defaultDownloadDir := cfg.DownloadDir
 	if saved, err := st.GetSettings(ctx); err == nil {
 		if dir := saved["download_dir"]; dir != "" && dir != cfg.DataDir {
 			cfg.DownloadDir = dir
@@ -74,14 +75,11 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 		}
 	}
 
-	fsStore, err := localfs.Open(cfg.DownloadDir)
+	fsStore, err := openDownloadStore(ctx, &cfg, st, defaultDownloadDir)
 	if err != nil {
 		return err
 	}
 	defer fsStore.Close()
-	if err := fsStore.Probe(); err != nil {
-		return fmt.Errorf("download volume probe failed: %w", err)
-	}
 
 	runtime := backend.NewRuntime()
 	if catOverride != nil && contentOverride != nil {
@@ -197,4 +195,40 @@ func portSuffix(addr string) string {
 		}
 	}
 	return ":" + strconv.Itoa(config.DefaultPort)
+}
+
+// openDownloadStore 打开并探测下载目录。已保存的目录位于不支持硬链接的
+// 文件系统（典型为 Android 共享存储）时回退到默认目录，避免服务因一份
+// 历史设置而无法启动、连管理页都进不去。
+func openDownloadStore(ctx context.Context, cfg *config.Config, st *store.Store, defaultDir string) (*localfs.Store, error) {
+	candidates := []string{cfg.DownloadDir}
+	if defaultDir != "" && defaultDir != cfg.DownloadDir {
+		candidates = append(candidates, defaultDir)
+	}
+
+	var lastErr error
+	for _, dir := range candidates {
+		fsStore, err := localfs.Open(dir)
+		if err != nil {
+			lastErr = fmt.Errorf("open download directory %s: %w", dir, err)
+			continue
+		}
+		if err := fsStore.Probe(); err != nil {
+			_ = fsStore.Close()
+			lastErr = fmt.Errorf("download volume probe failed for %s: %w", dir, err)
+			continue
+		}
+		if dir != cfg.DownloadDir {
+			log.Printf("download directory %s is unusable, falling back to %s: %v", cfg.DownloadDir, dir, lastErr)
+			cfg.DownloadDir = dir
+			if err := st.SaveSettings(ctx, map[string]string{"download_dir": dir}); err != nil {
+				log.Printf("persist fallback download directory: %v", err)
+			}
+		}
+		return fsStore, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no usable download directory")
+	}
+	return nil, lastErr
 }

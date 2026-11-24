@@ -127,6 +127,7 @@ type DownloadTask struct {
 	BytesDone      int64  `json:"bytes_done"`
 	StagingRelPath string `json:"staging_rel_path"`
 	CommitSHA256   string `json:"commit_sha256"`
+	LocalExisting  bool   `json:"local_existing"`
 	ErrorCode      string `json:"error_code"`
 	ErrorMessage   string `json:"error_message"`
 	NextRetryAt    int64  `json:"next_retry_at"`
@@ -147,6 +148,7 @@ type Delivery struct {
 	LocalSHA256        string `json:"local_sha256"`
 	RemoteGCID         string `json:"remote_gcid"`
 	VerifiedRemoteHash bool   `json:"verified_remote_hash"`
+	Preexisting        bool   `json:"preexisting"`
 	DeliveredAt        int64  `json:"delivered_at"`
 }
 

@@ -56,6 +56,7 @@ export interface TaskView {
   bytes_done: number
   staging_rel_path: string
   commit_sha256: string
+  local_existing: boolean
   error_code: string
   error_message: string
   next_retry_at: number
@@ -100,6 +101,7 @@ export interface Delivery {
   local_sha256: string
   remote_gcid: string
   verified_remote_hash: boolean
+  preexisting: boolean
   delivered_at: number
 }
 

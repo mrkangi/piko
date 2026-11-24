@@ -235,7 +235,7 @@ func TestCommitCrashRecoveryAndDestinationConflict(t *testing.T) {
 		t.Fatalf("expected COMMITTING crash to recover to COMPLETED, got %+v err=%v", recovered, err)
 	}
 
-	// Verify cancel prevents scan re-enqueue and destination conflict never overwrites.
+	// A pre-existing local file is adopted and marked as completed, never overwritten.
 	fake.PutFile("f2", "d1", "existing.bin", "GEX", []byte("new-content"), time.Now())
 	if err := os.WriteFile(filepath.Join(downloadDir, "Docs", "existing.bin"), []byte("user-owned!"), 0o644); err != nil {
 		t.Fatal(err)
@@ -250,26 +250,35 @@ func TestCommitCrashRecoveryAndDestinationConflict(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		got, _ := st.GetTask(ctx, task2.ID)
-		if got.State == store.TaskConflict {
+		if got.State == store.TaskCompleted {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	got2, _ := st.GetTask(ctx, task2.ID)
-	if got2.State != store.TaskConflict {
-		t.Fatalf("expected CONFLICT on existing destination file, got %s", got2.State)
+	if got2.State != store.TaskCompleted || !got2.LocalExisting {
+		t.Fatalf("expected COMPLETED with local_existing on existing file, got %+v", got2)
 	}
 	existingBytes, _ := os.ReadFile(filepath.Join(downloadDir, "Docs", "existing.bin"))
 	if string(existingBytes) != "user-owned!" {
 		t.Fatalf("destination file was modified: %q", string(existingBytes))
 	}
-
-	if _, err := dl.CancelTask(ctx, task2.ID); err != nil {
-		t.Fatalf("CancelTask on conflict failed: %v", err)
+	views, err := st.ListFileViews(ctx, "", "", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPreexisting := false
+	for _, view := range views {
+		if view.RemoteObject.RemoteID == task2.RemoteID && view.Delivery != nil {
+			foundPreexisting = view.Delivery.Preexisting
+		}
+	}
+	if !foundPreexisting {
+		t.Fatalf("expected delivery to be marked preexisting")
 	}
 	pub3, err := cat.ScanSource(ctx, src.ID)
 	if err != nil || len(pub3.EnqueuedTasks) != 0 {
-		t.Fatalf("canceled task version should not be re-enqueued: %+v err=%v", pub3.EnqueuedTasks, err)
+		t.Fatalf("completed task version should not be re-enqueued: %+v err=%v", pub3.EnqueuedTasks, err)
 	}
 	_ = errors.New("")
 }

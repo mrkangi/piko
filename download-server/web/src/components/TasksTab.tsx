@@ -162,9 +162,16 @@ export function TasksTab({
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
-                          {meta.label}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
+                            {meta.label}
+                          </span>
+                          {task.local_existing && (
+                            <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2 py-0.5 text-[11px] text-cyan-300">
+                              本地已存在
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 min-w-[180px]">

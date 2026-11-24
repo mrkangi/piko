@@ -25,6 +25,11 @@ export function TaskDetailDrawer({ task, sourceName, onClose, onAction }: Props)
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
                 {meta.label}
               </span>
+              {task.local_existing && (
+                <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2 py-0.5 text-[11px] text-cyan-300">
+                  本地已存在
+                </span>
+              )}
               <span className="text-xs text-slate-400">{sourceName}</span>
             </div>
             <h3 className="mt-1 truncate text-base font-semibold text-slate-100">{task.target_rel_path}</h3>

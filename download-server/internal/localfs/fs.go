@@ -81,30 +81,37 @@ func (store *Store) Probe() error {
 
 	srcRel := path.Join(probeDir, "src.tmp")
 	dstRel := path.Join(probeDir, "dst.tmp")
-	srcFile, err := store.root.OpenFile(srcRel, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("probe create file: %w", err)
+	if err := store.writeProbeFile(srcRel); err != nil {
+		return err
 	}
-	if _, err := srcFile.WriteString("probe"); err != nil {
-		_ = srcFile.Close()
-		return fmt.Errorf("probe write: %w", err)
-	}
-	if err := srcFile.Sync(); err != nil {
-		_ = srcFile.Close()
-		return fmt.Errorf("probe fsync: %w", err)
-	}
-	_ = srcFile.Close()
 
-	if err := store.root.Link(srcRel, dstRel); err != nil {
-		return fmt.Errorf("filesystem does not support non-overwriting atomic hardlink delivery: %w", err)
+	if err := store.root.Rename(srcRel, dstRel); err != nil {
+		return fmt.Errorf("probe rename delivery: %w", err)
 	}
-	if err := store.root.Link(srcRel, dstRel); !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("filesystem link did not enforce non-overwrite semantics: %v", err)
+	if _, err := store.root.Lstat(dstRel); err != nil {
+		return fmt.Errorf("probe renamed target: %w", err)
 	}
-	if err := store.syncDir(probeDir); err != nil {
+
+	if err := ignoreDirSyncUnsupported(store.syncDir(probeDir)); err != nil {
 		return fmt.Errorf("probe directory sync: %w", err)
 	}
 	return nil
+}
+
+func (store *Store) writeProbeFile(rel string) error {
+	file, err := store.root.OpenFile(rel, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("probe create file: %w", err)
+	}
+	if _, err := file.WriteString("probe"); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("probe write: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("probe fsync: %w", err)
+	}
+	return file.Close()
 }
 
 func StagingRelPath(taskID string) (string, error) {
@@ -181,24 +188,31 @@ func (store *Store) RemoveStaging(taskID string) error {
 }
 
 func (store *Store) DestinationExists(relTargetPath string) (bool, int64, error) {
+	exists, _, size, err := store.DestinationInfo(relTargetPath)
+	return exists, size, err
+}
+
+// DestinationInfo 返回目标是否存在、是否为普通文件以及大小。目录存在时
+// exists 为真但 isRegular 为假，调用方不能把目录当作可采用的本地文件。
+func (store *Store) DestinationInfo(relTargetPath string) (bool, bool, int64, error) {
 	cleanRel, err := validateRelativeTarget(relTargetPath)
 	if err != nil {
-		return false, 0, err
+		return false, false, 0, err
 	}
 	if err := store.rejectSymlinks(cleanRel); err != nil {
-		return false, 0, err
+		return false, false, 0, err
 	}
 	info, err := store.root.Lstat(cleanRel)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, 0, nil
+			return false, false, 0, nil
 		}
-		return false, 0, err
+		return false, false, 0, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return true, 0, ErrSymlinkBlocked
+		return true, false, 0, ErrSymlinkBlocked
 	}
-	return true, info.Size(), nil
+	return true, info.Mode().IsRegular(), info.Size(), nil
 }
 
 func (store *Store) ComputeStagingDigest(taskID string) (int64, string, error) {
@@ -246,13 +260,18 @@ func (store *Store) CommitStaging(taskID string, relTargetPath string) error {
 		return err
 	}
 
-	if err := store.root.Link(stagingRel, cleanRel); err != nil {
+	if _, err := store.root.Lstat(cleanRel); err == nil {
+		return ErrConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := store.root.Rename(stagingRel, cleanRel); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return ErrConflict
 		}
 		return err
 	}
-	return store.syncDir(parentRel)
+	return ignoreDirSyncUnsupported(store.syncDir(parentRel))
 }
 
 func (store *Store) VerifyCommittedFile(taskID string, relTargetPath string, expectedSize int64, expectedSHA256 string) (bool, error) {

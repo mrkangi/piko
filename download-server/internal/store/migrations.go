@@ -148,4 +148,6 @@ var schemaMigrations = []string{
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL
 	);`,
+	`ALTER TABLE download_tasks ADD COLUMN local_existing INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE deliveries ADD COLUMN preexisting INTEGER NOT NULL DEFAULT 0;`,
 }
