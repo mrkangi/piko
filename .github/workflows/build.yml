@@ -35,6 +35,7 @@ on:
           - android
           - android-macos
           - desktop
+          - download-server
           - all
         default: android
 
@@ -116,6 +117,7 @@ jobs:
             android-macos) android=true; macos=true ;;
             macos) macos=true ;;
             desktop) windows=true; macos=true; linux=true ;;
+            download-server) ;;
             all) android=true; windows=true; macos=true; linux=true ;;
             *)
               echo "Unknown platforms: $platforms"
@@ -130,6 +132,43 @@ jobs:
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
           echo "macos=$macos" >> "$GITHUB_OUTPUT"
           echo "linux=$linux" >> "$GITHUB_OUTPUT"
+
+  download-server:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: download-server/web/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: download-server/go.sum
+
+      - name: Test download server
+        working-directory: download-server
+        run: go test -race ./...
+
+      - name: Build all download server binaries
+        working-directory: download-server
+        env:
+          ARTIFACT_PREFIX: download-server-${{ needs.version.outputs.name }}
+        run: bash scripts/build-all.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: download-server-dist
+          path: |
+            download-server/bin/download-server-${{ needs.version.outputs.name }}-*
+            download-server/bin/SHA256SUMS.txt
+            download-server/bin/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 7
 
   android:
     needs: version
@@ -345,7 +384,7 @@ jobs:
   # 没构建的桌面 job 会被跳过，所以这里用 always() + 结果检查，而不是默认的 needs 全成功。
   publish:
     if: always() && github.event_name == 'push' && !cancelled() && !contains(needs.*.result, 'failure')
-    needs: [version, android, windows, macos, linux]
+    needs: [version, download-server, android, windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -372,6 +411,7 @@ jobs:
 
           - Android：按 ABI 区分的 APK；签名与之前的测试包一致时可直接覆盖安装。
           - 桌面端（tag 带 \`mac\` 时只有 macOS；带 \`desktop\` 时为 Windows x64 的 7z / MSI、macOS arm64 DMG、Linux x64 AppImage）。
+          - 下载服务：所有平台二进制、SHA256SUMS.txt 与 BUILD-INFO.txt。
 
           测试包不进正式更新通道；应用内若提示了新版本，按提示升级即可。
           EOF

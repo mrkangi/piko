@@ -84,6 +84,43 @@ jobs:
           if [[ "$DRY_RUN" != 'true' ]]; then args+=(--require-all); fi
           python3 .github/scripts/render-changelog.py "${args[@]}"
 
+  download-server:
+    needs: [version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: download-server/web/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: download-server/go.sum
+
+      - name: Test download server
+        working-directory: download-server
+        run: go test -race ./...
+
+      - name: Build all download server binaries
+        working-directory: download-server
+        env:
+          ARTIFACT_PREFIX: download-server-${{ needs.version.outputs.name }}
+        run: bash scripts/build-all.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: download-server-dist
+          path: |
+            download-server/bin/download-server-${{ needs.version.outputs.name }}-*
+            download-server/bin/SHA256SUMS.txt
+            download-server/bin/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 7
+
   # 发版前把全部测试在真机器上跑一遍：JVM 与各平台的单测，Android 模拟器、Windows 与 macOS 上的原生行为冒烟
   # （含全新安装与应用内更新），并行跑，全绿才开始打正式包。用已发布的 SDK，与下面的正式构建一致
   test:
@@ -489,7 +526,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [version, android, windows, macos, linux]
+    needs: [version, download-server, android, windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -505,7 +542,7 @@ jobs:
       # 只合并五份正式产物，排除 test job 上传的 windows-smoke-dist
       - uses: actions/download-artifact@v7
         with:
-          pattern: '{android,windows-x64,windows-arm64,macos,linux}-dist'
+          pattern: '{android,windows-x64,windows-arm64,macos,linux,download-server}-dist'
           path: dist
           merge-multiple: true
 
@@ -524,7 +561,7 @@ jobs:
           # 由 SHA256SUMS.txt 覆盖。
           # 写进文件而不走 job 输出：这一长串 base64 偶然含有某个较短 secret 的值时，Actions 会
           # 以「可能含 secret」为由丢掉整条输出（Bilby 发版时撞上过）。文件放在 dist 外，免得被当成附件
-          (cd dist && sha256sum *.apk *.msi *.dmg *.AppImage *.tar.gz *.7z *.zip | base64 -w0) > slsa-subjects.b64
+          (cd dist && sha256sum *.apk *.msi *.dmg *.AppImage *.tar.gz *.7z *.zip download-server-* | base64 -w0) > slsa-subjects.b64
 
       - name: Render release notes
         env:
@@ -605,6 +642,7 @@ jobs:
             dist/*.tar.gz
             dist/*.7z
             dist/*.zip
+            dist/download-server-*
 
       # 草稿：releases/latest 看不到它，应用内更新在公开之前不会提示，公开时附件已经齐全
       - name: Publish draft release
