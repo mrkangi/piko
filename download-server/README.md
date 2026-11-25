@@ -256,7 +256,8 @@ tail -f /var/packages/piko-download-server/var/logs/service.log
 修改 `download-server.env` 后执行：
 
 ```bash
-synopkg restart piko-download-server
+synopkg stop piko-download-server
+synopkg start piko-download-server
 ```
 
 ### 升级与卸载
