@@ -171,3 +171,37 @@ export interface NotificationChannel {
   created_at: number
   updated_at: number
 }
+
+export interface LogEntry {
+  seq: number
+  time: number
+  text: string
+}
+
+export interface LogPage {
+  entries: LogEntry[]
+  first_seq: number
+  last_seq: number
+  has_more_before: boolean
+  has_more_after: boolean
+  gap: boolean
+  buffered: number
+  bytes: number
+  max_entries: number
+  max_bytes: number
+  dropped: number
+}
+
+export interface TaskListPage {
+  tasks: TaskView[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface FileListPage {
+  files: FileView[]
+  total: number
+  limit: number
+  offset: number
+}

@@ -667,6 +667,44 @@ func (store *Store) GetTask(ctx context.Context, id string) (DownloadTask, error
 }
 
 func (store *Store) ListTasks(ctx context.Context, stateFilter string, sourceID string, limit int, offset int) ([]DownloadTask, error) {
+	where, args := taskListFilters(stateFilter, sourceID, "")
+	return store.queryTasks(ctx, where, args, limit, offset)
+}
+
+// ListTasksPage returns one page plus the total row count for the same filter,
+// so the web UI can paginate without loading the whole task table.
+func (store *Store) ListTasksPage(ctx context.Context, stateFilter string, sourceID string, search string, limit int, offset int) ([]DownloadTask, int, error) {
+	where, args := taskListFilters(stateFilter, sourceID, search)
+	var total int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM download_tasks`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	tasks, err := store.queryTasks(ctx, where, args, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+func taskListFilters(stateFilter string, sourceID string, search string) (string, []any) {
+	where := ` WHERE 1=1`
+	var args []any
+	if strings.TrimSpace(stateFilter) != "" {
+		where += ` AND state = ?`
+		args = append(args, strings.TrimSpace(stateFilter))
+	}
+	if strings.TrimSpace(sourceID) != "" {
+		where += ` AND source_id = ?`
+		args = append(args, strings.TrimSpace(sourceID))
+	}
+	if needle := strings.ToLower(strings.TrimSpace(search)); needle != "" {
+		where += ` AND (instr(lower(target_rel_path), ?) > 0 OR instr(lower(remote_path), ?) > 0)`
+		args = append(args, needle, needle)
+	}
+	return where, args
+}
+
+func (store *Store) queryTasks(ctx context.Context, where string, args []any, limit int, offset int) ([]DownloadTask, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -677,20 +715,11 @@ func (store *Store) ListTasks(ctx context.Context, stateFilter string, sourceID 
 		remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
 		priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
 		local_existing, error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
-		FROM download_tasks WHERE 1=1`
-	var args []any
-	if strings.TrimSpace(stateFilter) != "" {
-		query += ` AND state = ?`
-		args = append(args, strings.TrimSpace(stateFilter))
-	}
-	if strings.TrimSpace(sourceID) != "" {
-		query += ` AND source_id = ?`
-		args = append(args, strings.TrimSpace(sourceID))
-	}
+		FROM download_tasks` + where
 	query += ` ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
+	queryArgs := append(append([]any{}, args...), limit, offset)
 
-	rows, err := store.db.QueryContext(ctx, query, args...)
+	rows, err := store.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -704,6 +733,62 @@ func (store *Store) ListTasks(ctx context.Context, stateFilter string, sourceID 
 		out = append(out, task)
 	}
 	return out, rows.Err()
+}
+
+type TaskStateTotals struct {
+	Queued    int
+	Paused    int
+	Failed    int
+	Completed int
+}
+
+// TaskStateTotals counts every task, not just the first page. Status cards use
+// this so large queues do not silently stop counting at a page boundary.
+func (store *Store) TaskStateTotals(ctx context.Context) (TaskStateTotals, error) {
+	var totals TaskStateTotals
+	err := store.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN state IN ('QUEUED', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state IN ('PAUSED', 'PAUSING') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state IN ('FAILED', 'CONFLICT') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN state = 'COMPLETED' THEN 1 ELSE 0 END), 0)
+		FROM download_tasks`,
+	).Scan(&totals.Queued, &totals.Paused, &totals.Failed, &totals.Completed)
+	return totals, err
+}
+
+// ListTaskIDsByStates returns every matching task ID for batch actions. The
+// caller applies the per-task state machine afterward.
+func (store *Store) ListTaskIDsByStates(ctx context.Context, sourceID string, states []string) ([]string, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, 0, len(states))
+	args := make([]any, 0, len(states)+1)
+	for _, state := range states {
+		placeholders = append(placeholders, "?")
+		args = append(args, state)
+	}
+	query := `SELECT id FROM download_tasks WHERE state IN (` + strings.Join(placeholders, ",") + `)`
+	if strings.TrimSpace(sourceID) != "" {
+		query += ` AND source_id = ?`
+		args = append(args, strings.TrimSpace(sourceID))
+	}
+	query += ` ORDER BY created_at DESC, rowid DESC`
+	rows, err := store.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (store *Store) RequestPause(ctx context.Context, taskID string) (DownloadTask, error) {
@@ -1144,6 +1229,57 @@ func (store *Store) RecoverTaskState(ctx context.Context, taskID string, newStat
 }
 
 func (store *Store) ListFileViews(ctx context.Context, sourceID string, remoteStateFilter string, limit int, offset int) ([]FileView, error) {
+	where, args := fileViewFilters(sourceID, remoteStateFilter, "")
+	objects, err := store.queryRemoteObjects(ctx, where, args, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return store.buildFileViews(ctx, objects)
+}
+
+// ListFileViewsPage returns one ordered page plus the total object count for
+// the same filters. Search runs in SQL so it can find rows beyond the first
+// page instead of filtering a fixed 500-row candidate window in memory.
+func (store *Store) ListFileViewsPage(ctx context.Context, sourceID string, remoteStateFilter string, search string, limit int, offset int) ([]FileView, int, error) {
+	where, args := fileViewFilters(sourceID, remoteStateFilter, search)
+	var total int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM remote_objects ro`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	objects, err := store.queryRemoteObjects(ctx, where, args, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	views, err := store.buildFileViews(ctx, objects)
+	if err != nil {
+		return nil, 0, err
+	}
+	return views, total, nil
+}
+
+func fileViewFilters(sourceID string, remoteStateFilter string, search string) (string, []any) {
+	where := ` WHERE ro.is_dir = 0`
+	var args []any
+	if strings.TrimSpace(sourceID) != "" {
+		where += ` AND ro.source_id = ?`
+		args = append(args, strings.TrimSpace(sourceID))
+	}
+	if strings.TrimSpace(remoteStateFilter) != "" {
+		where += ` AND ro.remote_state = ?`
+		args = append(args, strings.TrimSpace(remoteStateFilter))
+	}
+	if needle := strings.ToLower(strings.TrimSpace(search)); needle != "" {
+		where += ` AND (instr(lower(ro.relative_path), ?) > 0 OR EXISTS (
+			SELECT 1 FROM deliveries d
+			WHERE d.source_id = ro.source_id AND d.remote_id = ro.remote_id
+				AND instr(lower(d.local_rel_path), ?) > 0
+		))`
+		args = append(args, needle, needle)
+	}
+	return where, args
+}
+
+func (store *Store) queryRemoteObjects(ctx context.Context, where string, args []any, limit int, offset int) ([]RemoteObject, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -1151,23 +1287,14 @@ func (store *Store) ListFileViews(ctx context.Context, sourceID string, remoteSt
 		offset = 0
 	}
 	query := `
-		SELECT id, source_id, remote_id, parent_remote_id, relative_path, name,
-			is_dir, size, gcid, version_key, baseline_version_key, strong_version, remote_modified_at,
-			first_seen_at, last_seen_at, last_seen_generation, miss_count, remote_state, missing_since
-		FROM remote_objects WHERE is_dir = 0`
-	var args []any
-	if strings.TrimSpace(sourceID) != "" {
-		query += ` AND source_id = ?`
-		args = append(args, strings.TrimSpace(sourceID))
-	}
-	if strings.TrimSpace(remoteStateFilter) != "" {
-		query += ` AND remote_state = ?`
-		args = append(args, strings.TrimSpace(remoteStateFilter))
-	}
-	query += ` ORDER BY relative_path ASC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
+		SELECT ro.id, ro.source_id, ro.remote_id, ro.parent_remote_id, ro.relative_path, ro.name,
+			ro.is_dir, ro.size, ro.gcid, ro.version_key, ro.baseline_version_key, ro.strong_version, ro.remote_modified_at,
+			ro.first_seen_at, ro.last_seen_at, ro.last_seen_generation, ro.miss_count, ro.remote_state, ro.missing_since
+		FROM remote_objects ro` + where
+	query += ` ORDER BY ro.relative_path ASC, ro.id ASC LIMIT ? OFFSET ?`
+	queryArgs := append(append([]any{}, args...), limit, offset)
 
-	rows, err := store.db.QueryContext(ctx, query, args...)
+	rows, err := store.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1184,7 +1311,10 @@ func (store *Store) ListFileViews(ctx context.Context, sourceID string, remoteSt
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return objects, nil
+}
 
+func (store *Store) buildFileViews(ctx context.Context, objects []RemoteObject) ([]FileView, error) {
 	views := make([]FileView, 0, len(objects))
 	for _, obj := range objects {
 		view := FileView{RemoteObject: obj}

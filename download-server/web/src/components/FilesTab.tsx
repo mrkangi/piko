@@ -1,6 +1,8 @@
 import { Search, ShieldCheck, AlertCircle } from 'lucide-react'
 import type { FileView, Source } from '../types'
 import { formatBytes, formatTimestamp, TASK_STATE_META } from '../format'
+import { maskPath } from '../privacy'
+import { Pagination } from './Pagination'
 
 interface Props {
   files: FileView[]
@@ -8,9 +10,14 @@ interface Props {
   remoteStateFilter: string
   sourceFilter: string
   searchQuery: string
+  hideFilenames: boolean
+  total: number
+  limit: number
+  offset: number
   onRemoteStateChange: (state: string) => void
   onSourceFilterChange: (sourceId: string) => void
   onSearchChange: (q: string) => void
+  onOffsetChange: (offset: number) => void
 }
 
 export function FilesTab({
@@ -19,9 +26,14 @@ export function FilesTab({
   remoteStateFilter,
   sourceFilter,
   searchQuery,
+  hideFilenames,
+  total,
+  limit,
+  offset,
   onRemoteStateChange,
   onSourceFilterChange,
   onSearchChange,
+  onOffsetChange,
 }: Props) {
   const sourceMap = new Map(sources.map((s) => [s.id, s.local_alias]))
 
@@ -94,11 +106,13 @@ export function FilesTab({
                 files.map((item) => {
                   const obj = item.remote_object
                   const outOfScope = obj.remote_state === 'OUT_OF_SCOPE'
+                  const remotePath = maskPath(obj.relative_path, hideFilenames)
+                  const localPath = item.delivery ? maskPath(item.delivery.local_rel_path, hideFilenames) : ''
                   return (
                     <tr key={obj.id} className="hover:bg-slate-800/35">
                       <td className="px-4 py-3 max-w-md">
-                        <div className="truncate font-medium text-slate-100" title={obj.relative_path}>
-                          {obj.relative_path}
+                        <div className="truncate font-medium text-slate-100" title={hideFilenames ? undefined : obj.relative_path}>
+                          {remotePath}
                         </div>
                         <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400">
                           <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
@@ -130,8 +144,8 @@ export function FilesTab({
                           <div className="space-y-1">
                             <div className="flex items-center gap-1.5 text-xs text-slate-200">
                               <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                              <span className="truncate max-w-md" title={item.delivery.local_rel_path}>
-                                {item.delivery.local_rel_path}
+                              <span className="truncate max-w-md" title={hideFilenames ? undefined : item.delivery.local_rel_path}>
+                                {localPath}
                               </span>
                               {item.path_moved && (
                                 <span className="rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-300">
@@ -166,6 +180,8 @@ export function FilesTab({
           </table>
         </div>
       </div>
+
+      <Pagination total={total} limit={limit} offset={offset} onOffsetChange={onOffsetChange} />
     </div>
   )
 }

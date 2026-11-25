@@ -327,4 +327,26 @@ func TestListTasksOrdersByCreationInsteadOfLastUpdate(t *testing.T) {
 			t.Fatalf("task order changed after progress update: got %v want %v", got, want)
 		}
 	}
+
+	page, total, err := st.ListTasksPage(ctx, "", "", "", 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(page) != 2 || page[0].ID != "tsk_3" || page[1].ID != "tsk_2" {
+		t.Fatalf("unexpected first page: total=%d tasks=%+v", total, page)
+	}
+	page, total, err = st.ListTasksPage(ctx, "", "", "tsk_1", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(page) != 1 || page[0].ID != "tsk_1" {
+		t.Fatalf("unexpected search page: total=%d tasks=%+v", total, page)
+	}
+	stateTotals, err := st.TaskStateTotals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateTotals.Queued != 3 {
+		t.Fatalf("expected 3 queued tasks in totals, got %+v", stateTotals)
+	}
 }

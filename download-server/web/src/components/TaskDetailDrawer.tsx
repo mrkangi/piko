@@ -1,17 +1,27 @@
 import { X, ShieldCheck, AlertTriangle } from 'lucide-react'
 import type { TaskView } from '../types'
 import { TASK_STATE_META, formatBytes, formatETA, formatSpeed, formatTimestamp } from '../format'
+import { maskPath, maskTextPaths } from '../privacy'
 
 interface Props {
   task: TaskView | null
+  hideFilenames: boolean
   sourceName: string
   onClose: () => void
   onAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => Promise<void>
 }
 
-export function TaskDetailDrawer({ task, sourceName, onClose, onAction }: Props) {
+export function TaskDetailDrawer({ task, hideFilenames, sourceName, onClose, onAction }: Props) {
   if (!task) return null
   const meta = TASK_STATE_META[task.state]
+  const targetPath = maskPath(task.target_rel_path, hideFilenames)
+  const remotePath = maskPath(task.remote_path, hideFilenames)
+  const stagingPath = maskPath(task.staging_rel_path, hideFilenames)
+  const errorMessage = maskTextPaths(
+    task.error_message,
+    [task.target_rel_path, task.remote_path, task.staging_rel_path],
+    hideFilenames,
+  )
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs" onClick={onClose}>
@@ -32,7 +42,7 @@ export function TaskDetailDrawer({ task, sourceName, onClose, onAction }: Props)
               )}
               <span className="text-xs text-slate-400">{sourceName}</span>
             </div>
-            <h3 className="mt-1 truncate text-base font-semibold text-slate-100">{task.target_rel_path}</h3>
+            <h3 className="mt-1 truncate text-base font-semibold text-slate-100">{targetPath}</h3>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 cursor-pointer">
             <X className="h-5 w-5" />
@@ -71,7 +81,7 @@ export function TaskDetailDrawer({ task, sourceName, onClose, onAction }: Props)
           {task.error_message && (
             <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200">
               <div className="font-semibold mb-1">最近错误 ({task.error_code || 'error'})</div>
-              <div className="break-all">{task.error_message}</div>
+              <div className="break-all">{errorMessage}</div>
             </div>
           )}
 
@@ -79,13 +89,13 @@ export function TaskDetailDrawer({ task, sourceName, onClose, onAction }: Props)
             <dt className="text-slate-400">任务 ID</dt>
             <dd className="font-mono text-slate-200 break-all">{task.id}</dd>
             <dt className="text-slate-400">远端路径</dt>
-            <dd className="text-slate-200 break-all">{task.remote_path}</dd>
+            <dd className="text-slate-200 break-all">{remotePath}</dd>
             <dt className="text-slate-400">远端对象 ID</dt>
             <dd className="font-mono text-slate-200 break-all">{task.remote_id}</dd>
             <dt className="text-slate-400">版本标识</dt>
             <dd className="font-mono text-slate-300 break-all">{task.version_key}</dd>
             <dt className="text-slate-400">暂存路径</dt>
-            <dd className="font-mono text-slate-300 break-all">{task.staging_rel_path}</dd>
+            <dd className="font-mono text-slate-300 break-all">{stagingPath}</dd>
             <dt className="text-slate-400">尝试次数</dt>
             <dd className="tabular-nums text-slate-200">{task.attempt} / {task.max_attempts}</dd>
             <dt className="text-slate-400">创建时间</dt>

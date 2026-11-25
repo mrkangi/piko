@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -426,6 +427,7 @@ func (svc *Service) dispatchAvailable(ctx context.Context) {
 
 		svc.broker.Publish(events.Event{Type: "task.updated", SourceID: task.SourceID, TaskID: task.ID})
 		svc.broker.Publish(events.Event{Type: "task.started", SourceID: task.SourceID, TaskID: task.ID})
+		log.Printf("task started: id=%s source=%s bytes=%d attempt=%d", task.ID, task.SourceID, task.BytesTotal, task.Attempt)
 
 		svc.wg.Add(1)
 		go func(claimed store.DownloadTask, act *activeAttempt, runCtx context.Context) {
@@ -452,12 +454,16 @@ func (svc *Service) publishTaskOutcome(task store.DownloadTask) {
 	switch latest.State {
 	case store.TaskCompleted:
 		svc.broker.Publish(events.Event{Type: "task.completed", SourceID: latest.SourceID, TaskID: latest.ID})
+		log.Printf("task completed: id=%s source=%s bytes=%d", latest.ID, latest.SourceID, latest.BytesTotal)
 	case store.TaskFailed:
 		svc.broker.Publish(events.Event{Type: "task.failed", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
+		log.Printf("task failed: id=%s source=%s code=%s attempt=%d", latest.ID, latest.SourceID, latest.ErrorCode, latest.Attempt)
 	case store.TaskConflict:
 		svc.broker.Publish(events.Event{Type: "task.conflict", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
+		log.Printf("task conflict: id=%s source=%s code=%s", latest.ID, latest.SourceID, latest.ErrorCode)
 	case store.TaskRetryWait:
 		svc.broker.Publish(events.Event{Type: "task.retry", SourceID: latest.SourceID, TaskID: latest.ID, Message: latest.ErrorMessage})
+		log.Printf("task retry scheduled: id=%s source=%s code=%s attempt=%d next=%d", latest.ID, latest.SourceID, latest.ErrorCode, latest.Attempt, latest.NextRetryAt)
 	}
 }
 
@@ -912,37 +918,39 @@ func (svc *Service) RetryTask(ctx context.Context, taskID string) (store.Downloa
 }
 
 func (svc *Service) BatchAction(ctx context.Context, action string, sourceID string) (int, error) {
-	tasks, err := svc.store.ListTasks(ctx, "", sourceID, 500, 0)
+	var states []string
+	switch action {
+	case "pause":
+		states = []string{store.TaskQueued, store.TaskRunning, store.TaskRetryWait, store.TaskVerifying}
+	case "resume":
+		states = []string{store.TaskPaused}
+	case "retry":
+		states = []string{store.TaskFailed, store.TaskCanceled, store.TaskConflict}
+	default:
+		return 0, fmt.Errorf("unsupported batch action: %s", action)
+	}
+	ids, err := svc.store.ListTaskIDsByStates(ctx, sourceID, states)
 	if err != nil {
 		return 0, err
 	}
 	affected := 0
-	for _, task := range tasks {
+	for _, id := range ids {
 		switch action {
 		case "pause":
-			switch task.State {
-			case store.TaskQueued, store.TaskRunning, store.TaskRetryWait, store.TaskVerifying:
-				if _, err := svc.PauseTask(ctx, task.ID); err == nil {
-					affected++
-				}
+			if _, err := svc.PauseTask(ctx, id); err == nil {
+				affected++
 			}
 		case "resume":
-			if task.State == store.TaskPaused {
-				if _, err := svc.ResumeTask(ctx, task.ID); err == nil {
-					affected++
-				}
+			if _, err := svc.ResumeTask(ctx, id); err == nil {
+				affected++
 			}
 		case "retry":
-			switch task.State {
-			case store.TaskFailed, store.TaskCanceled, store.TaskConflict:
-				if _, err := svc.RetryTask(ctx, task.ID); err == nil {
-					affected++
-				}
+			if _, err := svc.RetryTask(ctx, id); err == nil {
+				affected++
 			}
-		default:
-			return 0, fmt.Errorf("unsupported batch action: %s", action)
 		}
 	}
+	log.Printf("batch action: action=%s source=%s matched=%d affected=%d", action, sourceID, len(ids), affected)
 	return affected, nil
 }
 
@@ -956,9 +964,14 @@ func (svc *Service) cancelActive(taskID string) {
 }
 
 func (svc *Service) ListTaskViews(ctx context.Context, stateFilter string, sourceID string, limit int, offset int) ([]TaskView, error) {
-	tasks, err := svc.store.ListTasks(ctx, stateFilter, sourceID, limit, offset)
+	views, _, err := svc.ListTaskViewsPage(ctx, stateFilter, sourceID, "", limit, offset)
+	return views, err
+}
+
+func (svc *Service) ListTaskViewsPage(ctx context.Context, stateFilter string, sourceID string, search string, limit int, offset int) ([]TaskView, int, error) {
+	tasks, total, err := svc.store.ListTasksPage(ctx, stateFilter, sourceID, search, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	svc.mu.Lock()
 	activeCopy := make(map[string]*activeAttempt, len(svc.active))
@@ -991,26 +1004,19 @@ func (svc *Service) ListTaskViews(ctx context.Context, stateFilter string, sourc
 		}
 		views = append(views, view)
 	}
-	return views, nil
+	return views, total, nil
 }
 
 func (svc *Service) Stats(ctx context.Context) (SystemStats, error) {
-	tasks, err := svc.store.ListTasks(ctx, "", "", 500, 0)
+	totals, err := svc.store.TaskStateTotals(ctx)
 	if err != nil {
 		return SystemStats{}, err
 	}
-	stats := SystemStats{}
-	for _, task := range tasks {
-		switch task.State {
-		case store.TaskQueued, store.TaskRetryWait:
-			stats.QueuedCount++
-		case store.TaskPaused, store.TaskPausing:
-			stats.PausedCount++
-		case store.TaskFailed, store.TaskConflict:
-			stats.FailedCount++
-		case store.TaskCompleted:
-			stats.CompletedCount++
-		}
+	stats := SystemStats{
+		QueuedCount:    totals.Queued,
+		PausedCount:    totals.Paused,
+		FailedCount:    totals.Failed,
+		CompletedCount: totals.Completed,
 	}
 	svc.mu.Lock()
 	stats.ActiveWorkers = len(svc.active)

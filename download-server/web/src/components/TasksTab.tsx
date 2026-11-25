@@ -1,6 +1,8 @@
 import { Pause, Play, RotateCcw, Search, XCircle, Info } from 'lucide-react'
 import type { Source, TaskView } from '../types'
 import { TASK_STATE_META, formatBytes, formatETA, formatSpeed } from '../format'
+import { maskPath, maskTextPaths } from '../privacy'
+import { Pagination } from './Pagination'
 
 interface Props {
   tasks: TaskView[]
@@ -8,9 +10,14 @@ interface Props {
   stateFilter: string
   sourceFilter: string
   searchQuery: string
+  hideFilenames: boolean
+  total: number
+  limit: number
+  offset: number
   onStateFilterChange: (state: string) => void
   onSourceFilterChange: (sourceId: string) => void
   onSearchChange: (q: string) => void
+  onOffsetChange: (offset: number) => void
   onTaskAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => Promise<void>
   onBatchAction: (action: 'pause' | 'resume' | 'retry') => Promise<void>
   onInspect: (task: TaskView) => void
@@ -34,9 +41,14 @@ export function TasksTab({
   stateFilter,
   sourceFilter,
   searchQuery,
+  hideFilenames,
+  total,
+  limit,
+  offset,
   onStateFilterChange,
   onSourceFilterChange,
   onSearchChange,
+  onOffsetChange,
   onTaskAction,
   onBatchAction,
   onInspect,
@@ -90,7 +102,9 @@ export function TasksTab({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800/80 bg-slate-900/60 px-4 py-2.5">
-        <span className="text-xs text-slate-400">当前视图共 <strong className="text-slate-200 tabular-nums">{tasks.length}</strong> 个任务</span>
+        <span className="text-xs text-slate-400">
+          当前筛选共 <strong className="text-slate-200 tabular-nums">{total}</strong> 个任务，本页 {tasks.length} 个
+        </span>
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => onBatchAction('pause')}
@@ -135,6 +149,13 @@ export function TasksTab({
               ) : (
                 tasks.map((task) => {
                   const meta = TASK_STATE_META[task.state]
+                  const targetPath = maskPath(task.target_rel_path, hideFilenames)
+                  const remotePath = maskPath(task.remote_path, hideFilenames)
+                  const errorMessage = maskTextPaths(
+                    task.error_message,
+                    [task.target_rel_path, task.remote_path, task.staging_rel_path],
+                    hideFilenames,
+                  )
                   const canPause = ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'VERIFYING'].includes(task.state)
                   const canResume = task.state === 'PAUSED'
                   const canRetry = ['FAILED', 'CANCELED', 'CONFLICT'].includes(task.state)
@@ -144,19 +165,19 @@ export function TasksTab({
                     <tr key={task.id} className="hover:bg-slate-800/35 transition-colors">
                       <td className="px-4 py-3 max-w-md">
                         <div className="flex items-center gap-2">
-                          <span className="truncate font-medium text-slate-100" title={task.target_rel_path}>
-                            {task.target_rel_path}
+                          <span className="truncate font-medium text-slate-100" title={hideFilenames ? undefined : task.target_rel_path}>
+                            {targetPath}
                           </span>
                         </div>
                         <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400">
                           <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
                             {sourceMap.get(task.source_id) || task.source_id}
                           </span>
-                          <span className="truncate" title={task.remote_path}>{task.remote_path}</span>
+                          <span className="truncate" title={hideFilenames ? undefined : task.remote_path}>{remotePath}</span>
                         </div>
                         {task.error_message && (
-                          <div className="mt-1 truncate text-xs text-rose-300" title={task.error_message}>
-                            {task.error_message}
+                          <div className="mt-1 truncate text-xs text-rose-300" title={hideFilenames ? undefined : task.error_message}>
+                            {errorMessage}
                           </div>
                         )}
                       </td>
@@ -247,6 +268,8 @@ export function TasksTab({
           </table>
         </div>
       </div>
+
+      <Pagination total={total} limit={limit} offset={offset} onOffsetChange={onOffsetChange} />
     </div>
   )
 }

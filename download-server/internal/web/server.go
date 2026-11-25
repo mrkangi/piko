@@ -20,6 +20,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/logview"
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/store"
 )
@@ -28,6 +29,7 @@ type Options struct {
 	StaticDir  string
 	CORSOrigin string
 	DataDir    string
+	Logs       *logview.Buffer
 }
 
 type Server struct {
@@ -40,6 +42,7 @@ type Server struct {
 	notifier   *notify.Manager
 	corsOrigin string
 	dataDir    string
+	logs       *logview.Buffer
 	spaFS      fs.FS
 	ready      atomic.Bool
 	mux        *http.ServeMux
@@ -69,6 +72,7 @@ func NewServer(
 		notifier:   notifier,
 		corsOrigin: strings.TrimRight(strings.TrimSpace(opt.CORSOrigin), "/"),
 		dataDir:    opt.DataDir,
+		logs:       opt.Logs,
 		spaFS:      resolveSPAFilesystem(opt.StaticDir),
 		mux:        http.NewServeMux(),
 	}
@@ -128,6 +132,7 @@ func (srv *Server) routes() {
 
 	srv.mux.HandleFunc("GET /api/files", srv.withAuth(srv.handleListFiles))
 	srv.mux.HandleFunc("GET /api/system/stats", srv.withAuth(srv.handleSystemStats))
+	srv.mux.HandleFunc("GET /api/system/logs", srv.withAuth(srv.handleSystemLogs))
 	srv.mux.HandleFunc("GET /api/system/settings", srv.withAuth(srv.handleGetSettings))
 	srv.mux.HandleFunc("PUT /api/system/settings", srv.withAuthMutation(srv.handleUpdateSettings))
 	srv.mux.HandleFunc("GET /api/system/local-dirs", srv.withAuth(srv.handleLocalDirs))
@@ -761,41 +766,24 @@ func (srv *Server) handleLocalDirs(w http.ResponseWriter, r *http.Request, _ sto
 func (srv *Server) handleListTasks(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
 	q := r.URL.Query()
 	limit, offset := parsePagination(q.Get("limit"), q.Get("offset"))
-	search := strings.ToLower(strings.TrimSpace(q.Get("q")))
-	fetchLimit := limit
-	fetchOffset := offset
-	if search != "" {
-		fetchLimit = 500
-		fetchOffset = 0
-	}
-	tasks, err := srv.download.ListTaskViews(r.Context(), q.Get("state"), q.Get("source_id"), fetchLimit, fetchOffset)
+	tasks, total, err := srv.download.ListTaskViewsPage(
+		r.Context(),
+		q.Get("state"),
+		q.Get("source_id"),
+		q.Get("q"),
+		limit,
+		offset,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}
-	if search != "" {
-		filtered := tasks[:0]
-		for _, task := range tasks {
-			if strings.Contains(strings.ToLower(task.TargetRelPath), search) ||
-				strings.Contains(strings.ToLower(task.RemotePath), search) {
-				filtered = append(filtered, task)
-			}
-		}
-		tasks = filtered
-		total := len(tasks)
-		end := offset + limit
-		if offset > total {
-			tasks = nil
-		} else {
-			if end > total {
-				end = total
-			}
-			tasks = tasks[offset:end]
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "total": total})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "total": len(tasks)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tasks":  tasks,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 func (srv *Server) handleBatchTasks(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
@@ -857,45 +845,24 @@ func (srv *Server) handleTaskMutation(w http.ResponseWriter, r *http.Request, fn
 func (srv *Server) handleListFiles(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
 	q := r.URL.Query()
 	limit, offset := parsePagination(q.Get("limit"), q.Get("offset"))
-	search := strings.ToLower(strings.TrimSpace(q.Get("q")))
-	fetchLimit := limit
-	fetchOffset := offset
-	if search != "" {
-		fetchLimit = 500
-		fetchOffset = 0
-	}
-	files, err := srv.store.ListFileViews(r.Context(), q.Get("source_id"), q.Get("remote_state"), fetchLimit, fetchOffset)
+	files, total, err := srv.store.ListFileViewsPage(
+		r.Context(),
+		q.Get("source_id"),
+		q.Get("remote_state"),
+		q.Get("q"),
+		limit,
+		offset,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}
-	if search != "" {
-		filtered := files[:0]
-		for _, file := range files {
-			localPath := ""
-			if file.Delivery != nil {
-				localPath = file.Delivery.LocalRelPath
-			}
-			if strings.Contains(strings.ToLower(file.RemoteObject.RelativePath), search) ||
-				strings.Contains(strings.ToLower(localPath), search) {
-				filtered = append(filtered, file)
-			}
-		}
-		files = filtered
-		total := len(files)
-		if offset > total {
-			files = nil
-		} else {
-			end := offset + limit
-			if end > total {
-				end = total
-			}
-			files = files[offset:end]
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"files": files, "total": total})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"files": files, "total": len(files)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"files":  files,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 func (srv *Server) handleSystemStats(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
@@ -905,6 +872,43 @@ func (srv *Server) handleSystemStats(w http.ResponseWriter, r *http.Request, _ s
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (srv *Server) handleSystemLogs(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	if srv.logs == nil {
+		writeJSON(w, http.StatusOK, logview.Page{Entries: []logview.Entry{}})
+		return
+	}
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	after, afterErr := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("after")), 10, 64)
+	before, beforeErr := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("before")), 10, 64)
+	if afterErr != nil {
+		after = 0
+	}
+	if beforeErr != nil {
+		before = 0
+	}
+
+	switch {
+	case after > 0:
+		writeJSON(w, http.StatusOK, srv.logs.After(after, limit))
+	case before > 0:
+		writeJSON(w, http.StatusOK, srv.logs.Before(before, limit))
+	default:
+		writeJSON(w, http.StatusOK, srv.logs.Tail(limit))
+	}
 }
 
 func (srv *Server) handleEvents(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {

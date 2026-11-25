@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
   CloudDownload,
+  Eye,
+  EyeOff,
   HardDrive,
   Layers,
   LogOut,
   RefreshCw,
+  ScrollText,
   Settings,
   FileCheck2,
 } from 'lucide-react'
@@ -18,14 +21,60 @@ import { SpeedSparkline } from './components/SpeedSparkline'
 import { TasksTab } from './components/TasksTab'
 import { ManageTab } from './components/ManageTab'
 import { FilesTab } from './components/FilesTab'
+import { LogsTab } from './components/LogsTab'
 import { TaskDetailDrawer } from './components/TaskDetailDrawer'
+import { useDebouncedValue } from './useDebouncedValue'
 
-type TabKey = 'tasks' | 'files' | 'manage'
+type TabKey = 'tasks' | 'files' | 'logs' | 'manage'
+
+interface RefreshOptions {
+  stats: boolean
+  settings: boolean
+  sources: boolean
+  tasks: boolean
+  files: boolean
+  notifications: boolean
+}
+
+function refreshScope(partial: Partial<RefreshOptions>): RefreshOptions {
+  return {
+    stats: false,
+    settings: false,
+    sources: false,
+    tasks: false,
+    files: false,
+    notifications: false,
+    ...partial,
+  }
+}
+
+const REFRESH_ALL: RefreshOptions = refreshScope({
+  stats: true,
+  settings: true,
+  sources: true,
+  tasks: true,
+  files: true,
+  notifications: true,
+})
+
+const FILENAME_VISIBILITY_KEY = 'piko.download.hideFilenames'
+const TASK_PAGE_SIZE = 50
+const FILE_PAGE_SIZE = 50
 
 function tabFromPath(pathname: string): TabKey {
   if (pathname.startsWith('/manage') || pathname.startsWith('/sources')) return 'manage'
   if (pathname.startsWith('/files')) return 'files'
+  if (pathname.startsWith('/logs')) return 'logs'
   return 'tasks'
+}
+
+function readHideFilenames(): boolean {
+  try {
+    const stored = window.localStorage.getItem(FILENAME_VISIBILITY_KEY)
+    return stored === null ? true : stored === '1'
+  } catch {
+    return true
+  }
 }
 
 export function App() {
@@ -41,19 +90,29 @@ export function App() {
   const [sources, setSources] = useState<Source[]>([])
   const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([])
   const [tasks, setTasks] = useState<TaskView[]>([])
+  const [taskTotal, setTaskTotal] = useState(0)
+  const [taskOffset, setTaskOffset] = useState(0)
   const [files, setFiles] = useState<FileView[]>([])
+  const [fileTotal, setFileTotal] = useState(0)
+  const [fileOffset, setFileOffset] = useState(0)
 
   const [taskStateFilter, setTaskStateFilter] = useState('')
   const [taskSourceFilter, setTaskSourceFilter] = useState('')
   const [taskSearch, setTaskSearch] = useState('')
+  const [hideFilenames, setHideFilenames] = useState(readHideFilenames)
+  const debouncedTaskSearch = useDebouncedValue(taskSearch, 300)
 
   const [fileRemoteState, setFileRemoteState] = useState('')
   const [fileSourceFilter, setFileSourceFilter] = useState('')
   const [fileSearch, setFileSearch] = useState('')
+  const debouncedFileSearch = useDebouncedValue(fileSearch, 300)
 
   const [inspectedTask, setInspectedTask] = useState<TaskView | null>(null)
   const [toast, setToast] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
+  const pendingRefreshRef = useRef<RefreshOptions>(refreshScope({}))
+  const taskRequestSeqRef = useRef(0)
+  const fileRequestSeqRef = useRef(0)
 
   const notify = useCallback((kind: 'ok' | 'error', text: string) => {
     setToast({ kind, text })
@@ -65,37 +124,111 @@ export function App() {
     return () => window.clearTimeout(id)
   }, [toast])
 
-  const refreshAll = useCallback(async () => {
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FILENAME_VISIBILITY_KEY, hideFilenames ? '1' : '0')
+    } catch {
+      // Private browsing may reject storage writes; the toggle still works for this page.
+    }
+  }, [hideFilenames])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === FILENAME_VISIBILITY_KEY) {
+        setHideFilenames(event.newValue === null ? true : event.newValue === '1')
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const refreshAll = useCallback(async (options: RefreshOptions = REFRESH_ALL) => {
+    const taskRequestSeq = options.tasks ? ++taskRequestSeqRef.current : 0
+    const fileRequestSeq = options.files ? ++fileRequestSeqRef.current : 0
     try {
       const [nextStats, nextSettings, nextSources, nextTasks, nextFiles, nextNotifications] = await Promise.all([
-        api.getStats(),
-        api.getSettings(),
-        api.listSources(),
-        api.listTasks({ state: taskStateFilter, source_id: taskSourceFilter, q: taskSearch }),
-        api.listFiles({ remote_state: fileRemoteState, source_id: fileSourceFilter, q: fileSearch }),
-        api.listNotifications(),
+        options.stats ? api.getStats() : Promise.resolve(null),
+        options.settings ? api.getSettings() : Promise.resolve(null),
+        options.sources ? api.listSources() : Promise.resolve(null),
+        options.tasks
+          ? api.listTasks({
+              state: taskStateFilter,
+              source_id: taskSourceFilter,
+              q: debouncedTaskSearch,
+              limit: TASK_PAGE_SIZE,
+              offset: taskOffset,
+            })
+          : Promise.resolve(null),
+        options.files
+          ? api.listFiles({
+              remote_state: fileRemoteState,
+              source_id: fileSourceFilter,
+              q: debouncedFileSearch,
+              limit: FILE_PAGE_SIZE,
+              offset: fileOffset,
+            })
+          : Promise.resolve(null),
+        options.notifications ? api.listNotifications() : Promise.resolve(null),
       ])
-      setStats(nextStats)
-      setSettings(nextSettings)
-      setSpeedHistory((prev) => [...prev.slice(-24), nextStats.total_speed_bytes])
-      setSources(nextSources.sources || [])
-      setNotificationChannels(nextNotifications.channels || [])
-      const nextTaskList = nextTasks.tasks || []
-      setTasks(nextTaskList)
-      setInspectedTask((prev) => (prev ? nextTaskList.find((t) => t.id === prev.id) || null : null))
-      setFiles(nextFiles.files || [])
+      if (nextStats) {
+        setStats(nextStats)
+        setSpeedHistory((prev) => [...prev.slice(-24), nextStats.total_speed_bytes])
+      }
+      if (nextSettings) setSettings(nextSettings)
+      if (nextSources) setSources(nextSources.sources || [])
+      if (nextNotifications) setNotificationChannels(nextNotifications.channels || [])
+      if (nextTasks && taskRequestSeq === taskRequestSeqRef.current) {
+        const nextTaskList = nextTasks.tasks || []
+        const nextTaskTotal = nextTasks.total || 0
+        setTasks(nextTaskList)
+        setTaskTotal(nextTaskTotal)
+        if (taskOffset > 0 && nextTaskList.length === 0 && nextTaskTotal > 0) {
+          setTaskOffset(Math.floor((nextTaskTotal - 1) / TASK_PAGE_SIZE) * TASK_PAGE_SIZE)
+        }
+        setInspectedTask((prev) => (prev ? nextTaskList.find((t) => t.id === prev.id) || null : null))
+      }
+      if (nextFiles && fileRequestSeq === fileRequestSeqRef.current) {
+        const nextFileList = nextFiles.files || []
+        const nextFileTotal = nextFiles.total || 0
+        setFiles(nextFileList)
+        setFileTotal(nextFileTotal)
+        if (fileOffset > 0 && nextFileList.length === 0 && nextFileTotal > 0) {
+          setFileOffset(Math.floor((nextFileTotal - 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE)
+        }
+      }
     } catch (err) {
       if (err instanceof Error && err.message !== '请先登录') {
         notify('error', err.message)
       }
     }
-  }, [taskStateFilter, taskSourceFilter, taskSearch, fileRemoteState, fileSourceFilter, fileSearch, notify])
+  }, [
+    taskStateFilter,
+    taskSourceFilter,
+    debouncedTaskSearch,
+    taskOffset,
+    fileRemoteState,
+    fileSourceFilter,
+    debouncedFileSearch,
+    fileOffset,
+    notify,
+  ])
 
-  const scheduleRefresh = useCallback(() => {
+  const scheduleRefresh = useCallback((scope: RefreshOptions) => {
+    const pending = pendingRefreshRef.current
+    pendingRefreshRef.current = {
+      stats: pending.stats || scope.stats,
+      settings: pending.settings || scope.settings,
+      sources: pending.sources || scope.sources,
+      tasks: pending.tasks || scope.tasks,
+      files: pending.files || scope.files,
+      notifications: pending.notifications || scope.notifications,
+    }
     if (refreshTimerRef.current !== null) return
     refreshTimerRef.current = window.setTimeout(() => {
       refreshTimerRef.current = null
-      void refreshAll()
+      const next = pendingRefreshRef.current
+      pendingRefreshRef.current = refreshScope({})
+      void refreshAll(next)
     }, 250)
   }, [refreshAll])
 
@@ -138,9 +271,21 @@ export function App() {
       setSseState('connected')
       void refreshAll()
     })
-    const handleEvent = () => scheduleRefresh()
-    ;['task.updated', 'source.updated', 'scan.started', 'scan.finished', 'system.stats', 'settings.updated'].forEach((name) => {
-      es.addEventListener(name, handleEvent)
+    const handleTaskProgress = () => scheduleRefresh(refreshScope({ stats: true, tasks: true }))
+    const handleTaskOutcome = () => scheduleRefresh(refreshScope({ stats: true, tasks: true, files: true }))
+    const handleCatalog = () => scheduleRefresh(refreshScope({ stats: true, sources: true, tasks: true, files: true }))
+    const handleSettings = () => scheduleRefresh(refreshScope({ stats: true, settings: true }))
+    const handleStats = () => scheduleRefresh(refreshScope({ stats: true }))
+    ;['task.updated'].forEach((name) => es.addEventListener(name, handleTaskProgress))
+    ;['task.started', 'task.completed', 'task.failed', 'task.conflict', 'task.retry', 'tasks.queued'].forEach((name) => {
+      es.addEventListener(name, handleTaskOutcome)
+    })
+    ;['source.updated', 'scan.started', 'scan.finished', 'scan.failed'].forEach((name) => {
+      es.addEventListener(name, handleCatalog)
+    })
+    es.addEventListener('settings.updated', handleSettings)
+    ;['system.stats', 'system.low_disk', 'system.disk_ok', 'status.report'].forEach((name) => {
+      es.addEventListener(name, handleStats)
     })
     es.onerror = () => setSseState('reconnecting')
     return () => {
@@ -149,6 +294,7 @@ export function App() {
         window.clearTimeout(refreshTimerRef.current)
         refreshTimerRef.current = null
       }
+      pendingRefreshRef.current = refreshScope({})
     }
   }, [user, refreshAll, scheduleRefresh])
 
@@ -158,6 +304,36 @@ export function App() {
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath)
     }
+  }
+
+  function changeTaskStateFilter(value: string) {
+    setTaskStateFilter(value)
+    setTaskOffset(0)
+  }
+
+  function changeTaskSourceFilter(value: string) {
+    setTaskSourceFilter(value)
+    setTaskOffset(0)
+  }
+
+  function changeTaskSearch(value: string) {
+    setTaskSearch(value)
+    setTaskOffset(0)
+  }
+
+  function changeFileRemoteState(value: string) {
+    setFileRemoteState(value)
+    setFileOffset(0)
+  }
+
+  function changeFileSourceFilter(value: string) {
+    setFileSourceFilter(value)
+    setFileOffset(0)
+  }
+
+  function changeFileSearch(value: string) {
+    setFileSearch(value)
+    setFileOffset(0)
   }
 
   if (checkingAuth) {
@@ -206,7 +382,20 @@ export function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={() => setHideFilenames((value) => !value)}
+              title={hideFilenames ? '显示明文文件名' : '隐藏文件名'}
+              aria-pressed={hideFilenames}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
+                hideFilenames
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                  : 'border-slate-800 bg-slate-900 text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              {hideFilenames ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              <span className="hidden sm:inline">{hideFilenames ? '文件名已隐藏' : '文件名可见'}</span>
+            </button>
             <button
               onClick={() => void refreshAll()}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer"
@@ -269,10 +458,11 @@ export function App() {
           </div>
         </section>
 
-        <nav className="flex items-center gap-2 border-b border-slate-800 pb-3">
+        <nav className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
           {[
-            { key: 'tasks' as const, label: '下载任务', icon: CloudDownload, count: tasks.length },
-            { key: 'files' as const, label: '文件索引', icon: FileCheck2, count: files.length },
+            { key: 'tasks' as const, label: '下载任务', icon: CloudDownload, count: taskTotal },
+            { key: 'files' as const, label: '文件索引', icon: FileCheck2, count: fileTotal },
+            { key: 'logs' as const, label: '运行日志', icon: ScrollText, count: null },
             { key: 'manage' as const, label: '管理设置', icon: Settings, count: sources.length },
           ].map((tab) => {
             const Icon = tab.icon
@@ -289,7 +479,9 @@ export function App() {
               >
                 <Icon className="h-4 w-4" />
                 {tab.label}
-                <span className="rounded-full bg-slate-950 px-2 py-0.5 text-xs text-slate-400 tabular-nums">{tab.count}</span>
+                {tab.count !== null && (
+                  <span className="rounded-full bg-slate-950 px-2 py-0.5 text-xs text-slate-400 tabular-nums">{tab.count}</span>
+                )}
               </button>
             )
           })}
@@ -302,9 +494,14 @@ export function App() {
             stateFilter={taskStateFilter}
             sourceFilter={taskSourceFilter}
             searchQuery={taskSearch}
-            onStateFilterChange={setTaskStateFilter}
-            onSourceFilterChange={setTaskSourceFilter}
-            onSearchChange={setTaskSearch}
+            hideFilenames={hideFilenames}
+            total={taskTotal}
+            limit={TASK_PAGE_SIZE}
+            offset={taskOffset}
+            onStateFilterChange={changeTaskStateFilter}
+            onSourceFilterChange={changeTaskSourceFilter}
+            onSearchChange={changeTaskSearch}
+            onOffsetChange={setTaskOffset}
             onTaskAction={async (id, action) => {
               try {
                 await api.taskAction(id, action)
@@ -429,15 +626,23 @@ export function App() {
             remoteStateFilter={fileRemoteState}
             sourceFilter={fileSourceFilter}
             searchQuery={fileSearch}
-            onRemoteStateChange={setFileRemoteState}
-            onSourceFilterChange={setFileSourceFilter}
-            onSearchChange={setFileSearch}
+            hideFilenames={hideFilenames}
+            total={fileTotal}
+            limit={FILE_PAGE_SIZE}
+            offset={fileOffset}
+            onRemoteStateChange={changeFileRemoteState}
+            onSourceFilterChange={changeFileSourceFilter}
+            onSearchChange={changeFileSearch}
+            onOffsetChange={setFileOffset}
           />
         )}
+
+        {activeTab === 'logs' && <LogsTab />}
       </main>
 
       <TaskDetailDrawer
         task={inspectedTask}
+        hideFilenames={hideFilenames}
         sourceName={inspectedTask ? sourceMap.get(inspectedTask.source_id) || inspectedTask.source_id : ''}
         onClose={() => setInspectedTask(null)}
         onAction={async (id, action) => {

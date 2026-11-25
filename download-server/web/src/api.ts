@@ -1,4 +1,4 @@
-import type { AuthUser, FileView, LocalDirEntry, NotificationChannel, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
+import type { AuthUser, FileListPage, LocalDirEntry, LogPage, NotificationChannel, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskListPage } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '')
 
@@ -88,6 +88,14 @@ export function completeSetup(input: {
 
 export function getStats(): Promise<SystemStats> {
   return request<SystemStats>('/api/system/stats')
+}
+
+export function getLogs(params: { limit?: number; before?: number; after?: number } = {}): Promise<LogPage> {
+  const qs = new URLSearchParams()
+  qs.set('limit', String(params.limit ?? 200))
+  if (params.before) qs.set('before', String(params.before))
+  if (params.after) qs.set('after', String(params.after))
+  return request<LogPage>(`/api/system/logs?${qs.toString()}`)
 }
 
 export function listSources(): Promise<{ sources: Source[] }> {
@@ -221,12 +229,13 @@ export function browseRemoteFolders(parentId: string, cursor = ''): Promise<{ en
   return request(`/api/remote/folders?${params.toString()}`)
 }
 
-export function listTasks(params: { state?: string; source_id?: string; q?: string; limit?: number }): Promise<{ tasks: TaskView[]; total: number }> {
+export function listTasks(params: { state?: string; source_id?: string; q?: string; limit?: number; offset?: number }): Promise<TaskListPage> {
   const qs = new URLSearchParams()
   if (params.state) qs.set('state', params.state)
   if (params.source_id) qs.set('source_id', params.source_id)
   if (params.q) qs.set('q', params.q)
-  qs.set('limit', String(params.limit ?? 200))
+  qs.set('limit', String(params.limit ?? 50))
+  qs.set('offset', String(params.offset ?? 0))
   return request(`/api/tasks?${qs.toString()}`)
 }
 
@@ -241,11 +250,12 @@ export function batchTasks(action: 'pause' | 'resume' | 'retry', sourceId = ''):
   })
 }
 
-export function listFiles(params: { source_id?: string; remote_state?: string; q?: string; limit?: number }): Promise<{ files: FileView[]; total: number }> {
+export function listFiles(params: { source_id?: string; remote_state?: string; q?: string; limit?: number; offset?: number }): Promise<FileListPage> {
   const qs = new URLSearchParams()
   if (params.source_id) qs.set('source_id', params.source_id)
   if (params.remote_state) qs.set('remote_state', params.remote_state)
   if (params.q) qs.set('q', params.q)
-  qs.set('limit', String(params.limit ?? 200))
+  qs.set('limit', String(params.limit ?? 50))
+  qs.set('offset', String(params.offset ?? 0))
   return request(`/api/files?${qs.toString()}`)
 }

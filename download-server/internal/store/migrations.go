@@ -158,4 +158,10 @@ var schemaMigrations = []string{
 		done_offset INTEGER NOT NULL,
 		PRIMARY KEY (task_id, segment_index)
 	);`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_objects_relative_path ON remote_objects(relative_path);
+	 CREATE INDEX IF NOT EXISTS idx_remote_objects_source_state_path ON remote_objects(source_id, remote_state, relative_path);
+	 CREATE INDEX IF NOT EXISTS idx_download_tasks_created ON download_tasks(created_at DESC);
+	 CREATE INDEX IF NOT EXISTS idx_download_tasks_state_created ON download_tasks(state, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_objects_source_path ON remote_objects(source_id, relative_path);
+	 CREATE INDEX IF NOT EXISTS idx_download_tasks_source_created ON download_tasks(source_id, created_at DESC);`,
 }

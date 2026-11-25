@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path"
 	"strings"
 	"sync"
@@ -319,6 +320,7 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 	}
 	svc.broker.Publish(events.Event{Type: "scan.started", SourceID: sourceID})
 	svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+	log.Printf("scan started: source=%s", sourceID)
 
 	err = svc.collectTree(ctx, run.ID, latestSrc)
 	if err != nil {
@@ -327,6 +329,7 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
 		svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: sourceID, Message: err.Error()})
 		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+		log.Printf("scan failed: source=%s stage=collect", sourceID)
 		return store.PublishResult{}, err
 	}
 
@@ -337,11 +340,13 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
 		svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: sourceID, Message: err.Error()})
 		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+		log.Printf("scan failed: source=%s stage=publish", sourceID)
 		return store.PublishResult{}, err
 	}
 
 	svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "succeeded"})
 	svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+	log.Printf("scan finished: source=%s entries=%d enqueued=%d missing=%d", sourceID, published.EntriesCount, len(published.EnqueuedTasks), published.MarkedMissing)
 	if len(published.EnqueuedTasks) > 0 {
 		svc.broker.Publish(events.Event{Type: "task.updated", SourceID: sourceID})
 		svc.broker.Publish(events.Event{
@@ -368,6 +373,7 @@ func (svc *Service) failWithoutRun(ctx context.Context, src store.Source, messag
 	svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: src.ID, Message: "failed"})
 	svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: src.ID, Message: message})
 	svc.broker.Publish(events.Event{Type: "source.updated", SourceID: src.ID})
+	log.Printf("scan failed: source=%s stage=precheck", src.ID)
 	return store.PublishResult{}, errors.New(message)
 }
 

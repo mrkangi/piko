@@ -16,6 +16,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/logview"
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
@@ -65,7 +66,8 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 	controller := control.New(st, secrets, runtime, cat, dl, broker, dataDir)
 	auth := NewAuthenticator(st, false, false)
 	notifier := notify.NewManager(st, secrets, broker, nil)
-	srv := NewServer(auth, st, cat, dl, broker, controller, notifier)
+	logs := logview.New(10, 1<<20)
+	srv := NewServer(auth, st, cat, dl, broker, controller, notifier, Options{Logs: logs})
 	srv.SetReady(true)
 
 	httpSrv := httptest.NewServer(srv.Handler())
@@ -103,6 +105,23 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 	}
 	_ = json.NewDecoder(loginResp.Body).Decode(&loginPayload)
 	cookies := loginResp.Cookies()
+
+	// Log viewer returns captured lines to authenticated admins.
+	_, _ = logs.Write([]byte("test log line\n"))
+	logsReq, _ := http.NewRequest(http.MethodGet, httpSrv.URL+"/api/system/logs?limit=10", nil)
+	for _, c := range cookies {
+		logsReq.AddCookie(c)
+	}
+	logsResp, err := http.DefaultClient.Do(logsReq)
+	if err != nil || logsResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/system/logs failed: %v %v", logsResp, err)
+	}
+	var logsBody logview.Page
+	_ = json.NewDecoder(logsResp.Body).Decode(&logsBody)
+	_ = logsResp.Body.Close()
+	if len(logsBody.Entries) != 1 || logsBody.Entries[0].Text != "test log line" {
+		t.Fatalf("unexpected log page: %+v", logsBody)
+	}
 
 	// Missing CSRF rejected.
 	noCsrfReq, _ := http.NewRequest(http.MethodPost, httpSrv.URL+"/api/sources", bytes.NewBufferString(`{"remote_root_id":"d_movies","local_alias":"Movies"}`))
@@ -148,10 +167,16 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 		t.Fatalf("GET /api/tasks failed: %v", err)
 	}
 	var tasksBody struct {
-		Tasks []download.TaskView `json:"tasks"`
+		Tasks  []download.TaskView `json:"tasks"`
+		Total  int                 `json:"total"`
+		Limit  int                 `json:"limit"`
+		Offset int                 `json:"offset"`
 	}
 	_ = json.NewDecoder(tasksResp.Body).Decode(&tasksBody)
 	_ = tasksResp.Body.Close()
+	if tasksBody.Total != 1 || tasksBody.Limit != 100 || tasksBody.Offset != 0 {
+		t.Fatalf("unexpected tasks pagination: %+v", tasksBody)
+	}
 	if len(tasksBody.Tasks) != 1 || tasksBody.Tasks[0].TargetRelPath != "Movies/movie.mkv" {
 		t.Fatalf("unexpected tasks list: %+v", tasksBody.Tasks)
 	}

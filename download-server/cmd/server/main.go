@@ -18,6 +18,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
 	"github.com/nihildigit/piko/download-server/internal/localfs"
+	"github.com/nihildigit/piko/download-server/internal/logview"
 	"github.com/nihildigit/piko/download-server/internal/netdns"
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
@@ -26,6 +27,7 @@ import (
 )
 
 func main() {
+	logview.InstallDefault()
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		log.Fatalf("configuration error: %v", err)
@@ -40,6 +42,7 @@ func main() {
 }
 
 func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catalog, contentOverride backend.ContentSource) error {
+	logs := logview.InstallDefault()
 	netdns.Configure()
 
 	lock, err := config.AcquireInstanceLock(cfg.DataDir)
@@ -148,6 +151,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	auth := web.NewAuthenticator(st, false, false)
 	webSrv := web.NewServer(auth, st, catSvc, dlSvc, broker, controller, notifier, web.Options{
 		DataDir: cfg.DataDir,
+		Logs:    logs,
 	})
 	webSrv.SetReady(true)
 
