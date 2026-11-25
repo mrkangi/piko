@@ -12,9 +12,9 @@
   和 `buildscript` 的仓库指向可用镜像；临时脚本放在 `/tmp`，不要提交。
   只改 `settings.gradle.kts` 的仓库不够，根 `build.gradle.kts` 的 `buildscript`
   仍会走原仓库。
-- **Gradle 9.6.1 + foojay-resolver 0.9 在当前容器配置 `:desktopApp` 时会报
-  `JvmVendorSpec ... IBM_SEMERU`**：验证 UI/Android 时使用
-  `--configure-on-demand`，避免无关模块被提前配置。
+- **Gradle 9.6.1 + foojay-resolver 0.9 配置 `:desktopApp` 时会报
+  `JvmVendorSpec ... IBM_SEMERU`**：`settings.gradle.kts` 已升级到 1.0.0 修复；
+  若临时回退版本，验证 UI/Android 时需加 `--configure-on-demand`，避免无关模块被提前配置。
 - **不要用 `-x :shared:compileKotlinDesktop` 验证 UI**：`ui` 依赖 `shared`
   的编译产物，跳过 shared 只会得到整屏“Unresolved reference 'shared'”，没有诊断价值。
   需要先让 shared 正常编译。

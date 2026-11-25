@@ -56,11 +56,12 @@ settingsEvaluated { settings ->
   `/mnt/kangjin-default/tools/jdk25`。
 - **不要**把工具链临时降到 21：`WindowsToast.kt` 用了 JDK 25 的
   `MemorySegment.setAtIndex` 等 FFM API，降到 21 会报一片类型错误，与业务代码无关。
-- foojay 0.9.0 在 Gradle 9.6.1 上找不到工具链时会抛
-  `NoSuchFieldError: JvmVendorSpec.IBM_SEMERU`。直接告诉 Gradle 已安装的 JDK：
+- foojay 已升级到 1.0.0（兼容 Gradle 9.6.1）；0.9.0 在找不到工具链时会抛
+  `NoSuchFieldError: JvmVendorSpec.IBM_SEMERU`，改回旧版本会重新踩坑。
+- 本机无法访问 foojay 下载源时，直接告诉 Gradle 已安装的 Zulu 25：
 
 ```bash
--Porg.gradle.java.installations.paths=/mnt/kangjin-default/tools/jdk25
+-Porg.gradle.java.installations.paths=<zulu-25-home>
 ```
 
 ## 3. Android SDK
