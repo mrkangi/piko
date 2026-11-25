@@ -15,6 +15,16 @@ if [[ -z "$VERSION" ]]; then
 fi
 BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 UPDATE_REPO="${UPDATE_REPO:-NihilDigit/piko}"
+DEB_VERSION="${PACKAGE_VERSION:-$VERSION}"
+case "$VERSION" in
+  *-*)
+    # Test versions use arbitrary tag suffixes, so their lexical order does not
+    # match build order. Give the .deb a monotonic upstream component; keep the
+    # artifact and binary version unchanged.
+    DEB_STAMP="$(date -u -d "$BUILD_TIME" +%Y%m%d%H%M%S 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+    DEB_VERSION="${VERSION%%-*}.${DEB_STAMP}"
+    ;;
+esac
 
 if [[ "${SKIP_WEB:-0}" != "1" ]]; then
   npm --prefix "$ROOT/web" ci
@@ -60,7 +70,7 @@ echo "==> termux/aarch64 (.deb) -> ${DEB_NAME}"
 go run "$ROOT/cmd/termuxdeb" \
   -binary "$OUT/${PREFIX}-android-arm64" \
   -output "$OUT/${DEB_NAME}" \
-  -version "${PACKAGE_VERSION:-$VERSION}"
+  -version "$DEB_VERSION"
 ARTIFACTS+=("${DEB_NAME}")
 
 if command -v dpkg-deb >/dev/null 2>&1; then
@@ -93,6 +103,7 @@ fi
 {
   echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "version=${VERSION}"
+  echo "deb_version=${DEB_VERSION}"
   echo "build_time=${BUILD_TIME}"
   echo "go_version=$(go version)"
   echo "git_commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"

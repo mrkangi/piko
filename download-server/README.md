@@ -103,6 +103,7 @@ GitHub Actions 已接入主项目 tag 流程：
 
 ```bash
 # 稳定版：使用最新正式 Release 中的 apt 元数据
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
 echo 'deb [trusted=yes] https://github.com/NihilDigit/piko/releases/latest/download ./' \
   > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
 pkg update
@@ -115,6 +116,7 @@ pkg upgrade piko-download-server
 测试版（`test-*-server`，包含 fork 构建）使用固定滚动 Release：
 
 ```bash
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
 echo 'deb [trusted=yes] https://github.com/mrkangi/piko/releases/download/termux-test ./' \
   > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
 pkg update
@@ -132,7 +134,7 @@ sh download-server-*-termux-add-apt-source.sh test --repo mrkangi/piko
 
 - `[trusted=yes]` 表示不做 GPG 签名校验，只依赖 HTTPS；请只添加自己信任的仓库。
 - 稳定版源要等下一次正式 Release 带上 apt 元数据后才可用；测试版源由 `test-*-server` 构建自动更新。
-- 稳定版和测试版是两个独立通道。测试包版本形如 `9.9.9-<日期>-...`，按 Debian 版本比较高于正式版 `1.x`；从测试通道切回稳定通道时需要先卸载或显式安装低版本。
+- 稳定版和测试版是两个独立通道。测试包的二进制版本仍是 `9.9.9-<tag 后缀>`，但 `.deb` 包版本使用 `9.9.9.<构建时间>`，保证 `pkg upgrade` 能识别后续构建；从测试通道切回稳定通道时需要先卸载或显式安装低版本。
 - 升级由 dpkg 执行 `prerm`/`postinst`，会自动停启 `download-server` 服务。
 
 ### 方式二：使用 `pkg` 安装本地 `.deb` 包

@@ -186,10 +186,12 @@ Termux 官方源不包含 `piko-download-server`。需要 `pkg` 直接安装时�
 
 ```bash
 # 稳定版
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
 echo 'deb [trusted=yes] https://github.com/NihilDigit/piko/releases/latest/download ./' \
   > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
 
 # 测试版（fork）
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
 echo 'deb [trusted=yes] https://github.com/mrkangi/piko/releases/download/termux-test ./' \
   > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
 
@@ -218,6 +220,11 @@ CI 会把这三个文件和 `.deb` 一起上传到版本 Release；`build.yml` �
 `test-*-server` 构建时把它们同步到 `termux-test`。稳定版源要等下一次正式 Release 附件里
 包含 apt 元数据后才可用。
 
+测试包的 tag 后缀是任意字符串，按 Debian 版本排序并不等于构建时间顺序（例如
+`9.9.9-20261125-logs-...` 会排在 `9.9.9-20261125-apt-...` 前面）。因此 `.deb` 的控制版本
+单独使用 `9.9.9.<构建时间>`，二进制内部版本和产物文件名仍保留 `9.9.9-<后缀>`；这样每次
+`test-*-server` 构建都能被 `pkg upgrade` 识别为更新。
+
 本地验证源格式（Linux 主机，不要求 aarch64）：
 
 ```bash
@@ -238,4 +245,4 @@ apt-get -o Dir::Etc::sourcelist="$work/sources.list" -o Dir::Etc::sourceparts=- 
 
 CI 发布后也可以把 `file:` 换成真实的 GitHub Release URL 重跑同一组命令，验证跳转、
 `Packages.gz` 和附件 SHA256。`[trusted=yes]` 不做 GPG 签名校验，只应添加自己信任的仓库；
-稳定版与测试版是独立通道，测试包 `9.9.9-...` 的 Debian 版本高于正式版 `1.x`。
+稳定版与测试版是独立通道，测试包的 Debian 包版本 `9.9.9.<时间戳>` 高于正式版 `1.x`。
