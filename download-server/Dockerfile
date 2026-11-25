@@ -6,12 +6,17 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.26-alpine AS builder
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+ARG UPDATE_REPO=NihilDigit/piko
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web-builder /internal/web/dist ./internal/web/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -tags embed_ui -trimpath -ldflags="-s -w" -o /out/download-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -tags embed_ui -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.updateRepo=${UPDATE_REPO}" \
+    -o /out/download-server ./cmd/server
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata && \

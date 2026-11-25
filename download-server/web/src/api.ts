@@ -1,4 +1,4 @@
-import type { AuthUser, FileListPage, LocalDirEntry, LogPage, NotificationChannel, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskListPage } from './types'
+import type { AuthUser, FileListPage, LocalDirEntry, LogPage, NotificationChannel, RemoteFolderEntry, SetupStatus, Source, SystemSettings, SystemStats, TaskListPage, UpdateApplyResult, UpdateInfo } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '')
 
@@ -227,6 +227,20 @@ export function browseRemoteFolders(parentId: string, cursor = ''): Promise<{ en
   if (parentId) params.set('parent_id', parentId)
   if (cursor) params.set('cursor', cursor)
   return request(`/api/remote/folders?${params.toString()}`)
+}
+
+export function getUpdate(refresh = false): Promise<UpdateInfo> {
+  return request<UpdateInfo>(`/api/system/update${refresh ? '?refresh=1' : ''}`)
+}
+
+export function applyUpdate(): Promise<UpdateApplyResult> {
+  return request<UpdateApplyResult>('/api/system/update/apply', { method: 'POST' })
+}
+
+export async function getHealth(): Promise<{ status: string; version: string }> {
+  const res = await fetch(apiURL('/healthz'), { credentials: 'include' })
+  if (!res.ok) throw new Error(`服务未就绪 (${res.status})`)
+  return res.json() as Promise<{ status: string; version: string }>
 }
 
 export function listTasks(params: { state?: string; source_id?: string; q?: string; limit?: number; offset?: number }): Promise<TaskListPage> {

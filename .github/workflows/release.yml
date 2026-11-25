@@ -109,6 +109,8 @@ jobs:
         working-directory: download-server
         env:
           ARTIFACT_PREFIX: download-server-${{ needs.version.outputs.name }}
+          DOWNLOAD_SERVER_VERSION: ${{ needs.version.outputs.name }}
+          UPDATE_REPO: ${{ github.repository }}
         run: bash scripts/build-all.sh
 
       - uses: actions/upload-artifact@v6
@@ -118,6 +120,9 @@ jobs:
             download-server/bin/download-server-${{ needs.version.outputs.name }}-*
             download-server/bin/SHA256SUMS.txt
             download-server/bin/BUILD-INFO.txt
+            download-server/bin/Packages
+            download-server/bin/Packages.gz
+            download-server/bin/Release
           if-no-files-found: error
           retention-days: 7
 

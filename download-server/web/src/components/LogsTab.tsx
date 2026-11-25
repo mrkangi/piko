@@ -163,7 +163,7 @@ export function LogsTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:w-auto">
           <div className="relative w-full sm:w-72">
             <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
             <input
@@ -174,51 +174,54 @@ export function LogsTab() {
               className="w-full rounded-lg border border-slate-800 bg-slate-900 pl-8 pr-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
             />
           </div>
-          <button
-            onClick={() => setAutoRefresh((value) => !value)}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
-              autoRefresh
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                : 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-            {autoRefresh ? '自动刷新中' : '自动刷新已暂停'}
-          </button>
-          <button
-            onClick={() => void reloadTail()}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            刷新
-          </button>
-          <button
-            onClick={() => void loadOlder()}
-            disabled={!hasMoreBefore || loadingOlder || entries.length >= MAX_RENDERED}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-            {loadingOlder ? '加载中…' : '加载更早'}
-          </button>
-          {!stickToBottom && (
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
             <button
-              onClick={() => setStickToBottom(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/15 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-600/25 cursor-pointer"
+              onClick={() => setAutoRefresh((value) => !value)}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
+                autoRefresh
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                  : 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
+              }`}
             >
-              <ArrowDownToLine className="h-3.5 w-3.5" />
-              回到最新
+              {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {autoRefresh ? '自动刷新中' : '自动刷新已暂停'}
             </button>
-          )}
+            <button
+              onClick={() => void reloadTail()}
+              disabled={loading}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+            </button>
+            <button
+              onClick={() => void loadOlder()}
+              disabled={!hasMoreBefore || loadingOlder || entries.length >= MAX_RENDERED}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+              {loadingOlder ? '加载中…' : '加载更早'}
+            </button>
+            {!stickToBottom && (
+              <button
+                onClick={() => setStickToBottom(true)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/15 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-600/25 cursor-pointer"
+              >
+                <ArrowDownToLine className="h-3.5 w-3.5" />
+                回到最新
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="text-xs text-slate-400">
           {stats ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>
+              <span className="hidden sm:inline">
                 后端缓冲 {stats.buffered} 条 / {formatBytes(stats.bytes)}（上限 {stats.max_entries} 条或 {formatBytes(stats.max_bytes)}）
               </span>
-              <span>已淘汰 {stats.dropped} 条</span>
+              <span className="sm:hidden">缓冲 {stats.buffered} 条</span>
+              <span className="hidden sm:inline">已淘汰 {stats.dropped} 条</span>
               <span className="text-slate-500">页面渲染 {entries.length} / {MAX_RENDERED} 条</span>
             </div>
           ) : (
@@ -253,8 +256,8 @@ export function LogsTab() {
             </div>
           ) : (
             visibleEntries.map((entry) => (
-              <div key={entry.seq} className="flex gap-3 rounded px-2 py-0.5 hover:bg-slate-800/40">
-                <span className="w-24 shrink-0 text-slate-500 tabular-nums">{formatLogTime(entry.time)}</span>
+              <div key={entry.seq} className="flex flex-col gap-0.5 rounded px-2 py-1 hover:bg-slate-800/40 sm:flex-row sm:gap-3 sm:py-0.5">
+                <span className="shrink-0 text-slate-500 tabular-nums sm:w-24">{formatLogTime(entry.time)}</span>
                 <span className={`min-w-0 whitespace-pre-wrap break-all ${levelClass(entry.text)}`}>{entry.text}</span>
               </div>
             ))

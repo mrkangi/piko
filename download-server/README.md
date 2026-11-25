@@ -85,7 +85,7 @@ npm run dev
 - FreeBSD：`amd64`
 - Android/Termux：`arm64` 二进制、`termux-aarch64.deb` 安装包与 `install-termux.sh` 一键常驻脚本
 
-产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt` 与 `BUILD-INFO.txt`。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
+产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt`、`BUILD-INFO.txt` 以及 Termux 用的 apt 源元数据 `Packages`、`Packages.gz`、`Release`（本机有 `dpkg-deb` 时）。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
 
 GitHub Actions 已接入主项目 tag 流程：
 
@@ -95,9 +95,47 @@ GitHub Actions 已接入主项目 tag 流程：
 
 ## Termux 常驻部署（Android）
 
-支持 **`pkg` 直接安装 `.deb` 包** 或 **一键安装脚本** 两种方式，均基于官方 `termux-services`（`runit`）实现后台常驻与崩溃自启。
+支持 **`pkg` 源直接安装**、**`pkg` 安装本地 `.deb`** 或 **一键安装脚本** 三种方式，均基于官方 `termux-services`（`runit`）实现后台常驻与崩溃自启。
 
-### 方式一：使用 `pkg` 安装 `.deb` 包（推荐）
+### 方式一：Termux apt 源（推荐，可直接 `pkg upgrade`）
+
+构建流程会为 Termux 生成 flat apt 源元数据（`Packages`、`Packages.gz`、`Release`），并随 `.deb` 一起发布。配置一次源之后即可像普通 Termux 包一样安装和升级：
+
+```bash
+# 稳定版：使用最新正式 Release 中的 apt 元数据
+echo 'deb [trusted=yes] https://github.com/NihilDigit/piko/releases/latest/download ./' \
+  > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
+pkg update
+pkg install piko-download-server
+
+# 以后升级
+pkg upgrade piko-download-server
+```
+
+测试版（`test-*-server`，包含 fork 构建）使用固定滚动 Release：
+
+```bash
+echo 'deb [trusted=yes] https://github.com/mrkangi/piko/releases/download/termux-test ./' \
+  > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
+pkg update
+pkg install piko-download-server
+```
+
+也可以直接运行发布包里的 `download-server-*-termux-add-apt-source.sh`：
+
+```bash
+sh download-server-*-termux-add-apt-source.sh stable
+sh download-server-*-termux-add-apt-source.sh test --repo mrkangi/piko
+```
+
+说明：
+
+- `[trusted=yes]` 表示不做 GPG 签名校验，只依赖 HTTPS；请只添加自己信任的仓库。
+- 稳定版源要等下一次正式 Release 带上 apt 元数据后才可用；测试版源由 `test-*-server` 构建自动更新。
+- 稳定版和测试版是两个独立通道。测试包版本形如 `9.9.9-<日期>-...`，按 Debian 版本比较高于正式版 `1.x`；从测试通道切回稳定通道时需要先卸载或显式安装低版本。
+- 升级由 dpkg 执行 `prerm`/`postinst`，会自动停启 `download-server` 服务。
+
+### 方式二：使用 `pkg` 安装本地 `.deb` 包
 
 下载构建产物中的 `download-server-<版本>-termux-aarch64.deb` 后，在 Termux 中执行：
 
@@ -115,7 +153,7 @@ pkg install ./download-server-*-termux-aarch64.deb
 
 卸载时直接执行 `pkg uninstall piko-download-server` 即可自动停止并移除服务。
 
-### 方式二：一键安装脚本 `install-termux.sh`
+### 方式三：一键安装脚本 `install-termux.sh`
 
 如果本地已有 `download-server-android-arm64` 二进制或 `.deb` 包，或者希望自动从 GitHub Releases 拉取最新版：
 
@@ -136,6 +174,18 @@ sv down download-server      # 停止服务
 sv up download-server        # 启动服务
 cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Setup Token
 ```
+
+### 在线升级
+
+管理页右上角的版本按钮会读取构建仓库的 GitHub Releases 检查新版本；有更新时按钮显示「可升级」，点开即可直接升级。
+
+- 正式版本只检查正式 Release；测试构建（版本号带 `-` 后缀）会同时检查 Pre-release，因此 `test-*-server` 构建出的服务可以继续追新测试包。
+- 升级包按当前 `GOOS/GOARCH` 选择对应二进制，下载后使用 Release 中的 `SHA256SUMS.txt` 校验，再原子替换当前程序。
+- 当前程序会备份为同目录的 `download-server.prev`；Termux、systemd 等常驻方式会在替换成功后原地重启，下载任务由启动恢复逻辑继续。
+- Termux 的 `.deb`、`install-termux.sh` 和直接运行二进制都支持自更新；需要 `$PREFIX/bin` 对当前用户可写，并且能访问 GitHub。
+- Docker 容器内不支持自更新，请在宿主机执行 `docker compose pull && docker compose up -d`。
+- GitHub API 未登录请求有频率限制，服务端会缓存检查结果 10 分钟；手动点「重新检查」会强制刷新。
+- 可用 `download-server --version` 查看当前二进制版本与构建时间。
 
 ### 外置存储与 SD 卡
 

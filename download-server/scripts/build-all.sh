@@ -6,13 +6,22 @@ OUT="$ROOT/bin"
 cd "$ROOT"
 mkdir -p "$OUT"
 PREFIX="${ARTIFACT_PREFIX:-download-server}"
+VERSION="${DOWNLOAD_SERVER_VERSION:-${PACKAGE_VERSION:-}}"
+if [[ -z "$VERSION" ]]; then
+  case "$PREFIX" in
+    download-server-*) VERSION="${PREFIX#download-server-}" ;;
+    *) VERSION="dev" ;;
+  esac
+fi
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+UPDATE_REPO="${UPDATE_REPO:-NihilDigit/piko}"
 
 if [[ "${SKIP_WEB:-0}" != "1" ]]; then
   npm --prefix "$ROOT/web" ci
   npm --prefix "$ROOT/web" run build
 fi
 
-LDFLAGS="-s -w"
+LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.updateRepo=${UPDATE_REPO}"
 BUILD_FLAGS=(-tags embed_ui -trimpath -ldflags "$LDFLAGS")
 ARTIFACTS=()
 
@@ -51,14 +60,28 @@ echo "==> termux/aarch64 (.deb) -> ${DEB_NAME}"
 go run "$ROOT/cmd/termuxdeb" \
   -binary "$OUT/${PREFIX}-android-arm64" \
   -output "$OUT/${DEB_NAME}" \
-  -version "${PACKAGE_VERSION:-$PREFIX}"
+  -version "${PACKAGE_VERSION:-$VERSION}"
 ARTIFACTS+=("${DEB_NAME}")
+
+if command -v dpkg-deb >/dev/null 2>&1; then
+  echo "==> termux/aarch64 apt repository metadata"
+  bash "$ROOT/scripts/make-apt-repo.sh" --out "$OUT" "$OUT/${DEB_NAME}"
+  ARTIFACTS+=(Packages Packages.gz Release)
+else
+  echo "==> skipping termux apt metadata (dpkg-deb not found)"
+fi
 
 INSTALLER_NAME="${PREFIX}-install-termux.sh"
 echo "==> termux installer -> ${INSTALLER_NAME}"
 cp "$ROOT/scripts/install-termux.sh" "$OUT/${INSTALLER_NAME}"
 chmod +x "$OUT/${INSTALLER_NAME}"
 ARTIFACTS+=("${INSTALLER_NAME}")
+
+APT_SOURCE_NAME="${PREFIX}-termux-add-apt-source.sh"
+echo "==> termux apt source helper -> ${APT_SOURCE_NAME}"
+cp "$ROOT/scripts/termux-add-apt-source.sh" "$OUT/${APT_SOURCE_NAME}"
+chmod +x "$OUT/${APT_SOURCE_NAME}"
+ARTIFACTS+=("${APT_SOURCE_NAME}")
 
 echo "==> checksums"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -69,6 +92,8 @@ fi
 
 {
   echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "version=${VERSION}"
+  echo "build_time=${BUILD_TIME}"
   echo "go_version=$(go version)"
   echo "git_commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "frontend_embedded=true"

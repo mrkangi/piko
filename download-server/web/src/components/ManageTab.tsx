@@ -331,7 +331,7 @@ export function ManageTab({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-500/30 bg-cyan-500/15 text-cyan-400 shrink-0">
@@ -344,11 +344,11 @@ export function ManageTab({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1">
+          <div className="flex w-full flex-col gap-1.5 text-xs text-slate-400 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
+            <span className="break-all rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1">
               数据目录：<span className="font-mono text-slate-300">{settings?.data_dir || '—'}</span>
             </span>
-            <span className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1">
+            <span className="truncate rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1">
               {settings?.pikpak_configured ? `PikPak 账号 ${settings.pikpak_username}` : 'PikPak 账号未配置'}
             </span>
           </div>
@@ -358,7 +358,7 @@ export function ManageTab({
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
             <label className="block space-y-1.5 lg:col-span-8">
               <span className="text-xs text-slate-400">服务端下载根目录（支持浏览器选择服务器路径）</span>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   type="text"
                   required
@@ -368,12 +368,12 @@ export function ManageTab({
                     setSettingsDirty(true)
                   }}
                   placeholder="/downloads"
-                  className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => setLocalModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 shrink-0 cursor-pointer"
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
                 >
                   <FolderOpen className="h-3.5 w-3.5 text-cyan-400" />
                   浏览服务器目录
@@ -452,7 +452,7 @@ export function ManageTab({
             <button
               type="submit"
               disabled={savingSettings}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer sm:w-auto"
             >
               <Save className="h-3.5 w-3.5" />
               {savingSettings ? '保存并校验中…' : '保存设置'}
@@ -467,7 +467,7 @@ export function ManageTab({
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/15 text-sky-400 shrink-0">
@@ -513,7 +513,7 @@ export function ManageTab({
                 setProxySaving(false)
               }
             }}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 cursor-pointer"
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 cursor-pointer sm:w-auto"
           >
             <Save className="h-3.5 w-3.5" />
             {proxySaving ? '验证中…' : '验证并启用'}
@@ -534,7 +534,7 @@ export function ManageTab({
                 setProxySaving(false)
               }
             }}
-            className="inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+            className="inline-flex w-full items-center justify-center rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer sm:w-auto"
           >
             关闭代理
           </button>
@@ -546,7 +546,7 @@ export function ManageTab({
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-4 sm:p-5">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-500/15 text-emerald-400 shrink-0">
               <UserCog className="h-5 w-5" />
@@ -591,7 +591,7 @@ export function ManageTab({
                   setAccountSaving(false)
                 }
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 cursor-pointer sm:w-auto"
             >
               <Save className="h-3.5 w-3.5" />
               {accountSaving ? '验证中…' : '验证并保存账号'}
@@ -600,7 +600,7 @@ export function ManageTab({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-4 sm:p-5">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/15 text-violet-400 shrink-0">
               <ShieldCheck className="h-5 w-5" />
@@ -654,7 +654,7 @@ export function ManageTab({
                   setAdminSaving(false)
                 }
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer sm:w-auto"
             >
               <ShieldCheck className="h-3.5 w-3.5" />
               {adminSaving ? '更新中…' : '修改管理员密码'}
@@ -664,7 +664,7 @@ export function ManageTab({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-5 sm:p-5">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/15 text-sky-400 shrink-0">
             <Bell className="h-5 w-5" />
@@ -677,8 +677,8 @@ export function ManageTab({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
-          <label className="block space-y-1.5">
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-slate-950/40 p-3 sm:flex-row sm:flex-wrap sm:items-end sm:p-4">
+          <label className="block w-full space-y-1.5 sm:w-auto">
             <span className="text-xs text-slate-400">状态汇报间隔（分钟，0 关闭）</span>
             <input
               type="number"
@@ -689,7 +689,7 @@ export function ManageTab({
                 setStatusIntervalMinutes(Number(e.target.value))
                 setStatusIntervalDirty(true)
               }}
-              className="w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 tabular-nums focus:border-blue-500 focus:outline-none sm:w-32"
             />
           </label>
           <button
@@ -704,7 +704,7 @@ export function ManageTab({
                 setStatusIntervalMessage(err instanceof Error ? err.message : '保存状态汇报间隔失败')
               }
             }}
-            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer sm:w-auto"
           >
             保存间隔
           </button>
@@ -790,12 +790,12 @@ export function ManageTab({
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-slate-500">「加入下载队列」会按扫描批次汇总发送，避免大量文件逐条刷屏。</p>
             <button
               type="submit"
               disabled={notifySaving}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 cursor-pointer sm:w-auto"
             >
               <Plus className="h-3.5 w-3.5" />
               {notifySaving ? '添加中…' : '添加通知渠道'}
@@ -845,7 +845,7 @@ export function ManageTab({
                     </span>
                   ))}
                 </div>
-                <div className="flex items-center justify-end gap-2 border-t border-slate-800/80 pt-3">
+                <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-800/80 pt-3">
                   <button
                     type="button"
                     onClick={async () => {
@@ -899,7 +899,7 @@ export function ManageTab({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 space-y-5">
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 space-y-5 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/15 text-amber-400 shrink-0">
@@ -912,7 +912,7 @@ export function ManageTab({
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
             <button
               type="button"
               disabled={scanAllLoading || sources.length === 0}
@@ -924,7 +924,7 @@ export function ManageTab({
                   setScanAllLoading(false)
                 }
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40 cursor-pointer sm:w-auto"
             >
               <RefreshCw className={`h-4 w-4 text-emerald-400 ${scanAllLoading ? 'animate-spin' : ''}`} />
               {scanAllLoading ? '正在触发…' : '扫描全部已启用'}
@@ -932,7 +932,7 @@ export function ManageTab({
             <button
               type="button"
               onClick={() => setRemoteModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 px-3.5 py-2 text-xs font-medium text-blue-200 hover:bg-blue-600/30 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600/20 border border-blue-500/40 px-3.5 py-2 text-xs font-medium text-blue-200 hover:bg-blue-600/30 cursor-pointer sm:w-auto"
             >
               <CheckSquare className="h-4 w-4 text-blue-400" />
               浏览并勾选 PikPak 目录
@@ -942,7 +942,7 @@ export function ManageTab({
 
         {drafts.length > 0 && (
           <div className="rounded-xl border border-blue-500/30 bg-blue-950/20 p-4 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs font-semibold text-blue-200">待添加的 PikPak 目录（{drafts.length} 个）</h3>
               <div className="flex items-center gap-2">
                 <button
@@ -1140,7 +1140,7 @@ export function ManageTab({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                    <div className="grid grid-cols-1 gap-1.5 text-xs text-slate-400 sm:grid-cols-2 sm:gap-2">
                       <div>
                         上次扫描：<span className="text-slate-200">{formatTimestamp(src.last_scan_at)}</span>
                       </div>
@@ -1196,7 +1196,7 @@ export function ManageTab({
                           </button>
                         )}
                       </div>
-                      <div className="col-span-2 flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 sm:col-span-2">
                         <span>最小文件大小：</span>
                         {isEditingMin ? (
                           <>

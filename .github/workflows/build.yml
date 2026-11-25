@@ -161,6 +161,8 @@ jobs:
         working-directory: download-server
         env:
           ARTIFACT_PREFIX: download-server-${{ needs.version.outputs.name }}
+          DOWNLOAD_SERVER_VERSION: ${{ needs.version.outputs.name }}
+          UPDATE_REPO: ${{ github.repository }}
         run: bash scripts/build-all.sh
 
       - uses: actions/upload-artifact@v6
@@ -170,6 +172,9 @@ jobs:
             download-server/bin/download-server-${{ needs.version.outputs.name }}-*
             download-server/bin/SHA256SUMS.txt
             download-server/bin/BUILD-INFO.txt
+            download-server/bin/Packages
+            download-server/bin/Packages.gz
+            download-server/bin/Release
           if-no-files-found: error
           retention-days: 7
 
@@ -428,3 +433,36 @@ jobs:
               --notes-file notes.md \
               --prerelease
           fi
+
+      # 给 Termux 提供固定地址的 flat apt 源：
+      #   deb [trusted=yes] https://github.com/<owner>/<repo>/releases/download/termux-test ./
+      # 每次 server 构建覆盖 Packages 与当前 deb，之后用户直接 pkg upgrade。
+      - name: Update Termux test apt repository
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG" != *server* ]]; then
+            echo "Not a server test tag; skipping apt repository update."
+            exit 0
+          fi
+          if ! ls dist/*termux-aarch64.deb >/dev/null 2>&1; then
+            echo "No Termux package in this build; skipping apt repository update."
+            exit 0
+          fi
+          for file in Packages Packages.gz Release; do
+            test -f "dist/$file"
+          done
+          repo_tag=termux-test
+          if ! gh release view "$repo_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$repo_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Piko Termux 测试源" \
+              --notes "滚动 Termux apt 源，仅包含最新的 piko-download-server 测试包。安装方式见 download-server/README.md。" \
+              --prerelease
+          fi
+          gh release upload "$repo_tag" \
+            dist/Packages dist/Packages.gz dist/Release dist/*termux-aarch64.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

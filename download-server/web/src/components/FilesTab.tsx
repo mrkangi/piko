@@ -20,6 +20,45 @@ interface Props {
   onOffsetChange: (offset: number) => void
 }
 
+function FileDelivery({ item, hideFilenames }: { item: FileView; hideFilenames: boolean }) {
+  if (item.delivery) {
+    const localPath = maskPath(item.delivery.local_rel_path, hideFilenames)
+    return (
+      <div className="space-y-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-slate-200">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+          <span className="min-w-0 max-w-md flex-1 truncate" title={hideFilenames ? undefined : item.delivery.local_rel_path}>
+            {localPath}
+          </span>
+          {item.path_moved && (
+            <span className="rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-300">
+              远端路径已变更
+            </span>
+          )}
+          {item.delivery.preexisting && (
+            <span className="rounded border border-cyan-500/30 bg-cyan-500/15 px-1.5 py-0.5 text-[11px] text-cyan-300">
+              本地已存在
+            </span>
+          )}
+        </div>
+        {item.delivery.local_sha256 && (
+          <div className="text-[11px] font-mono text-slate-500">
+            SHA256: {item.delivery.local_sha256.slice(0, 16)}…
+          </div>
+        )}
+      </div>
+    )
+  }
+  if (item.latest_task) {
+    return (
+      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${TASK_STATE_META[item.latest_task.state].badgeClass}`}>
+        {TASK_STATE_META[item.latest_task.state].label}
+      </span>
+    )
+  }
+  return <span className="text-xs text-slate-500">基线存量（未入队）</span>
+}
+
 export function FilesTab({
   files,
   sources,
@@ -40,7 +79,7 @@ export function FilesTab({
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-1.5">
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
           {[
             { key: '', label: '全部文件' },
             { key: 'PRESENT', label: '远端存在' },
@@ -49,7 +88,7 @@ export function FilesTab({
             <button
               key={item.key || 'all'}
               onClick={() => onRemoteStateChange(item.key)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition cursor-pointer ${
+              className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition cursor-pointer ${
                 remoteStateFilter === item.key
                   ? 'bg-blue-600 text-white'
                   : 'border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
@@ -60,8 +99,8 @@ export function FilesTab({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 sm:w-56 sm:flex-none">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="relative w-full sm:w-56">
             <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
             <input
               type="text"
@@ -74,7 +113,7 @@ export function FilesTab({
           <select
             value={sourceFilter}
             onChange={(e) => onSourceFilterChange(e.target.value)}
-            className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 focus:border-blue-500 focus:outline-none"
+            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 focus:border-blue-500 focus:outline-none sm:w-auto"
           >
             <option value="">全部来源</option>
             {sources.map((s) => (
@@ -84,7 +123,7 @@ export function FilesTab({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
+      <div className="hidden overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-800 bg-slate-950/60 text-xs uppercase text-slate-400">
@@ -107,7 +146,6 @@ export function FilesTab({
                   const obj = item.remote_object
                   const outOfScope = obj.remote_state === 'OUT_OF_SCOPE'
                   const remotePath = maskPath(obj.relative_path, hideFilenames)
-                  const localPath = item.delivery ? maskPath(item.delivery.local_rel_path, hideFilenames) : ''
                   return (
                     <tr key={obj.id} className="hover:bg-slate-800/35">
                       <td className="px-4 py-3 max-w-md">
@@ -140,37 +178,7 @@ export function FilesTab({
                       </td>
 
                       <td className="px-4 py-3">
-                        {item.delivery ? (
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs text-slate-200">
-                              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                              <span className="truncate max-w-md" title={hideFilenames ? undefined : item.delivery.local_rel_path}>
-                                {localPath}
-                              </span>
-                              {item.path_moved && (
-                                <span className="rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-300">
-                                  远端路径已变更
-                                </span>
-                              )}
-                              {item.delivery.preexisting && (
-                                <span className="rounded border border-cyan-500/30 bg-cyan-500/15 px-1.5 py-0.5 text-[11px] text-cyan-300">
-                                  本地已存在
-                                </span>
-                              )}
-                            </div>
-                            {item.delivery.local_sha256 && (
-                              <div className="text-[11px] font-mono text-slate-500">
-                                SHA256: {item.delivery.local_sha256.slice(0, 16)}…
-                              </div>
-                            )}
-                          </div>
-                        ) : item.latest_task ? (
-                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${TASK_STATE_META[item.latest_task.state].badgeClass}`}>
-                            {TASK_STATE_META[item.latest_task.state].label}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-500">基线存量（未入队）</span>
-                        )}
+                        <FileDelivery item={item} hideFilenames={hideFilenames} />
                       </td>
                     </tr>
                   )
@@ -179,6 +187,58 @@ export function FilesTab({
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="space-y-2.5 md:hidden">
+        {files.length === 0 ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-12 text-center text-sm text-slate-500">
+            暂无文件索引记录
+          </div>
+        ) : (
+          files.map((item) => {
+            const obj = item.remote_object
+            const outOfScope = obj.remote_state === 'OUT_OF_SCOPE'
+            const remotePath = maskPath(obj.relative_path, hideFilenames)
+            return (
+              <article key={obj.id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-slate-100" title={hideFilenames ? undefined : obj.relative_path}>
+                      {remotePath}
+                    </div>
+                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
+                      <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
+                        {sourceMap.get(obj.source_id) || obj.source_id}
+                      </span>
+                      <span>最近发现：{formatTimestamp(obj.last_seen_at)}</span>
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-xs text-slate-300 tabular-nums">{formatBytes(obj.size)}</span>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {outOfScope ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">
+                      <AlertCircle className="h-3 w-3" />
+                      不在监控范围（保留本地）
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">
+                      远端存在
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-2 border-t border-slate-800/70 pt-2">
+                  <div className="text-[11px] text-slate-500">本地交付状态</div>
+                  <div className="mt-1">
+                    <FileDelivery item={item} hideFilenames={hideFilenames} />
+                  </div>
+                </div>
+              </article>
+            )
+          })
+        )}
       </div>
 
       <Pagination total={total} limit={limit} offset={offset} onOffsetChange={onOffsetChange} />

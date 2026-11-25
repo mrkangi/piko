@@ -30,7 +30,7 @@ export function LoginView({ onAuthenticated }: Props) {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-7 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-5 shadow-2xl sm:p-7">
         <div className="flex items-center gap-3 mb-6">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-500/15 text-blue-400 border border-blue-500/30">
             <CloudDownload className="h-6 w-6" />

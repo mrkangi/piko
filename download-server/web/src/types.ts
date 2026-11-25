@@ -205,3 +205,26 @@ export interface FileListPage {
   limit: number
   offset: number
 }
+
+export interface UpdateInfo {
+  current_version: string
+  build_time?: string
+  repo?: string
+  channel: 'stable' | 'test' | 'dev'
+  latest_version?: string
+  latest_tag?: string
+  published_at?: string
+  notes?: string
+  release_url?: string
+  asset_name?: string
+  asset_size?: number
+  available: boolean
+  can_apply: boolean
+  reason?: string
+  check_error?: string
+}
+
+export interface UpdateApplyResult {
+  version: string
+  restarting: boolean
+}

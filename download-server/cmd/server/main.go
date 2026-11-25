@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"strconv"
 	"sync"
@@ -23,10 +24,25 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/secret"
 	"github.com/nihildigit/piko/download-server/internal/store"
+	"github.com/nihildigit/piko/download-server/internal/updater"
 	"github.com/nihildigit/piko/download-server/internal/web"
 )
 
+var (
+	version    = "dev"
+	buildTime  = ""
+	updateRepo = "NihilDigit/piko"
+)
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
+		if buildTime == "" {
+			fmt.Printf("download-server %s\n", version)
+		} else {
+			fmt.Printf("download-server %s (%s)\n", version, buildTime)
+		}
+		return
+	}
 	logview.InstallDefault()
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -149,9 +165,11 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	}
 
 	auth := web.NewAuthenticator(st, false, false)
+	updateSvc := updater.New(version, buildTime, updateRepo)
 	webSrv := web.NewServer(auth, st, catSvc, dlSvc, broker, controller, notifier, web.Options{
 		DataDir: cfg.DataDir,
 		Logs:    logs,
+		Updater: updateSvc,
 	})
 	webSrv.SetReady(true)
 
@@ -181,7 +199,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("download-server listening on %s", cfg.ListenAddr)
+		log.Printf("download-server %s listening on %s", version, cfg.ListenAddr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  ArrowUpCircle,
   CloudDownload,
   Eye,
   EyeOff,
@@ -14,7 +15,7 @@ import {
 } from 'lucide-react'
 import * as api from './api'
 import { formatBytes, formatSpeed } from './format'
-import type { AuthUser, FileView, NotificationChannel, SetupStatus, Source, SystemSettings, SystemStats, TaskView } from './types'
+import type { AuthUser, FileView, NotificationChannel, SetupStatus, Source, SystemSettings, SystemStats, TaskView, UpdateInfo } from './types'
 import { LoginView } from './components/LoginView'
 import { SetupView } from './components/SetupView'
 import { SpeedSparkline } from './components/SpeedSparkline'
@@ -23,6 +24,7 @@ import { ManageTab } from './components/ManageTab'
 import { FilesTab } from './components/FilesTab'
 import { LogsTab } from './components/LogsTab'
 import { TaskDetailDrawer } from './components/TaskDetailDrawer'
+import { UpdateDialog } from './components/UpdateDialog'
 import { useDebouncedValue } from './useDebouncedValue'
 
 type TabKey = 'tasks' | 'files' | 'logs' | 'manage'
@@ -108,6 +110,12 @@ export function App() {
   const debouncedFileSearch = useDebouncedValue(fileSearch, 300)
 
   const [inspectedTask, setInspectedTask] = useState<TaskView | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [applyingUpdate, setApplyingUpdate] = useState(false)
+  const [restartingForUpdate, setRestartingForUpdate] = useState(false)
+  const [updateError, setUpdateError] = useState('')
   const [toast, setToast] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
   const pendingRefreshRef = useRef<RefreshOptions>(refreshScope({}))
@@ -265,6 +273,68 @@ export function App() {
 
   useEffect(() => {
     if (!user) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const info = await api.getUpdate()
+        if (!cancelled) setUpdateInfo(info)
+      } catch {
+        // Keep the last known version when an automatic check fails.
+      }
+    }
+    void load()
+    const timer = window.setInterval(load, 30 * 60 * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [user])
+
+  const refreshUpdate = useCallback(async (refresh: boolean) => {
+    setCheckingUpdate(true)
+    setUpdateError('')
+    try {
+      setUpdateInfo(await api.getUpdate(refresh))
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : '检查更新失败')
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }, [])
+
+  const startUpdate = useCallback(async () => {
+    if (!updateInfo?.available || !updateInfo.can_apply || applyingUpdate || restartingForUpdate) return
+    setApplyingUpdate(true)
+    setUpdateError('')
+    try {
+      const result = await api.applyUpdate()
+      setApplyingUpdate(false)
+      setRestartingForUpdate(true)
+      void (async () => {
+        const deadline = Date.now() + 120 * 1000
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1200))
+          try {
+            const health = await api.getHealth()
+            if (health.version === result.version) {
+              window.location.reload()
+              return
+            }
+          } catch {
+            // The server is still down or replacing its process.
+          }
+        }
+        setRestartingForUpdate(false)
+        setUpdateError('服务重启超时，请手动刷新页面或查看运行日志')
+      })()
+    } catch (err) {
+      setApplyingUpdate(false)
+      setUpdateError(err instanceof Error ? err.message : '升级失败')
+    }
+  }, [applyingUpdate, restartingForUpdate, updateInfo])
+
+  useEffect(() => {
+    if (!user) return
     setSseState('connecting')
     const es = new EventSource(api.apiURL('/api/events'), { withCredentials: true })
     es.addEventListener('ready', () => {
@@ -359,16 +429,16 @@ export function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
               <CloudDownload className="h-5 w-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-base font-semibold tracking-tight">Piko Download Server</h1>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <h1 className="truncate text-base font-semibold tracking-tight">Piko Download Server</h1>
                 <span
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${
                     sseState === 'connected'
                       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                       : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
@@ -378,11 +448,26 @@ export function App() {
                   {sseState === 'connected' ? '实时连接' : sseState === 'connecting' ? '连接中' : '重连中'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">已登录管理员：{user.username}</p>
+              <p className="truncate text-xs text-slate-400">已登录管理员：{user.username}</p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
+            <button
+              onClick={() => setShowUpdateDialog(true)}
+              title={`当前版本 ${updateInfo?.current_version || '未知'}，点击检查在线升级`}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
+                updateInfo?.available
+                  ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20'
+                  : 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <ArrowUpCircle className="h-3.5 w-3.5" />
+              <span className="hidden max-w-52 truncate font-mono lg:inline">v{updateInfo?.current_version || '…'}</span>
+              {updateInfo?.available && (
+                <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-100">可升级</span>
+              )}
+            </button>
             <button
               onClick={() => setHideFilenames((value) => !value)}
               title={hideFilenames ? '显示明文文件名' : '隐藏文件名'}
@@ -417,37 +502,39 @@ export function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6">
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 flex items-center justify-between">
-            <div>
+      <main className="mx-auto max-w-7xl space-y-4 px-4 py-4 sm:space-y-6 sm:px-6 sm:py-6">
+        <section className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+          <div className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
+            <div className="min-w-0">
               <div className="text-xs text-slate-400 flex items-center gap-1.5"><Activity className="h-3.5 w-3.5 text-blue-400" /> 实时总速度</div>
-              <div className="mt-1.5 text-xl font-semibold tabular-nums">{formatSpeed(stats?.total_speed_bytes)}</div>
+              <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">{formatSpeed(stats?.total_speed_bytes)}</div>
               <div className="mt-0.5 text-xs text-slate-400 tabular-nums">活动下载：{stats?.active_workers ?? 0}</div>
             </div>
-            <SpeedSparkline samples={speedHistory} />
+            <div className="hidden shrink-0 sm:block">
+              <SpeedSparkline samples={speedHistory} />
+            </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5"><Layers className="h-3.5 w-3.5 text-amber-400" /> 队列与暂停</div>
-            <div className="mt-1.5 text-xl font-semibold tabular-nums">
+            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">
               {stats?.queued_count ?? 0} <span className="text-sm font-normal text-slate-500">/</span> {stats?.paused_count ?? 0}
             </div>
             <div className="mt-0.5 text-xs text-slate-400">排队等待 / 已暂停</div>
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5"><FileCheck2 className="h-3.5 w-3.5 text-emerald-400" /> 已交付 / 异常</div>
-            <div className="mt-1.5 text-xl font-semibold tabular-nums">
+            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">
               {stats?.completed_count ?? 0} <span className="text-sm font-normal text-slate-500">/</span>{' '}
               <span className={(stats?.failed_count ?? 0) > 0 ? 'text-rose-400' : ''}>{stats?.failed_count ?? 0}</span>
             </div>
             <div className="mt-0.5 text-xs text-slate-400">累计交付 / 失败或冲突</div>
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5"><HardDrive className="h-3.5 w-3.5 text-cyan-400" /> 下载卷可用空间</div>
-            <div className="mt-1.5 text-xl font-semibold tabular-nums">{formatBytes(stats?.free_space_bytes)}</div>
+            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">{formatBytes(stats?.free_space_bytes)}</div>
             <div className="mt-0.5 text-xs truncate" title={settings?.download_dir}>
               {stats?.low_disk_blocked ? (
                 <span className="text-rose-400">空间低于阈值，已暂停新派发</span>
@@ -458,7 +545,7 @@ export function App() {
           </div>
         </section>
 
-        <nav className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
+        <nav className="grid grid-cols-2 gap-2 border-b border-slate-800 pb-3 sm:flex sm:flex-wrap sm:items-center">
           {[
             { key: 'tasks' as const, label: '下载任务', icon: CloudDownload, count: taskTotal },
             { key: 'files' as const, label: '文件索引', icon: FileCheck2, count: fileTotal },
@@ -471,7 +558,7 @@ export function App() {
               <button
                 key={tab.key}
                 onClick={() => switchTab(tab.key)}
-                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition cursor-pointer ${
+                className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition cursor-pointer sm:justify-start sm:px-4 ${
                   active
                     ? 'bg-slate-800 text-white border border-slate-700'
                     : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
@@ -654,6 +741,19 @@ export function App() {
           }
         }}
       />
+
+      {showUpdateDialog && (
+        <UpdateDialog
+          info={updateInfo}
+          checking={checkingUpdate}
+          applying={applyingUpdate}
+          restarting={restartingForUpdate}
+          error={updateError}
+          onClose={() => setShowUpdateDialog(false)}
+          onApply={() => void startUpdate()}
+          onRecheck={() => void refreshUpdate(true)}
+        />
+      )}
 
       {toast && (
         <div

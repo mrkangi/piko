@@ -45,7 +45,7 @@ export function SetupView({ status, onComplete }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-4 py-10">
+    <div className="min-h-screen bg-slate-950 px-3 py-6 sm:px-4 sm:py-10">
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-blue-500/30 bg-blue-500/15 text-blue-400">
@@ -57,7 +57,7 @@ export function SetupView({ status, onComplete }: Props) {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl">
+        <form onSubmit={handleSubmit} className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-2xl sm:p-6">
           <section className="space-y-3">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
               <KeyRound className="h-4 w-4 text-amber-400" /> 首次配置令牌
@@ -146,7 +146,7 @@ export function SetupView({ status, onComplete }: Props) {
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-100 focus:border-blue-500 focus:outline-none"
             />
             <p className="text-xs text-slate-400">
-              默认位于用户主目录下。完成后可在管理页修改；数据目录固定在 <span className="font-mono">{status.data_dir}</span>。
+              默认位于用户主目录下。完成后可在管理页修改；数据目录固定在 <span className="break-all font-mono">{status.data_dir}</span>。
             </p>
           </section>
 

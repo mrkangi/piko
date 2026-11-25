@@ -29,9 +29,9 @@ export function TaskDetailDrawer({ task, hideFilenames, sourceName, onClose, onA
         className="flex h-full w-full max-w-lg flex-col border-l border-slate-800 bg-slate-900 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-4 sm:px-6">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
                 {meta.label}
               </span>
@@ -49,7 +49,7 @@ export function TaskDetailDrawer({ task, hideFilenames, sourceName, onClose, onA
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-5 text-sm">
+        <div className="flex-1 space-y-5 overflow-y-auto p-4 text-sm sm:p-6">
           <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-2">
             <div className="flex justify-between text-xs text-slate-400">
               <span>进度 {task.progress_percent.toFixed(1)}%</span>
@@ -107,7 +107,7 @@ export function TaskDetailDrawer({ task, hideFilenames, sourceName, onClose, onA
           </dl>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-6 py-4">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-800 px-4 py-4 sm:px-6">
           {['QUEUED', 'RUNNING', 'RETRY_WAIT', 'VERIFYING'].includes(task.state) && (
             <button onClick={() => onAction(task.id, 'pause')} className="rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-1.5 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer">
               暂停

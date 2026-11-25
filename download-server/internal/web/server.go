@@ -23,6 +23,7 @@ import (
 	"github.com/nihildigit/piko/download-server/internal/logview"
 	"github.com/nihildigit/piko/download-server/internal/notify"
 	"github.com/nihildigit/piko/download-server/internal/store"
+	"github.com/nihildigit/piko/download-server/internal/updater"
 )
 
 type Options struct {
@@ -30,6 +31,14 @@ type Options struct {
 	CORSOrigin string
 	DataDir    string
 	Logs       *logview.Buffer
+	Updater    UpdateService
+}
+
+type UpdateService interface {
+	Check(context.Context, bool) (updater.Info, error)
+	Apply(context.Context) (updater.Result, error)
+	ScheduleRestart(time.Duration)
+	CurrentVersion() string
 }
 
 type Server struct {
@@ -43,6 +52,7 @@ type Server struct {
 	corsOrigin string
 	dataDir    string
 	logs       *logview.Buffer
+	updater    UpdateService
 	spaFS      fs.FS
 	ready      atomic.Bool
 	mux        *http.ServeMux
@@ -73,6 +83,7 @@ func NewServer(
 		corsOrigin: strings.TrimRight(strings.TrimSpace(opt.CORSOrigin), "/"),
 		dataDir:    opt.DataDir,
 		logs:       opt.Logs,
+		updater:    opt.Updater,
 		spaFS:      resolveSPAFilesystem(opt.StaticDir),
 		mux:        http.NewServeMux(),
 	}
@@ -132,6 +143,8 @@ func (srv *Server) routes() {
 
 	srv.mux.HandleFunc("GET /api/files", srv.withAuth(srv.handleListFiles))
 	srv.mux.HandleFunc("GET /api/system/stats", srv.withAuth(srv.handleSystemStats))
+	srv.mux.HandleFunc("GET /api/system/update", srv.withAuth(srv.handleUpdateInfo))
+	srv.mux.HandleFunc("POST /api/system/update/apply", srv.withAuthMutation(srv.handleApplyUpdate))
 	srv.mux.HandleFunc("GET /api/system/logs", srv.withAuth(srv.handleSystemLogs))
 	srv.mux.HandleFunc("GET /api/system/settings", srv.withAuth(srv.handleGetSettings))
 	srv.mux.HandleFunc("PUT /api/system/settings", srv.withAuthMutation(srv.handleUpdateSettings))
@@ -188,7 +201,11 @@ func (srv *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (srv *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	version := "dev"
+	if srv.updater != nil {
+		version = srv.updater.CurrentVersion()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 }
 
 func (srv *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -872,6 +889,54 @@ func (srv *Server) handleSystemStats(w http.ResponseWriter, r *http.Request, _ s
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (srv *Server) handleUpdateInfo(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	if srv.updater == nil {
+		writeJSON(w, http.StatusOK, updater.Info{
+			CurrentVersion: "dev",
+			Channel:        "dev",
+			Reason:         "当前构建未启用在线升级",
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	info, err := srv.updater.Check(ctx, r.URL.Query().Get("refresh") == "1")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "update_check_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (srv *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
+	if srv.updater == nil {
+		writeError(w, http.StatusConflict, "update_unsupported", "当前构建未启用在线升级")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	defer cancel()
+	result, err := srv.updater.Apply(ctx)
+	if err != nil {
+		status := http.StatusBadGateway
+		code := "update_failed"
+		switch {
+		case errors.Is(err, updater.ErrNoUpdate):
+			status = http.StatusConflict
+			code = "update_not_available"
+		case errors.Is(err, updater.ErrUnsupported):
+			status = http.StatusConflict
+			code = "update_unsupported"
+		}
+		writeError(w, status, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	srv.updater.ScheduleRestart(1200 * time.Millisecond)
 }
 
 func (srv *Server) handleSystemLogs(w http.ResponseWriter, r *http.Request, _ store.AdminSession) {
