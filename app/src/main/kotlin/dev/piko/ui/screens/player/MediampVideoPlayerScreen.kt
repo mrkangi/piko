@@ -489,6 +489,7 @@ fun MediampVideoPlayerScreen(
                 videoAspect = state.videoAspect,
                 qualityOptions = state.qualityOptions,
                 currentQuality = state.currentQuality,
+                qualitySwitchTarget = state.switchingQuality,
                 errorMessage = state.errorMessage,
                 resumedFromMillis = state.resumedFromMillis,
                 onPlayPause = state::togglePlayPause,

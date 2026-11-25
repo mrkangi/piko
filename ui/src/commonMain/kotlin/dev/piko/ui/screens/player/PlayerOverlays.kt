@@ -4,6 +4,7 @@ import dev.piko.ui.resources.*
 import dev.piko.ui.i18n.stringResource
 
 import dev.piko.shared.i18n.tr
+import dev.piko.shared.media.ORIGINAL_QUALITY
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -232,6 +234,35 @@ internal fun BoxScope.PlayerBottomStack(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         content = content,
     )
+}
+
+/**
+ * 云视频切换清晰度时的短提示。只说明正在换档，成败交给首帧与错误卡片：
+ * 与官方一样，切档期间画面本来就在加载，提示紧挨着底部控件，不再另弹一条 Snackbar 排队。
+ */
+@Composable
+internal fun QualitySwitchNotice(target: String?) {
+    val quality = target ?: return
+    val message = if (quality == ORIGINAL_QUALITY) {
+        tr("正在切换到原画，请稍后...", "Switching to the original quality, please wait...", "オリジナル画質に切り替えています。しばらくお待ちください...", "원본 화질로 전환 중입니다. 잠시만 기다려 주세요...", "正在切換到原畫，請稍候...")
+    } else {
+        tr("正在切换到 $quality 画质，请稍后...", "Switching to $quality quality, please wait...", "$quality 画質に切り替えています。しばらくお待ちください...", "$quality 화질로 전환 중입니다. 잠시만 기다려 주세요...", "正在切換到 $quality 畫質，請稍候...")
+    }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = playerContainerColor(),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.HighQuality, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(message, style = MaterialTheme.typography.labelLarge)
+        }
+    }
 }
 
 /**

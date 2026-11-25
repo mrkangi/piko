@@ -8,7 +8,8 @@
 | 用途 | 触发方式 | 工作流 | 产物去向 |
 | --- | --- | --- | --- |
 | 正式发版 | 推 `vMAJOR.MINOR.PATCH` tag | `release.yml` | 草稿 Release，人工核对后公开 |
-| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包；带 `mac` 加 macOS，带 `desktop` 加三平台 |
+| 日常 test 包 | 推 `test-*` tag | `build.yml` | 自动建 **Pre-release**，默认只有 Android 包；带 `mac` 加 macOS，带 `desktop` 加三平台，带 `server` 只出下载服务 |
+| Termux 测试源 | 推带 `server` 的 `test-*` tag | `build.yml` | 更新固定 `termux-test` Pre-release，供 Termux `pkg` 直接安装/升级 |
 | 只拿产物 | 手动 `workflow_dispatch` | `build.yml` | Actions Artifacts，保留 7 天 |
 | 全量测试 | push / PR / 手动 | `test.yml` | 无安装包，只有结论 |
 | 本机调试 | 本地 Gradle | — | `app/build/outputs/...` |
@@ -38,6 +39,13 @@ git push origin test-20261111-vr-mac
 ```bash
 git tag test-20261111-vr-desktop   # Android + 桌面三平台
 git push origin test-20261111-vr-desktop
+```
+
+只构建 PikPak 下载服务时，在 tag 里带 `server`：
+
+```bash
+git tag test-20261124-proxy-server
+git push origin test-20261124-proxy-server
 ```
 
 只出 Android 时整轮通常 6～8 分钟；带桌面端则取决于 runner 排队情况。Windows arm64
@@ -164,3 +172,77 @@ Build 的 `RUN_ID` 和 `TAG` 直接改在 `publish.yml` 里再 push。现在 `bu
 - 安装包文件名统一带版本号，便于多版本共存时辨认；Artifacts 只保留 7 天，
   Release 附件长期保留。
 - 同一签名、同一 `versionCode` 可直接覆盖安装；换了签名必须先卸载。
+
+## 8. Termux apt 源（`pkg install` / `pkg upgrade`）
+
+Termux 官方源不包含 `piko-download-server`。需要 `pkg` 直接安装时，使用本仓库自己发布的
+**flat apt 源**：
+
+- 稳定版：`https://github.com/NihilDigit/piko/releases/latest/download`
+- 测试版：`https://github.com/<owner>/piko/releases/download/termux-test`
+
+稳定版直接读取最新正式 Release 的附件；`termux-test` 是固定的滚动 Pre-release，由带
+`server` 的 `test-*` 构建覆盖更新。两者都是 flat 源，sources.list 必须以 `./` 结尾：
+
+```bash
+# 稳定版
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
+echo 'deb [trusted=yes] https://github.com/NihilDigit/piko/releases/latest/download ./' \
+  > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
+
+# 测试版（fork）
+mkdir -p "$PREFIX/etc/apt/sources.list.d"
+echo 'deb [trusted=yes] https://github.com/mrkangi/piko/releases/download/termux-test ./' \
+  > "$PREFIX/etc/apt/sources.list.d/piko-download-server.list"
+
+pkg update
+pkg install piko-download-server
+pkg upgrade piko-download-server
+```
+
+也可以运行发布包里的 `download-server-*-termux-add-apt-source.sh` 自动写源并安装：
+
+```bash
+sh download-server-*-termux-add-apt-source.sh stable
+sh download-server-*-termux-add-apt-source.sh test --repo mrkangi/piko
+```
+
+### 元数据生成与验证
+
+`scripts/build-all.sh` 生成 `.deb` 后调用 `scripts/make-apt-repo.sh`，在 `bin/` 下生成：
+
+| 文件 | 内容 |
+| --- | --- |
+| `Packages` / `Packages.gz` | `piko-download-server` 的控制字段、`Filename: <deb>`、大小与 SHA256 |
+| `Release` | `Packages` 与 `Packages.gz` 的 MD5/SHA256，供 apt 校验 |
+
+CI 会把这三个文件和 `.deb` 一起上传到版本 Release；`build.yml` 的 `publish` job 还会在
+`test-*-server` 构建时把它们同步到 `termux-test`。稳定版源要等下一次正式 Release 附件里
+包含 apt 元数据后才可用。
+
+测试包的 tag 后缀是任意字符串，按 Debian 版本排序并不等于构建时间顺序（例如
+`9.9.9-20261125-logs-...` 会排在 `9.9.9-20261125-apt-...` 前面）。因此 `.deb` 的控制版本
+单独使用 `9.9.9.<构建时间>`，二进制内部版本和产物文件名仍保留 `9.9.9-<后缀>`；这样每次
+`test-*-server` 构建都能被 `pkg upgrade` 识别为更新。
+
+本地验证源格式（Linux 主机，不要求 aarch64）：
+
+```bash
+repo=download-server/bin
+work=$(mktemp -d)
+printf 'deb [trusted=yes] file:%s ./\n' "$(cd "$repo" && pwd)" > "$work/sources.list"
+mkdir -p "$work/lists/partial" "$work/archives/partial" "$work/download"
+
+apt-get -o Dir::Etc::sourcelist="$work/sources.list" -o Dir::Etc::sourceparts=- \
+  -o Dir::State::lists="$work/lists" -o Dir::Cache::archives="$work/archives" \
+  -o APT::Architecture=aarch64 update
+
+(cd "$work/download" && apt-get -o Dir::Etc::sourcelist="$work/sources.list" \
+  -o Dir::Etc::sourceparts=- -o Dir::State::lists="$work/lists" \
+  -o Dir::Cache::archives="$work/archives" -o APT::Architecture=aarch64 \
+  download piko-download-server)
+```
+
+CI 发布后也可以把 `file:` 换成真实的 GitHub Release URL 重跑同一组命令，验证跳转、
+`Packages.gz` 和附件 SHA256。`[trusted=yes]` 不做 GPG 签名校验，只应添加自己信任的仓库；
+稳定版与测试版是独立通道，测试包的 Debian 包版本 `9.9.9.<时间戳>` 高于正式版 `1.x`。

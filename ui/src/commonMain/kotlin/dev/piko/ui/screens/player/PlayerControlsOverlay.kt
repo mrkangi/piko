@@ -102,6 +102,8 @@ fun MobilePlayerControls(
     videoAspect: Float? = null,
     qualityOptions: List<String>,
     currentQuality: String?,
+    /** 正在切换到的清晰度；只在云视频切档时非 null。 */
+    qualitySwitchTarget: String? = null,
     errorMessage: String?,
     resumedFromMillis: Long?,
     onPlayPause: () -> Unit,
@@ -171,7 +173,12 @@ fun MobilePlayerControls(
     // 底栏在宽窄之间来回时锚在栏上的浮层会失去锚点：宽屏的倍速浮窗在窄屏收进了「更多」，
     // 窄屏的「更多」在宽屏不再存在。状态留着会让控件一直不自动收起
     LaunchedEffect(compactWidth) {
-        if (compactWidth) ui.isSpeedPopupOpen = false else ui.isMoreMenuOpen = false
+        if (compactWidth) {
+            ui.isQualityPopupOpen = false
+            ui.isSpeedPopupOpen = false
+        } else {
+            ui.isMoreMenuOpen = false
+        }
     }
     SideEffect {
         ui.currentPositionMillis = positionMillis
@@ -350,6 +357,7 @@ fun MobilePlayerControls(
             val isSeeking = ui.isScrubbing || seekPreviewMillis != null
             PlayerBottomStack(controlsVisible = bottomBarVisible, isLandscape = isLandscape) {
                 snackbarHost()
+                QualitySwitchNotice(qualitySwitchTarget)
                 if (resumedFromMillis != null) {
                     ResumeTipCapsule(
                         visible = ui.showResumeTip && !ui.isLocked && !isSeeking,
@@ -484,6 +492,17 @@ fun MobilePlayerControls(
                         onSpeedPopupOpenChange = {
                             ui.interacted()
                             ui.isSpeedPopupOpen = it
+                        },
+                        qualityOptions = qualityOptions,
+                        currentQuality = currentQuality,
+                        isQualityPopupOpen = ui.isQualityPopupOpen,
+                        onQualityPopupOpenChange = {
+                            ui.interacted()
+                            ui.isQualityPopupOpen = it
+                        },
+                        onQualityChange = {
+                            ui.interacted()
+                            onQualityChange(it)
                         },
                         isMoreMenuOpen = ui.isMoreMenuOpen,
                         onMoreMenuOpenChange = {

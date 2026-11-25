@@ -6,7 +6,8 @@ name: Build
 # 两种用法：
 # 1. 推一个 test-* tag（如 test-20261111-vr）：默认只打 Android，完成后自动建一个
 #    Pre-release，手机上点链接就能装。tag 里带 mac（如 test-20261111-vr-mac）只加 macOS；
-#    带 desktop（如 test-20261111-vr-desktop）才打 Windows x64 / macOS / Linux 三平台。
+#    带 desktop（如 test-20261111-vr-desktop）才打 Windows x64 / macOS / Linux 三平台；
+#    带 server（如 test-20261124-proxy-server）只构建 download-server。
 # 2. 手动触发：只跑构建、把产物留在 workflow 的 Artifacts 里（保留 7 天），不建 Release。
 #    适合只想拿某一个平台的包、或先确认能编过再打 tag。
 # SDK main 已进入 3.0 传输层重构，PikoStreamReader 的 readAheadLimit / urgent /
@@ -35,6 +36,7 @@ on:
           - android
           - android-macos
           - desktop
+          - download-server
           - all
         default: android
 
@@ -84,6 +86,8 @@ jobs:
               platforms="all"
             elif [[ "$suffix" == *mac* ]]; then
               platforms="android-macos"
+            elif [[ "$suffix" == *server* ]]; then
+              platforms="download-server"
             fi
             if [[ "$suffix" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})-(.+)$ ]]; then
               title="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}（${BASH_REMATCH[4]}）"
@@ -116,6 +120,7 @@ jobs:
             android-macos) android=true; macos=true ;;
             macos) macos=true ;;
             desktop) windows=true; macos=true; linux=true ;;
+            download-server) ;;
             all) android=true; windows=true; macos=true; linux=true ;;
             *)
               echo "Unknown platforms: $platforms"
@@ -130,6 +135,48 @@ jobs:
           echo "windows=$windows" >> "$GITHUB_OUTPUT"
           echo "macos=$macos" >> "$GITHUB_OUTPUT"
           echo "linux=$linux" >> "$GITHUB_OUTPUT"
+
+  download-server:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: download-server/web/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: download-server/go.sum
+
+      - name: Test download server
+        working-directory: download-server
+        run: go test -race ./...
+
+      - name: Build all download server binaries
+        working-directory: download-server
+        env:
+          ARTIFACT_PREFIX: download-server-${{ needs.version.outputs.name }}
+          DOWNLOAD_SERVER_VERSION: ${{ needs.version.outputs.name }}
+          UPDATE_REPO: ${{ github.repository }}
+        run: bash scripts/build-all.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: download-server-dist
+          path: |
+            download-server/bin/download-server-${{ needs.version.outputs.name }}-*
+            download-server/bin/SHA256SUMS.txt
+            download-server/bin/BUILD-INFO.txt
+            download-server/bin/Packages
+            download-server/bin/Packages.gz
+            download-server/bin/Release
+          if-no-files-found: error
+          retention-days: 7
 
   android:
     needs: version
@@ -345,7 +392,7 @@ jobs:
   # 没构建的桌面 job 会被跳过，所以这里用 always() + 结果检查，而不是默认的 needs 全成功。
   publish:
     if: always() && github.event_name == 'push' && !cancelled() && !contains(needs.*.result, 'failure')
-    needs: [version, android, windows, macos, linux]
+    needs: [version, download-server, android, windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -372,6 +419,7 @@ jobs:
 
           - Android：按 ABI 区分的 APK；签名与之前的测试包一致时可直接覆盖安装。
           - 桌面端（tag 带 \`mac\` 时只有 macOS；带 \`desktop\` 时为 Windows x64 的 7z / MSI、macOS arm64 DMG、Linux x64 AppImage）。
+          - 下载服务：所有平台二进制、SHA256SUMS.txt 与 BUILD-INFO.txt。
 
           测试包不进正式更新通道；应用内若提示了新版本，按提示升级即可。
           EOF
@@ -385,3 +433,36 @@ jobs:
               --notes-file notes.md \
               --prerelease
           fi
+
+      # 给 Termux 提供固定地址的 flat apt 源：
+      #   deb [trusted=yes] https://github.com/<owner>/<repo>/releases/download/termux-test ./
+      # 每次 server 构建覆盖 Packages 与当前 deb，之后用户直接 pkg upgrade。
+      - name: Update Termux test apt repository
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG" != *server* ]]; then
+            echo "Not a server test tag; skipping apt repository update."
+            exit 0
+          fi
+          if ! ls dist/*termux-aarch64.deb >/dev/null 2>&1; then
+            echo "No Termux package in this build; skipping apt repository update."
+            exit 0
+          fi
+          for file in Packages Packages.gz Release; do
+            test -f "dist/$file"
+          done
+          repo_tag=termux-test
+          if ! gh release view "$repo_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$repo_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Piko Termux 测试源" \
+              --notes "滚动 Termux apt 源，仅包含最新的 piko-download-server 测试包。安装方式见 download-server/README.md。" \
+              --prerelease
+          fi
+          gh release upload "$repo_tag" \
+            dist/Packages dist/Packages.gz dist/Release dist/*termux-aarch64.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
