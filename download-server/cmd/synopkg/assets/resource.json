@@ -1,0 +1,17 @@
+{
+  "port-config": {
+    "protocol-file": "app/piko-download-server.sc"
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "{{wizard_download_share}}",
+        "permission": {
+          "rw": [
+            "sc-piko-download-server"
+          ]
+        }
+      }
+    ]
+  }
+}

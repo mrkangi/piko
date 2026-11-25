@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/common.sh"
+
+ensure_dirs
+ensure_env
+
+echo "==> Piko Download Server installed"
+echo "    Web UI:  http://<NAS address>:7788/"
+echo "    Data:    ${DATA_DIR}"
+echo "    Config:  ${ENV_FILE}"
+echo "    Logs:    ${SERVICE_LOG}"
+echo "    Downloads default to: $(service_home)/PikoDownloads"
+
+if [ -x "${SCRIPT_DIR}/start-stop-status" ]; then
+  "${SCRIPT_DIR}/start-stop-status" start || true
+fi

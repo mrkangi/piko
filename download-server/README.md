@@ -84,6 +84,7 @@ npm run dev
 - Windows：`amd64`、`arm64`
 - FreeBSD：`amd64`
 - Android/Termux：`arm64` 二进制、`termux-aarch64.deb` 安装包与 `install-termux.sh` 一键常驻脚本
+- 群晖 DSM 7：`x86_64`、`armv8`、`armv7` 三个 `.spk` 套件包
 
 产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt`、`BUILD-INFO.txt` 以及 Termux 用的 apt 源元数据 `Packages`、`Packages.gz`、`Release`（本机有 `dpkg-deb` 时）。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
 
@@ -186,6 +187,7 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - 当前程序会备份为同目录的 `download-server.prev`；Termux、systemd 等常驻方式会在替换成功后原地重启，下载任务由启动恢复逻辑继续。
 - Termux 的 `.deb`、`install-termux.sh` 和直接运行二进制都支持自更新；需要 `$PREFIX/bin` 对当前用户可写，并且能访问 GitHub。
 - Docker 容器内不支持自更新，请在宿主机执行 `docker compose pull && docker compose up -d`。
+- 群晖套件内不执行二进制自更新，请在套件中心手动安装新版本 `.spk`。
 - GitHub API 未登录请求有频率限制，服务端会缓存检查结果 10 分钟；手动点「重新检查」会强制刷新。
 - 可用 `download-server --version` 查看当前二进制版本与构建时间。
 
@@ -215,6 +217,54 @@ sv up download-server
 ```
 
 升级后的版本在共享存储上可直接启动，也可以留在外部目录。
+
+## 群晖 DSM 7 套件（SPK）
+
+构建会生成三个架构的套件包：
+
+```text
+download-server-<版本>-synology-x86_64.spk   # Intel / AMD 机型
+download-server-<版本>-synology-armv8.spk   # ARM64 机型
+download-server-<版本>-synology-armv7.spk   # 较老的 ARMv7 机型
+```
+
+只支持 DSM 7.0 及以上。套件以 DSM 内部用户 `sc-piko-download-server` 运行，不使用 root。
+
+### 安装
+
+1. 在套件中心打开「设置 → 常规 → 信任级别」，选择允许安装任何发行者的套件。当前构建没有 Synology 官方签名。
+2. 套件中心 → 手动安装 → 选择对应架构的 `.spk`。
+3. 安装向导里填写下载共享文件夹名，默认 `piko-downloads`；不存在时会创建，并授权给套件用户。
+4. 安装完成后打开 `http://<NAS 地址>:7788/` 或套件中心里的 Piko Download Server。
+
+首次启动的 Setup Token 会写入套件日志：
+
+```bash
+tail -f /var/packages/piko-download-server/var/logs/service.log
+```
+
+也可以从套件中心的服务日志入口查看。
+
+### 路径与配置
+
+- 数据目录：`/var/packages/piko-download-server/var/data`，包含 SQLite、`secret.key`、实例锁和 PikPak 会话。
+- 环境配置：`/var/packages/piko-download-server/var/etc/download-server.env`。
+- 服务日志：`/var/packages/piko-download-server/var/logs/service.log`。
+- 默认下载目录：安装向导选择的共享文件夹下的 `PikoDownloads`；没有选择时回退到套件 `var/PikoDownloads`。
+- 监听端口：`0.0.0.0:7788`，套件会同时登记 DSM 防火墙端口。
+
+修改 `download-server.env` 后执行：
+
+```bash
+synopkg restart piko-download-server
+```
+
+### 升级与卸载
+
+- 升级：直接手动安装新版本 `.spk`，`preupgrade`/`postupgrade` 会停启服务并保留 `var` 数据。
+- 套件内不执行二进制自更新；管理页会提示通过套件中心升级，避免绕过套件脚本和权限。
+- 卸载默认保留 `/var/packages/piko-download-server/var` 与共享目录中的下载文件；彻底清理时手动删除该目录。
+- 不建议把 7788 直接暴露到公网，推荐使用 DSM 反向代理加 HTTPS。
 
 ## 管理页
 

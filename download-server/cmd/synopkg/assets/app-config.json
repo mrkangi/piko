@@ -1,0 +1,16 @@
+{
+  ".url": {
+    "com.piko.downloadserver": {
+      "title": "Piko Download Server",
+      "desc": "PikPak remote download and folder sync",
+      "icon": "images/piko-download-server-256.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "7788",
+      "url": "/",
+      "allUsers": true,
+      "grantPrivilege": "all",
+      "advanceGrantPrivilege": true
+    }
+  }
+}

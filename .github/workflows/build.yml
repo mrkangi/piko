@@ -419,7 +419,7 @@ jobs:
 
           - Android：按 ABI 区分的 APK；签名与之前的测试包一致时可直接覆盖安装。
           - 桌面端（tag 带 \`mac\` 时只有 macOS；带 \`desktop\` 时为 Windows x64 的 7z / MSI、macOS arm64 DMG、Linux x64 AppImage）。
-          - 下载服务：所有平台二进制、SHA256SUMS.txt 与 BUILD-INFO.txt。
+          - 下载服务：所有平台二进制、群晖 DSM 7 SPK、SHA256SUMS.txt 与 BUILD-INFO.txt。
 
           测试包不进正式更新通道；应用内若提示了新版本，按提示升级即可。
           EOF

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/common.sh"
+
+ensure_dirs
+ensure_env
+
+if [ -x "${SCRIPT_DIR}/start-stop-status" ]; then
+  "${SCRIPT_DIR}/start-stop-status" start || true
+fi
