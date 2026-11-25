@@ -152,6 +152,14 @@ func TestApplyBlockerSynologyPackage(t *testing.T) {
 	}
 }
 
+func TestApplyBlockerFnOSPackage(t *testing.T) {
+	t.Setenv("DOWNLOAD_SERVER_PACKAGE_MODE", "fnos")
+	svc := &Service{container: func() bool { return false }}
+	if got := svc.applyBlocker(); !strings.Contains(got, "应用中心") {
+		t.Fatalf("unexpected fnOS package blocker: %q", got)
+	}
+}
+
 func TestDownloadAndReplace(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "download-server")

@@ -112,6 +112,24 @@ build_synology_spk x86_64 linux-amd64 x86_64
 build_synology_spk armv8 linux-arm64 armv8
 build_synology_spk armv7 linux-armv7 armv7
 
+build_fnos_fpk() {
+  local platform="$1"
+  local binary="$2"
+  local label="$3"
+  local name="${PREFIX}-fnos-${label}.fpk"
+
+  echo "==> fnos/${platform} -> ${name}"
+  go run "$ROOT/cmd/fnospkg" \
+    -binary "$OUT/${PREFIX}-${binary}" \
+    -output "$OUT/${name}" \
+    -version "$DEB_VERSION" \
+    -platform "$platform"
+  ARTIFACTS+=("${name}")
+}
+
+build_fnos_fpk x86 linux-amd64 x86
+build_fnos_fpk arm linux-arm64 arm
+
 echo "==> checksums"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$OUT" && sha256sum "${ARTIFACTS[@]}" > SHA256SUMS.txt)

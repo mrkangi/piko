@@ -1,0 +1,13 @@
+{
+  "port-config": {
+    "protocol-file": "piko-download-server.sc"
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "piko-download-server/downloads"
+      }
+    ]
+  },
+  "systemd-unit": {}
+}

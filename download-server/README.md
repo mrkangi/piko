@@ -85,6 +85,7 @@ npm run dev
 - FreeBSD：`amd64`
 - Android/Termux：`arm64` 二进制、`termux-aarch64.deb` 安装包与 `install-termux.sh` 一键常驻脚本
 - 群晖 DSM 7：`x86_64`、`armv8`、`armv7` 三个 `.spk` 套件包
+- 飞牛 fnOS：`x86`、`arm` 两个原生 `.fpk` 应用包
 
 产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt`、`BUILD-INFO.txt` 以及 Termux 用的 apt 源元数据 `Packages`、`Packages.gz`、`Release`（本机有 `dpkg-deb` 时）。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
 
@@ -188,6 +189,7 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - Termux 的 `.deb`、`install-termux.sh` 和直接运行二进制都支持自更新；需要 `$PREFIX/bin` 对当前用户可写，并且能访问 GitHub。
 - Docker 容器内不支持自更新，请在宿主机执行 `docker compose pull && docker compose up -d`。
 - 群晖套件内不执行二进制自更新，请在套件中心手动安装新版本 `.spk`。
+- 飞牛 fnOS 应用内不执行二进制自更新，请在应用中心手动安装新版本 `.fpk`。
 - GitHub API 未登录请求有频率限制，服务端会缓存检查结果 10 分钟；手动点「重新检查」会强制刷新。
 - 可用 `download-server --version` 查看当前二进制版本与构建时间。
 
@@ -266,6 +268,41 @@ synopkg start piko-download-server
 - 套件内不执行二进制自更新；管理页会提示通过套件中心升级，避免绕过套件脚本和权限。
 - 卸载默认保留 `/var/packages/piko-download-server/var` 与共享目录中的下载文件；彻底清理时手动删除该目录。
 - 不建议把 7788 直接暴露到公网，推荐使用 DSM 反向代理加 HTTPS。
+
+## 飞牛 fnOS 应用（FPK）
+
+构建会生成原生 `.fpk`：
+
+```text
+download-server-<版本>-fnos-x86.fpk   # x86_64 设备
+download-server-<版本>-fnos-arm.fpk   # ARM64 设备
+```
+
+`.fpk` 是飞牛应用中心使用的 tar.gz 包，包含 `manifest`、`app.tgz`、`cmd`、`config`、`wizard`、`ui`、图标和防火墙声明。应用以专用用户运行，不依赖 Docker。
+
+### 安装
+
+1. 在飞牛应用中心选择手动安装，上传对应架构的 `.fpk`。
+2. 安装完成后从应用中心打开 Piko Download Server，或访问 `http://<NAS 地址>:7788/`。
+3. 首次启动的 Setup Token 写入应用日志。
+
+### 路径与配置
+
+- 应用目录：`/var/apps/piko-download-server`。
+- 数据目录：`/var/apps/piko-download-server/var/data`。
+- 配置目录：`/var/apps/piko-download-server/etc`，环境文件为 `download-server.env`。
+- 日志：`/var/apps/piko-download-server/var/download-server.log`。
+- 下载共享目录：`piko-download-server/downloads`，可在文件管理器中访问；默认下载子目录为 `PikoDownloads`。
+- 监听端口：`0.0.0.0:7788`，并通过 `piko-download-server.sc` 登记防火墙规则。
+
+修改环境文件后，在应用中心停止再启动应用即可生效。
+
+### 升级与卸载
+
+- 升级：在应用中心手动安装新版本 `.fpk`，`upgrade_init`/`upgrade_callback` 会停启服务并保留数据。
+- 应用内不执行二进制自更新；管理页会提示通过应用中心升级。
+- 卸载时可以选择保留或删除应用数据；默认保留下载共享目录中的文件。
+- 不建议把 7788 直接暴露到公网，推荐放在 HTTPS 反向代理后。
 
 ## 管理页
 
