@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import dev.piko.shared.media.PikoMediaRepository
+import dev.piko.shared.media.ORIGINAL_QUALITY
 import dev.piko.shared.media.testing.FakePikPakCloud
 import dev.piko.shared.media.testing.RecordedPositions
 import kotlinx.coroutines.CoroutineScope
@@ -115,6 +116,29 @@ class PlayerScreenStateSmokeTest {
         assertEquals(0, cloud.detailCalls.get(), "本地已有完整副本时不应再请求云端")
         assertTrue(state.isLocalPlayback)
         assertTrue(state.qualityOptions.isEmpty())
+    }
+
+    @Test
+    fun switchingCloudQualityKeepsPositionAndReportsSuccess() = runBlocking {
+        val messages = CopyOnWriteArrayList<String>()
+        val state = newState()
+        backend.awaitOpens(1)
+        backend.emit(PlaybackBackendEvent.Ready)
+        backend.progress(positionMillis = 200_000L, durationMillis = 600_000L)
+        eventually("云端转码档出现在清晰度菜单") {
+            state.qualityOptions == listOf(ORIGINAL_QUALITY, "480P")
+        }
+        scope.launch { state.messages.collect { messages += it } }
+
+        withContext(stateThread) { state.selectQuality("480P") }
+        val switched = backend.awaitOpens(2).last()
+        assertEquals(200_000L, switched.startMillis, "切档后应从当前播放位置继续")
+        assertEquals("480P", state.currentQuality)
+        assertEquals("480P", state.switchingQuality)
+
+        backend.emit(PlaybackBackendEvent.Ready)
+        eventually("首帧后结束切档提示") { state.switchingQuality == null }
+        eventually("切档成功后给出提示") { messages.any { "切换" in it } }
     }
 
     @Test

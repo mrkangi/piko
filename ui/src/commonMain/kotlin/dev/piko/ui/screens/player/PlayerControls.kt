@@ -71,6 +71,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Speed
@@ -559,6 +560,9 @@ internal fun PlayerBottomBar(
     durationMillis: Long,
     bufferedPositionMillis: Long,
     playbackSpeed: Float?,
+    /** 云视频可切换的清晰度；挂载与本地来源为空。 */
+    qualityOptions: List<String> = emptyList(),
+    currentQuality: String? = null,
     showEpisodes: Boolean,
     /** 上一集、下一集两个快捷键。窄窗口不给，换集走选集面板。 */
     showEpisodeSkip: Boolean,
@@ -572,6 +576,9 @@ internal fun PlayerBottomBar(
     isSpeedPopupOpen: Boolean,
     onSpeedPopupOpenChange: (Boolean) -> Unit,
     onSpeedChange: (Float) -> Unit,
+    isQualityPopupOpen: Boolean = false,
+    onQualityPopupOpenChange: (Boolean) -> Unit = {},
+    onQualityChange: (String) -> Unit = {},
     onEpisodesClick: () -> Unit,
     /** 顺时针转 90 度；后端不能旋转时为 null，不给按钮。 */
     onRotate: (() -> Unit)?,
@@ -666,7 +673,7 @@ internal fun PlayerBottomBar(
             if (compactWidth) {
                 // 窄屏只把最常用的两枚留在栏内，其余进「更多」：360dp 竖屏里时间、
                 // 倍速、选集、VR、旋转、全屏同时排一行会把时间挤到换行
-                if (playbackSpeed != null || showEpisodes || (vrMode != null && onVrToggle != null) || volume != null) {
+                if (qualityOptions.isNotEmpty() || playbackSpeed != null || showEpisodes || (vrMode != null && onVrToggle != null) || volume != null) {
                     Box {
                         PlayerIconButton(
                             icon = Icons.Filled.MoreVert,
@@ -680,6 +687,9 @@ internal fun PlayerBottomBar(
                             onDismiss = { onMoreMenuOpenChange(false) },
                             playbackSpeed = playbackSpeed,
                             onSpeedChange = onSpeedChange,
+                            qualityOptions = qualityOptions,
+                            currentQuality = currentQuality,
+                            onQualityChange = onQualityChange,
                             showEpisodes = showEpisodes,
                             onEpisodesClick = onEpisodesClick,
                             vrMode = vrMode,
@@ -690,6 +700,26 @@ internal fun PlayerBottomBar(
                     }
                 }
             } else {
+                if (qualityOptions.isNotEmpty()) {
+                    Box {
+                        PlayerChipButton(
+                            text = currentQuality.orEmpty().qualityLabel,
+                            icon = Icons.Outlined.HighQuality,
+                            onClick = { onQualityPopupOpenChange(!isQualityPopupOpen) },
+                            modifier = Modifier.semantics {
+                                contentDescription = tr("清晰度 ${currentQuality.orEmpty().qualityLabel}", "Quality ${currentQuality.orEmpty().qualityLabel}", "画質 ${currentQuality.orEmpty().qualityLabel}", "화질 ${currentQuality.orEmpty().qualityLabel}", "畫質 ${currentQuality.orEmpty().qualityLabel}")
+                            },
+                        )
+                        if (isQualityPopupOpen) {
+                            QualityPopup(
+                                options = qualityOptions,
+                                currentQuality = currentQuality,
+                                onQualityChange = onQualityChange,
+                                onDismiss = { onQualityPopupOpenChange(false) },
+                            )
+                        }
+                    }
+                }
                 if (playbackSpeed != null) {
                     // 浮层锚在这个 Box 上，出现在按钮正上方
                     Box {
@@ -743,7 +773,7 @@ private class PlayerMoreAction(
     val label: String,
     val value: String? = null,
     val checked: Boolean = false,
-    /** 倍速要换到第二级，菜单保持打开。 */
+    /** 倍速、清晰度要换到第二级，菜单保持打开。 */
     val keepMenuOpen: Boolean = false,
     val onClick: () -> Unit,
 )
@@ -754,8 +784,8 @@ private val SpeedMenuWidth = 264.dp
 /**
  * 窄屏底栏的「更多」：竖屏一行放不下的倍速、选集、VR 与静音都收在这里，栏内只留旋转与全屏。
  *
- * 倍速是唯一有第二级的项：菜单里换成滑块，不另叠一层 Popup——两层弹层同帧切换时焦点与
- * 外部点击的先后不好保证，还会闪一下。返回靠第一行的箭头，退出菜单靠点外面。
+ * 倍速与清晰度有第二级：菜单里换成滑块或档位列表，不另叠一层 Popup——两层弹层同帧切换时
+ * 焦点与外部点击的先后不好保证，还会闪一下。返回靠第一行的箭头，退出菜单靠点外面。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -764,6 +794,9 @@ private fun PlayerMoreMenu(
     onDismiss: () -> Unit,
     playbackSpeed: Float?,
     onSpeedChange: (Float) -> Unit,
+    qualityOptions: List<String>,
+    currentQuality: String?,
+    onQualityChange: (String) -> Unit,
     showEpisodes: Boolean,
     onEpisodesClick: () -> Unit,
     vrMode: VrModeState?,
@@ -772,9 +805,13 @@ private fun PlayerMoreMenu(
     onToggleMute: () -> Unit,
 ) {
     var showSpeed by remember { mutableStateOf(false) }
+    var showQuality by remember { mutableStateOf(false) }
     // 收起时回到第一级：下次打开不该停在上次的滑块上
     LaunchedEffect(expanded) {
-        if (!expanded) showSpeed = false
+        if (!expanded) {
+            showSpeed = false
+            showQuality = false
+        }
     }
 
     PikoDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -804,8 +841,51 @@ private fun PlayerMoreMenu(
                     SpeedSlider(playbackSpeed ?: 1f, onSpeedChange)
                 }
             }
+        } else if (showQuality) {
+            DropdownMenuItem(
+                text = { Text(tr("清晰度", "Quality", "画質", "화질", "畫質")) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                shape = menuItemShape(0, qualityOptions.size + 1),
+                onClick = { showQuality = false },
+            )
+            qualityOptions.forEachIndexed { index, option ->
+                DropdownMenuItem(
+                    text = { Text(option.qualityLabel) },
+                    trailingIcon = if (option == currentQuality) {
+                        {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = tr("当前", "Current", "現在", "현재", "目前"),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    shape = menuItemShape(index + 1, qualityOptions.size + 1),
+                    onClick = {
+                        onQualityChange(option)
+                        onDismiss()
+                    },
+                )
+            }
         } else {
             val actions = buildList {
+                if (qualityOptions.isNotEmpty()) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Outlined.HighQuality,
+                            label = tr("清晰度", "Quality", "画質", "화질", "畫質"),
+                            value = currentQuality.orEmpty().qualityLabel,
+                            keepMenuOpen = true,
+                            onClick = {
+                                showSpeed = false
+                                showQuality = true
+                            },
+                        ),
+                    )
+                }
                 if (playbackSpeed != null) {
                     add(
                         PlayerMoreAction(
@@ -813,7 +893,10 @@ private fun PlayerMoreMenu(
                             label = tr("倍速", "Speed", "再生速度", "재생 속도", "倍速"),
                             value = formatSpeed(playbackSpeed),
                             keepMenuOpen = true,
-                            onClick = { showSpeed = true },
+                            onClick = {
+                                showQuality = false
+                                showSpeed = true
+                            },
                         ),
                     )
                 }
@@ -1051,6 +1134,43 @@ private val VolumeSliderWidth = 88.dp
 private val VolumeBubbleDrop = 12.dp
 // 低于这个音量换成小喇叭图标
 private const val VOLUME_LOW_THRESHOLD = 0.5f
+
+/**
+ * 清晰度浮层：贴在底栏的画质按钮上方，只列云视频服务端可见、已有直链的转码档。
+ * 与官方一致，当前档带勾选；选中后立即换流并保留播放位置。
+ */
+@Composable
+private fun QualityPopup(
+    options: List<String>,
+    currentQuality: String?,
+    onQualityChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    PikoDropdownMenu(expanded = true, onDismissRequest = onDismiss) {
+        options.forEachIndexed { index, option ->
+            DropdownMenuItem(
+                text = { Text(option.qualityLabel) },
+                trailingIcon = if (option == currentQuality) {
+                    {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = tr("当前", "Current", "現在", "현재", "目前"),
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else {
+                    null
+                },
+                shape = menuItemShape(index, options.size),
+                onClick = {
+                    onQualityChange(option)
+                    onDismiss()
+                },
+            )
+        }
+    }
+}
 
 /**
  * 倍速的浮动滑块：贴在「1x」按钮正上方，只有当前值与一条滑块，点数值回到 1x。

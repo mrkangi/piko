@@ -89,6 +89,34 @@ data class PlayableMediaInfo(
  */
 fun PlayableMediaInfo.bestTranscodeName(): String? = availableVariants.transcodeNameAtMost(Int.MAX_VALUE)
 
+/**
+ * 播放器清晰度菜单里的档位。按官方客户端的规则只列服务端标记可见、已经转好且有直链的档，
+ * 再按画面高度从高到低排；没有可切换的转码时返回空，本地副本、SMB 与 LAN 等挂载来源都不会出现入口。
+ *
+ * 原画始终排第一项。转码档按名称去重：同名档在服务端可能是不同编码或不同码率，
+ * 当前播放接口按名称选档，列两个同名项只会让选择结果不可预期。
+ */
+fun PlayableMediaInfo.playbackQualityOptions(): List<String> {
+    if (kind != PlayableMediaKind.Video) return emptyList()
+    val transcodes = availableVariants
+        .asSequence()
+        .filter { !it.isOrigin && it.isVisible && it.video != null && it.link.url.isNotBlank() }
+        .sortedByDescending { it.video?.height ?: 0 }
+        .mapNotNull { it.mediaName.ifBlank { it.resolutionName }.takeIf(String::isNotBlank) }
+        .distinct()
+        .toList()
+    return if (transcodes.isEmpty()) emptyList() else listOf(ORIGINAL_QUALITY) + transcodes
+}
+
+/** 清晰度档位的画面高度，用于记住用户选过的档并沿用到下一集；找不到返回 null。 */
+fun PlayableMediaInfo.playbackQualityHeight(quality: String): Int? = availableVariants
+    .firstOrNull {
+        !it.isOrigin && it.isVisible && it.video != null && it.link.url.isNotBlank() &&
+            (it.mediaName == quality || it.resolutionName == quality)
+    }
+    ?.video
+    ?.height
+
 /** 眼下放的这一档的名字，原画为 null。与 [PlayableMediaInfo.availableVariants] 里的名字对得上，界面据此标出当前档。 */
 val PlayableMediaInfo.transcodeName: String?
     get() = if (isOrigin) null else availableVariants.firstOrNull { it.mediaId == mediaId }?.qualityName

@@ -15,7 +15,10 @@ import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.media.PlayableMediaInfo
 import dev.piko.shared.media.PlayableMediaKind
 import dev.piko.shared.media.PreparedPlayback
+import dev.piko.shared.media.TRANSCODE_GONE_MESSAGE
 import dev.piko.shared.media.bestTranscodeName
+import dev.piko.shared.media.playbackQualityHeight
+import dev.piko.shared.media.playbackQualityOptions
 import dev.piko.shared.media.transcodeName
 import dev.piko.shared.media.proxy.ProxyStream
 import kotlinx.coroutines.CancellationException
@@ -101,6 +104,13 @@ class PlayerScreenState(
     /** 实际在放的变体，null 为原画。与用户所选不同之处在于它包含自动换上的转码流。 */
     private var activeQuality by mutableStateOf<String?>(null)
 
+    /**
+     * 正在切换到的清晰度，null 表示不在切换。播放器据此显示「正在切换到…」，
+     * 首帧出来后清空；切档失败也会清空，失败原因照常走 [errorMessage]。
+     */
+    var switchingQuality by mutableStateOf<String?>(null)
+        private set
+
     /** 本次从续播位置开始时非 null，5 秒后清掉；控件据此显示「从头播放」提示。 */
     var resumedFromMillis by mutableStateOf<Long?>(null)
         private set
@@ -135,10 +145,7 @@ class PlayerScreenState(
         if (isLocalPlayback || info == null || info.kind != PlayableMediaKind.Video) {
             emptyList()
         } else {
-            val variants = info.availableVariants
-                .map { it.mediaName.ifBlank { it.resolutionName } }
-                .filter { it.isNotBlank() }
-            if (variants.isEmpty()) emptyList() else (listOf(ORIGINAL_QUALITY) + variants).distinct()
+            info.playbackQualityOptions()
         }
     }
 
@@ -497,13 +504,15 @@ class PlayerScreenState(
     }
 
     fun selectQuality(quality: String) {
+        if (isLocalPlayback || quality !in qualityOptions || quality == currentQuality) return
         pendingStartMillis = currentPosition()
         requestedQuality = quality
+        switchingQuality = quality
         // 之后几集按这一档的画面高度挑，不照名字找：别的集未必有同名的一档，照名字找不到会退回原画
         sessionMaxHeight = if (quality == ORIGINAL_QUALITY) {
             0
         } else {
-            mediaInfo?.availableVariants?.firstOrNull { it.mediaName == quality || it.resolutionName == quality }?.video?.height
+            mediaInfo?.playbackQualityHeight(quality)
         }
         // 切清晰度是用户动作，不是故障：退避次数与换源进度都给新流重新算
         resetRecovery()
@@ -544,6 +553,7 @@ class PlayerScreenState(
         mediaInfo = null
         activeQuality = null
         requestedQuality = null
+        switchingQuality = null
         pendingStartMillis = null
         lastKnownPositionMillis = 0L
         manualSubtitles = emptyList()
@@ -575,6 +585,7 @@ class PlayerScreenState(
     fun useLocalCopy(path: String) {
         if (isLocalPlayback) return
         localPathHint = path
+        switchingQuality = null
         pendingStartMillis = currentPosition()
         resetRecovery()
         reload()
@@ -707,6 +718,7 @@ class PlayerScreenState(
             throw e
         } catch (e: Exception) {
             PikoLog.w(TAG, "取流失败：${logFile(fileId, title)}", e)
+            switchingQuality = null
             failure = dev.piko.shared.notice.PikoErrorMapper.failure(tr("播放", "Playback", "再生", "재생", "播放"), e)
             isPreparing = false
             // 这一轮连流都没拿到，退避到此为止，否则失败卡片会被加载态一直挡着
@@ -721,6 +733,17 @@ class PlayerScreenState(
                 if (!startedThisAttempt) PikoLog.d(TAG, "首帧就绪")
                 startedThisAttempt = true
                 isRecovering = false
+                switchingQuality?.let { target ->
+                    switchingQuality = null
+                    val switched = if (target == ORIGINAL_QUALITY) activeQuality == null else activeQuality == target
+                    _messages.tryEmit(
+                        if (switched) {
+                            tr("清晰度切换成功", "Quality switched", "画質を切り替えました", "화질 전환이 완료되었습니다", "畫質切換成功")
+                        } else {
+                            TRANSCODE_GONE_MESSAGE
+                        },
+                    )
+                }
                 startDecodePacingWatch()
                 // 出第一帧不代表故障过去了：流每次放几秒就断，立刻清零会无限重连。
                 // 稳定播放一段时间才把退避次数还原
@@ -800,6 +823,7 @@ class PlayerScreenState(
 
     private fun onPlaybackError(detail: String?) {
         stableJob?.cancel()
+        if (!startedThisAttempt) switchingQuality = null
         val safeDetail = detail?.takeUnless { dev.piko.shared.data.LocalLocation.isLocal(fileId) }
         val message = safeDetail?.takeIf { it.isNotBlank() }?.let { tr("播放失败：$it", "Playback failed: $it", "再生に失敗しました：$it", "재생 실패: $it", "播放失敗：$it") } ?: tr("播放中断", "Playback interrupted", "再生が中断されました", "재생이 중단되었습니다", "播放中斷")
         PikoLog.w(

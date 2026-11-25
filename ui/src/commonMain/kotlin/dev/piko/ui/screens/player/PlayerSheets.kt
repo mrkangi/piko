@@ -993,7 +993,7 @@ private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 // 原画的选项值是共用层的常量 ORIGINAL_QUALITY（英文），只在显示时换成中文
-private val String.qualityLabel: String
+internal val String.qualityLabel: String
     get() = if (this == ORIGINAL_QUALITY) tr("原画", "Original", "オリジナル", "원본", "原畫") else this
 
 @Composable
