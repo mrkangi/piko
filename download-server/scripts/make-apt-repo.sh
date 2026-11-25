@@ -78,7 +78,9 @@ for deb in "${DEBS[@]}"; do
   fi
 
   dpkg-deb -f "$deb" >> "$PACKAGES"
-  printf 'Filename: ./%s\n' "$name" >> "$PACKAGES"
+  # Flat apt repositories resolve Filename relative to the source base URL.
+  # Keep it without "./": GitHub Release 路由对 .../tag/./asset 处理不一致。
+  printf 'Filename: %s\n' "$name" >> "$PACKAGES"
   printf 'Size: %s\n' "$(stat -c %s "$deb")" >> "$PACKAGES"
   printf 'SHA256: %s\n\n' "$(sha256sum "$deb" | awk '{print $1}')" >> "$PACKAGES"
 done

@@ -211,7 +211,7 @@ sh download-server-*-termux-add-apt-source.sh test --repo mrkangi/piko
 
 | 文件 | 内容 |
 | --- | --- |
-| `Packages` / `Packages.gz` | `piko-download-server` 的控制字段、`Filename: ./<deb>`、大小与 SHA256 |
+| `Packages` / `Packages.gz` | `piko-download-server` 的控制字段、`Filename: <deb>`、大小与 SHA256 |
 | `Release` | `Packages` 与 `Packages.gz` 的 MD5/SHA256，供 apt 校验 |
 
 CI 会把这三个文件和 `.deb` 一起上传到版本 Release；`build.yml` 的 `publish` job 还会在
