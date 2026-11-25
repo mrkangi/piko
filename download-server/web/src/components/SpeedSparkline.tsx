@@ -1,10 +1,11 @@
 interface Props {
   samples: number[]
+  width?: number
+  height?: number
+  className?: string
 }
 
-export function SpeedSparkline({ samples }: Props) {
-  const width = 120
-  const height = 28
+export function SpeedSparkline({ samples, width = 120, height = 28, className }: Props) {
   const values = samples.length > 1 ? samples : [0, 0]
   const max = Math.max(...values, 1)
   const points = values.map((val, idx) => {
@@ -15,7 +16,7 @@ export function SpeedSparkline({ samples }: Props) {
   const areaPoints = `0,${height} ${points.join(' ')} ${width},${height}`
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className ? `overflow-visible ${className}` : 'overflow-visible'}>
       <defs>
         <linearGradient id="speedGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="rgb(59 130 246)" stopOpacity="0.35" />

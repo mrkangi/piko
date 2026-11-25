@@ -81,7 +81,8 @@ PikPak 网络代理使用 `app_settings.proxy_url_cipher` 保存 AES-GCM 密文�
 
 ## 6. Web 与部署
 
-- **页面**：管理页提供下载根目录、任务并发、单文件分片连接数、最小分片大小、远端目录批量选择、扫描周期、扫描状态、单来源立即扫描与扫描全部已启用；任务页显示状态、进度、速度、ETA、失败原因、「本地已存在」标记与可用操作；文件页显示远端相对路径、本地实际路径、缺失及冲突；任务与文件索引按服务端 50 条分页，搜索和总数统计在 SQL 层完成，SSE 只按事件范围刷新相关数据；运行日志页读取有界内存环形缓冲，页面侧限制渲染条数；全局眼睛按钮默认脱敏，可切换任务与文件路径显示。
+- **信息架构与布局**：一级导航为概览、下载任务、文件索引、管理设置，运行日志从顶栏入口进入。桌面使用固定侧边栏、紧凑表格与高密度工具栏；移动端使用底部导航、卡片列表和设置子页，可点击区域不小于 44px，筛选与分页不产生页面级横向滚动。概览汇总实时速度、空间与来源异常、活动任务、最近完成、存储余量和来源健康度，并可跳转到对应筛选。
+- **页面**：管理页分为下载与存储、监控来源、账号与代理、通知渠道、系统与升级五个分区，桌面用分区侧栏、移动端先显示分区列表再进入子页；脏表单在底部吸附保存/重置。任务页显示状态、进度、速度、ETA、失败原因、「本地已存在」标记与可用操作；文件页显示远端相对路径、本地实际路径、缺失及冲突；任务与文件索引按服务端 50 条分页，搜索和总数统计在 SQL 层完成，SSE 只按事件范围刷新相关数据；运行日志页读取有界内存环形缓冲，页面侧限制渲染条数，支持按级别筛选与导出；全局眼睛按钮默认脱敏，可切换任务与文件路径显示。
 - **接口**：`GET /api/setup/status`、`POST /api/setup` 负责首次配置；`GET /api/remote/folders` 分页浏览远端目录；`GET/POST /api/sources`、`PATCH/DELETE /api/sources/{id}`、`POST /api/sources/scan`、`POST /api/sources/{id}/scan`；`GET /api/tasks`、`POST /api/tasks/{id}/{pause,resume,cancel,retry}`；`GET /api/files`、`GET /api/system/settings`、`PUT /api/system/settings`、`GET/PUT /api/system/account`、`PUT /api/system/proxy`、`PUT /api/system/admin-password`、`GET/POST /api/notifications`、`PATCH/DELETE /api/notifications/{id}`、`POST /api/notifications/{id}/test`、`GET /api/events`、`GET /healthz`。列表分页。操作异步执行时返回已受理和当前状态，非法状态转换返回 `409`。浏览器以 SSE 事件触发合并刷新，首次连接和断线重连均重新取快照；SSE 不是持久状态来源。
 - **会话**：每账号一个长期客户端，按请求传递 `context`；以绝对过期时间管理令牌，串行刷新并原子落盘，避免并发请求重复轮换。鉴权及验证码失败可见，不循环刷登录。服务使用独立凭据和会话文件，不读取任何桌面版或 CLI 的配置。
 - **安全**：管理员密码使用 bcrypt 哈希；PikPak 密码和网络代理 URL 使用数据目录内 `secret.key` 的 AES-GCM 加密后存入数据库，代理只向管理页返回脱敏地址。默认监听 `0.0.0.0:7788`，首次配置必须提交控制台打印的 Setup Token；公网部署应放在 TLS 反代后。管理 API 与 SSE 都须鉴权，写操作校验 CSRF；配置与令牌不回显，日志不记录真实文件名、账号、令牌、验证码、代理凭据和带签名直链。

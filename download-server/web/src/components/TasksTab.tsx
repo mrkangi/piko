@@ -1,7 +1,10 @@
-import { Pause, Play, RotateCcw, Search, XCircle, Info } from 'lucide-react'
+import { useState } from 'react'
+import type { ReactNode } from 'react'
+import { CloudDownload, Info, Pause, Play, RotateCcw, Search, SlidersHorizontal, XCircle } from 'lucide-react'
 import type { Source, TaskView } from '../types'
 import { TASK_STATE_META, formatBytes, formatETA, formatSpeed } from '../format'
 import { maskPath, maskTextPaths } from '../privacy'
+import { Badge, Button, EmptyState, ProgressBar, Segmented, StatusDot, cn, inputClassName } from './ui'
 import { Pagination } from './Pagination'
 
 interface Props {
@@ -35,13 +38,15 @@ const STATE_TABS = [
   { key: 'CANCELED', label: '已取消' },
 ]
 
+type TaskAction = 'pause' | 'resume' | 'cancel' | 'retry'
+
 function TaskActions({
   task,
   onTaskAction,
   onInspect,
 }: {
   task: TaskView
-  onTaskAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => Promise<void>
+  onTaskAction: (id: string, action: TaskAction) => Promise<void>
   onInspect: (task: TaskView) => void
 }) {
   const canPause = ['QUEUED', 'RUNNING', 'RETRY_WAIT', 'VERIFYING'].includes(task.state)
@@ -50,56 +55,61 @@ function TaskActions({
   const canCancel = !['COMPLETED', 'CANCELED', 'CANCELING', 'COMMITTING'].includes(task.state)
 
   return (
-    <div className="inline-flex items-center gap-1.5">
+    <div className="inline-flex items-center gap-1">
       {canPause && (
-        <button
-          onClick={() => onTaskAction(task.id, 'pause')}
-          title="暂停"
-          aria-label="暂停"
-          className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-200 hover:bg-slate-700 cursor-pointer"
-        >
+        <Button variant="secondary" size="icon-sm" onClick={() => onTaskAction(task.id, 'pause')} title="暂停" aria-label="暂停">
           <Pause className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
       {canResume && (
-        <button
-          onClick={() => onTaskAction(task.id, 'resume')}
-          title="继续"
-          aria-label="继续"
-          className="rounded-lg bg-blue-600 p-1.5 text-white hover:bg-blue-500 cursor-pointer"
-        >
+        <Button variant="primary" size="icon-sm" onClick={() => onTaskAction(task.id, 'resume')} title="继续" aria-label="继续">
           <Play className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
       {canRetry && (
-        <button
-          onClick={() => onTaskAction(task.id, 'retry')}
-          title="重试"
-          aria-label="重试"
-          className="rounded-lg bg-blue-600 p-1.5 text-white hover:bg-blue-500 cursor-pointer"
-        >
+        <Button variant="primary" size="icon-sm" onClick={() => onTaskAction(task.id, 'retry')} title="重试" aria-label="重试">
           <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
       {canCancel && (
-        <button
-          onClick={() => onTaskAction(task.id, 'cancel')}
-          title="取消"
-          aria-label="取消"
-          className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300 hover:bg-rose-500/20 cursor-pointer"
-        >
+        <Button variant="danger" size="icon-sm" onClick={() => onTaskAction(task.id, 'cancel')} title="取消" aria-label="取消">
           <XCircle className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
-      <button
-        onClick={() => onInspect(task)}
-        title="详情"
-        aria-label="详情"
-        className="rounded-lg border border-slate-800 bg-slate-950 p-1.5 text-slate-400 hover:text-slate-200 cursor-pointer"
-      >
+      <Button variant="ghost" size="icon-sm" onClick={() => onInspect(task)} title="详情" aria-label="详情">
         <Info className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
+  )
+}
+
+function TaskError({ task, hideFilenames }: { task: TaskView; hideFilenames: boolean }) {
+  if (!task.error_message) return null
+  const message = maskTextPaths(task.error_message, [task.target_rel_path, task.remote_path, task.staging_rel_path], hideFilenames)
+  return <div className="mt-1.5 line-clamp-2 break-all text-[11px] leading-4 text-rose-300/90">{message}</div>
+}
+
+function TaskName({
+  task,
+  sourceName,
+  hideFilenames,
+}: {
+  task: TaskView
+  sourceName: string
+  hideFilenames: boolean
+}) {
+  return (
+    <>
+      <div className="truncate text-[13px] font-medium text-ink" title={hideFilenames ? undefined : task.target_rel_path}>
+        {maskPath(task.target_rel_path, hideFilenames)}
+      </div>
+      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-ink-3">
+        <span className="shrink-0 rounded border border-line bg-surface-2 px-1.5 py-px text-[10px] text-ink-2">{sourceName}</span>
+        <span className="truncate" title={hideFilenames ? undefined : task.remote_path}>
+          {maskPath(task.remote_path, hideFilenames)}
+        </span>
+      </div>
+    </>
   )
 }
 
@@ -121,163 +131,159 @@ export function TasksTab({
   onBatchAction,
   onInspect,
 }: Props) {
-  const sourceMap = new Map(sources.map((s) => [s.id, s.local_alias]))
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const sourceMap = new Map(sources.map((source) => [source.id, source.local_alias]))
+  const hasFilters = Boolean(stateFilter || sourceFilter || searchQuery.trim())
+
+  function clearFilters() {
+    onStateFilterChange('')
+    onSourceFilterChange('')
+    onSearchChange('')
+    onOffsetChange(0)
+  }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:overflow-visible">
-          {STATE_TABS.map((tab) => {
-            const active = stateFilter === tab.key
-            return (
-              <button
-                key={tab.key || 'all'}
-                onClick={() => onStateFilterChange(tab.key)}
-                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition cursor-pointer ${
-                  active
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {tab.label}
-              </button>
-            )
-          })}
-        </div>
-
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
-          <div className="relative w-full sm:w-56">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="搜索文件名或路径…"
-              className="w-full rounded-lg border border-slate-800 bg-slate-900 pl-8 pr-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
-            />
+    <div className="space-y-3">
+      <div className="space-y-2.5">
+        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+          <Segmented value={stateFilter} options={STATE_TABS} onChange={onStateFilterChange} />
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1 lg:w-64 lg:flex-none">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="搜索文件名或路径…"
+                className={cn(inputClassName, 'h-9 py-0 pl-8 text-xs')}
+              />
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setFiltersOpen((value) => !value)}
+              aria-expanded={filtersOpen}
+              className={cn(filtersOpen && 'border-line-strong bg-surface-3', 'lg:hidden')}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              筛选
+            </Button>
+            <select
+              value={sourceFilter}
+              onChange={(event) => onSourceFilterChange(event.target.value)}
+              className={cn(inputClassName, 'hidden h-9 w-auto py-0 text-xs lg:block')}
+            >
+              <option value="">全部来源</option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>{source.local_alias}</option>
+              ))}
+            </select>
           </div>
-          <select
-            value={sourceFilter}
-            onChange={(e) => onSourceFilterChange(e.target.value)}
-            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 focus:border-blue-500 focus:outline-none sm:w-auto"
-          >
-            <option value="">全部来源</option>
-            {sources.map((s) => (
-              <option key={s.id} value={s.id}>{s.local_alias}</option>
-            ))}
-          </select>
+        </div>
+
+        {filtersOpen && (
+          <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface-1 p-2.5 lg:hidden">
+            <FieldLabel>来源</FieldLabel>
+            <select
+              value={sourceFilter}
+              onChange={(event) => onSourceFilterChange(event.target.value)}
+              className={cn(inputClassName, 'h-9 py-0 text-xs')}
+            >
+              <option value="">全部来源</option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>{source.local_alias}</option>
+              ))}
+            </select>
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters} className="self-start">
+                清除全部筛选
+              </Button>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-line bg-surface-1 px-3 py-2">
+          <span className="text-[11px] text-ink-3">
+            共 <strong className="font-medium text-ink-2 tabular-nums">{total}</strong> 个任务
+            <span className="mx-1.5 text-line-strong">·</span>本页 {tasks.length} 个
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="hidden text-[11px] text-ink-3 sm:inline">批量作用于当前来源筛选</span>
+            <Button variant="ghost" size="sm" onClick={() => void onBatchAction('pause')}>
+              <Pause className="h-3.5 w-3.5" />
+              暂停
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void onBatchAction('resume')}>
+              <Play className="h-3.5 w-3.5" />
+              继续
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void onBatchAction('retry')}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              重试
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 rounded-xl border border-slate-800/80 bg-slate-900/60 px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-4">
-        <span className="text-xs text-slate-400">
-          当前筛选共 <strong className="text-slate-200 tabular-nums">{total}</strong> 个任务，本页 {tasks.length} 个
-        </span>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => onBatchAction('pause')}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
-          >
-            <Pause className="h-3.5 w-3.5" /> 暂停进行中
-          </button>
-          <button
-            onClick={() => onBatchAction('resume')}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
-          >
-            <Play className="h-3.5 w-3.5" /> 继续已暂停
-          </button>
-          <button
-            onClick={() => onBatchAction('retry')}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700 cursor-pointer"
-          >
-            <RotateCcw className="h-3.5 w-3.5" /> 重试异常
-          </button>
-        </div>
-      </div>
-
-      <div className="hidden overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 md:block">
+      <div className="hidden overflow-hidden rounded-xl border border-line bg-surface-1 md:block">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-800 bg-slate-950/60 text-xs uppercase text-slate-400">
+          <table className="w-full min-w-[760px] text-left text-[13px]">
+            <thead className="border-b border-line bg-canvas/40 text-[11px] font-medium text-ink-3">
               <tr>
-                <th className="px-4 py-3 font-medium">目标路径 / 来源</th>
-                <th className="px-4 py-3 font-medium">状态</th>
-                <th className="px-4 py-3 font-medium">进度</th>
-                <th className="px-4 py-3 font-medium">速率 / ETA</th>
-                <th className="px-4 py-3 font-medium text-right">操作</th>
+                <th className="px-4 py-2.5 font-medium">任务</th>
+                <th className="w-32 px-4 py-2.5 font-medium">状态</th>
+                <th className="w-56 px-4 py-2.5 font-medium">进度</th>
+                <th className="w-36 px-4 py-2.5 font-medium">速率 / ETA</th>
+                <th className="w-36 px-4 py-2.5 text-right font-medium">操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/70">
+            <tbody className="divide-y divide-line">
               {tasks.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-500">
-                    当前筛选条件下没有下载任务
+                  <td colSpan={5}>
+                    <EmptyState
+                      icon={<CloudDownload className="h-5 w-5" />}
+                      title="当前筛选下没有下载任务"
+                      description={hasFilters ? '可以调整筛选条件或清除筛选后再看看。' : '新文件被扫描发现后会自动进入下载队列。'}
+                      action={hasFilters ? <Button variant="soft" size="sm" onClick={clearFilters}>清除筛选</Button> : undefined}
+                    />
                   </td>
                 </tr>
               ) : (
                 tasks.map((task) => {
                   const meta = TASK_STATE_META[task.state]
-                  const targetPath = maskPath(task.target_rel_path, hideFilenames)
-                  const remotePath = maskPath(task.remote_path, hideFilenames)
-                  const errorMessage = maskTextPaths(
-                    task.error_message,
-                    [task.target_rel_path, task.remote_path, task.staging_rel_path],
-                    hideFilenames,
-                  )
                   return (
-                    <tr key={task.id} className="hover:bg-slate-800/35 transition-colors">
-                      <td className="px-4 py-3 max-w-md">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate font-medium text-slate-100" title={hideFilenames ? undefined : task.target_rel_path}>
-                            {targetPath}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-400">
-                          <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300">
-                            {sourceMap.get(task.source_id) || task.source_id}
-                          </span>
-                          <span className="truncate" title={hideFilenames ? undefined : task.remote_path}>{remotePath}</span>
-                        </div>
-                        {task.error_message && (
-                          <div className="mt-1 truncate text-xs text-rose-300" title={hideFilenames ? undefined : task.error_message}>
-                            {errorMessage}
-                          </div>
-                        )}
+                    <tr key={task.id} className="group transition-colors hover:bg-surface-2/35">
+                      <td className="max-w-md px-4 py-3">
+                        <TaskName task={task} sourceName={sourceMap.get(task.source_id) || task.source_id} hideFilenames={hideFilenames} />
+                        <TaskError task={task} hideFilenames={hideFilenames} />
                       </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={meta.tone}>
+                            <StatusDot tone={meta.tone} pulse={task.state === 'RUNNING'} />
                             {meta.label}
-                          </span>
-                          {task.local_existing && (
-                            <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/15 px-2 py-0.5 text-[11px] text-cyan-300">
-                              本地已存在
-                            </span>
-                          )}
+                          </Badge>
+                          {task.local_existing && <Badge tone="info">本地已存在</Badge>}
                         </div>
                       </td>
-
-                      <td className="px-4 py-3 min-w-[180px]">
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                          <div
-                            className={`h-full transition-all duration-300 ${meta.progressClass}`}
-                            style={{ width: `${task.progress_percent}%` }}
-                          />
-                        </div>
-                        <div className="mt-1 flex justify-between text-xs text-slate-400 tabular-nums">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-2 whitespace-nowrap text-[10px] text-ink-3 tabular-nums">
                           <span>{formatBytes(task.bytes_done)} / {formatBytes(task.bytes_total)}</span>
-                          <span>{task.progress_percent.toFixed(1)}%</span>
+                          <span className="shrink-0 text-ink-2">{task.progress_percent.toFixed(1)}%</span>
+                        </div>
+                        <ProgressBar value={task.progress_percent} barClassName={meta.progressClass} className="mt-1.5 h-1" />
+                      </td>
+                      <td className="px-4 py-3 tabular-nums">
+                        <div className="whitespace-nowrap text-xs font-medium text-ink-2">{formatSpeed(task.speed_bytes_per_sec)}</div>
+                        <div className="mt-0.5 whitespace-nowrap text-[11px] text-ink-3">
+                          {task.state === 'COMPLETED' ? '已完成' : `ETA ${formatETA(task.eta_seconds)}`}
                         </div>
                       </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap tabular-nums">
-                        <div className="text-xs font-medium text-slate-200">{formatSpeed(task.speed_bytes_per_sec)}</div>
-                        <div className="text-xs text-slate-400">ETA {formatETA(task.eta_seconds)}</div>
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <TaskActions task={task} onTaskAction={onTaskAction} onInspect={onInspect} />
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end">
+                          <TaskActions task={task} onTaskAction={onTaskAction} onInspect={onInspect} />
+                        </div>
                       </td>
                     </tr>
                   )
@@ -290,68 +296,51 @@ export function TasksTab({
 
       <div className="space-y-2.5 md:hidden">
         {tasks.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-12 text-center text-sm text-slate-500">
-            当前筛选条件下没有下载任务
+          <div className="rounded-xl border border-line bg-surface-1">
+            <EmptyState
+              icon={<CloudDownload className="h-5 w-5" />}
+              title="当前筛选下没有下载任务"
+              description={hasFilters ? '可以调整筛选条件或清除筛选。' : '新文件被扫描发现后会自动进入队列。'}
+              action={hasFilters ? <Button variant="soft" size="sm" onClick={clearFilters}>清除筛选</Button> : undefined}
+            />
           </div>
         ) : (
           tasks.map((task) => {
             const meta = TASK_STATE_META[task.state]
-            const targetPath = maskPath(task.target_rel_path, hideFilenames)
-            const remotePath = maskPath(task.remote_path, hideFilenames)
-            const errorMessage = maskTextPaths(
-              task.error_message,
-              [task.target_rel_path, task.remote_path, task.staging_rel_path],
-              hideFilenames,
-            )
-
             return (
-              <article key={task.id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
-                <div className="flex items-start justify-between gap-2">
+              <article key={task.id} className="rounded-xl border border-line bg-surface-1 p-3">
+                <div className="flex items-start gap-2.5">
+                  <StatusDot tone={meta.tone} pulse={task.state === 'RUNNING'} className="mt-1.5" />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-slate-100" title={hideFilenames ? undefined : task.target_rel_path}>
-                      {targetPath}
-                    </div>
-                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
-                      <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">
-                        {sourceMap.get(task.source_id) || task.source_id}
-                      </span>
-                      <span className="min-w-0 truncate" title={hideFilenames ? undefined : task.remote_path}>{remotePath}</span>
-                    </div>
+                    <TaskName task={task} sourceName={sourceMap.get(task.source_id) || task.source_id} hideFilenames={hideFilenames} />
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${meta.badgeClass}`}>
-                      {meta.label}
-                    </span>
-                    {task.local_existing && (
-                      <span className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/15 px-1.5 py-0.5 text-[10px] text-cyan-300">
-                        本地已存在
-                      </span>
-                    )}
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                    {task.local_existing && <Badge tone="info">本地已存在</Badge>}
                   </div>
                 </div>
 
-                {task.error_message && (
-                  <div className="mt-2 line-clamp-2 break-all text-[11px] text-rose-300">{errorMessage}</div>
-                )}
+                <TaskError task={task} hideFilenames={hideFilenames} />
 
                 <div className="mt-3">
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className={`h-full transition-all duration-300 ${meta.progressClass}`}
-                      style={{ width: `${task.progress_percent}%` }}
-                    />
-                  </div>
-                  <div className="mt-1 flex justify-between gap-2 text-[11px] text-slate-400 tabular-nums">
+                  <ProgressBar value={task.progress_percent} barClassName={meta.progressClass} />
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-ink-3 tabular-nums">
                     <span className="truncate">{formatBytes(task.bytes_done)} / {formatBytes(task.bytes_total)}</span>
-                    <span className="shrink-0">{task.progress_percent.toFixed(1)}%</span>
+                    <span className="shrink-0 text-ink-2">{task.progress_percent.toFixed(1)}%</span>
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-800/70 pt-2.5">
-                  <div className="min-w-0 text-[11px] text-slate-400 tabular-nums">
-                    <span className="text-slate-200">{formatSpeed(task.speed_bytes_per_sec)}</span>
-                    <span className="mx-1.5 text-slate-600">·</span>
-                    ETA {formatETA(task.eta_seconds)}
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2.5">
+                  <div className="min-w-0 text-[11px] text-ink-3 tabular-nums">
+                    {task.state === 'COMPLETED' ? (
+                      <span className="text-emerald-300/80">已完成</span>
+                    ) : (
+                      <>
+                        <span className="font-medium text-ink-2">{formatSpeed(task.speed_bytes_per_sec)}</span>
+                        <span className="mx-1.5 text-line-strong">·</span>
+                        ETA {formatETA(task.eta_seconds)}
+                      </>
+                    )}
                   </div>
                   <TaskActions task={task} onTaskAction={onTaskAction} onInspect={onInspect} />
                 </div>
@@ -364,4 +353,8 @@ export function TasksTab({
       <Pagination total={total} limit={limit} offset={offset} onOffsetChange={onOffsetChange} />
     </div>
   )
+}
+
+function FieldLabel({ children }: { children: ReactNode }) {
+  return <span className="text-[11px] font-medium text-ink-3">{children}</span>
 }

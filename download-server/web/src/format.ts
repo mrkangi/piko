@@ -44,68 +44,22 @@ export function formatRelativeTime(unixSec: number | undefined | null): string {
   return diff >= 0 ? `${hours} 小时后` : `${hours} 小时前`
 }
 
+export type StatusTone = 'neutral' | 'active' | 'success' | 'wait' | 'danger' | 'info'
+
 export const TASK_STATE_META: Record<
   TaskState,
-  { label: string; badgeClass: string; progressClass: string }
+  { label: string; tone: StatusTone; progressClass: string }
 > = {
-  QUEUED: {
-    label: '排队中',
-    badgeClass: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
-    progressClass: 'bg-slate-400',
-  },
-  RUNNING: {
-    label: '下载中',
-    badgeClass: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
-    progressClass: 'bg-blue-500',
-  },
-  PAUSING: {
-    label: '暂停中',
-    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-    progressClass: 'bg-amber-400',
-  },
-  PAUSED: {
-    label: '已暂停',
-    badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-    progressClass: 'bg-amber-500',
-  },
-  CANCELING: {
-    label: '取消中',
-    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
-    progressClass: 'bg-rose-400',
-  },
-  CANCELED: {
-    label: '已取消',
-    badgeClass: 'bg-slate-500/15 text-slate-400 border-slate-600/40',
-    progressClass: 'bg-slate-500',
-  },
-  RETRY_WAIT: {
-    label: '等待重试',
-    badgeClass: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
-    progressClass: 'bg-orange-400',
-  },
-  VERIFYING: {
-    label: '校验中',
-    badgeClass: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-    progressClass: 'bg-cyan-400',
-  },
-  COMMITTING: {
-    label: '交付中',
-    badgeClass: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
-    progressClass: 'bg-indigo-400',
-  },
-  COMPLETED: {
-    label: '已完成',
-    badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-    progressClass: 'bg-emerald-500',
-  },
-  FAILED: {
-    label: '失败',
-    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
-    progressClass: 'bg-rose-500',
-  },
-  CONFLICT: {
-    label: '路径冲突',
-    badgeClass: 'bg-red-500/20 text-red-300 border-red-500/40',
-    progressClass: 'bg-red-500',
-  },
+  QUEUED: { label: '排队中', tone: 'neutral', progressClass: 'bg-ink-3' },
+  RUNNING: { label: '下载中', tone: 'active', progressClass: 'bg-accent' },
+  PAUSING: { label: '暂停中', tone: 'wait', progressClass: 'bg-amber-400' },
+  PAUSED: { label: '已暂停', tone: 'wait', progressClass: 'bg-amber-500' },
+  CANCELING: { label: '取消中', tone: 'danger', progressClass: 'bg-rose-400' },
+  CANCELED: { label: '已取消', tone: 'neutral', progressClass: 'bg-ink-3' },
+  RETRY_WAIT: { label: '等待重试', tone: 'wait', progressClass: 'bg-amber-400' },
+  VERIFYING: { label: '校验中', tone: 'info', progressClass: 'bg-cyan-400' },
+  COMMITTING: { label: '交付中', tone: 'info', progressClass: 'bg-indigo-400' },
+  COMPLETED: { label: '已完成', tone: 'success', progressClass: 'bg-emerald-500' },
+  FAILED: { label: '失败', tone: 'danger', progressClass: 'bg-rose-500' },
+  CONFLICT: { label: '路径冲突', tone: 'danger', progressClass: 'bg-rose-500' },
 }

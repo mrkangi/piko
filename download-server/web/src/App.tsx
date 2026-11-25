@@ -1,33 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  Activity,
-  ArrowUpCircle,
-  CloudDownload,
-  Eye,
-  EyeOff,
-  HardDrive,
-  Layers,
-  LogOut,
-  RefreshCw,
-  ScrollText,
-  Settings,
-  FileCheck2,
-} from 'lucide-react'
 import * as api from './api'
-import { formatBytes, formatSpeed } from './format'
-import type { AuthUser, FileView, NotificationChannel, SetupStatus, Source, SystemSettings, SystemStats, TaskView, UpdateInfo } from './types'
+import type {
+  AuthUser,
+  FileView,
+  NotificationChannel,
+  SetupStatus,
+  Source,
+  SystemSettings,
+  SystemStats,
+  TaskView,
+  UpdateInfo,
+} from './types'
+import { AppShell, ShellPlaceholder, type SseState, type TabKey } from './components/AppShell'
+import { OverviewTab } from './components/OverviewTab'
 import { LoginView } from './components/LoginView'
 import { SetupView } from './components/SetupView'
-import { SpeedSparkline } from './components/SpeedSparkline'
 import { TasksTab } from './components/TasksTab'
-import { ManageTab } from './components/ManageTab'
+import { ManageTab, type ManageSection } from './components/ManageTab'
 import { FilesTab } from './components/FilesTab'
 import { LogsTab } from './components/LogsTab'
 import { TaskDetailDrawer } from './components/TaskDetailDrawer'
 import { UpdateDialog } from './components/UpdateDialog'
 import { useDebouncedValue } from './useDebouncedValue'
-
-type TabKey = 'tasks' | 'files' | 'logs' | 'manage'
 
 interface RefreshOptions {
   stats: boolean
@@ -36,6 +30,7 @@ interface RefreshOptions {
   tasks: boolean
   files: boolean
   notifications: boolean
+  overview: boolean
 }
 
 function refreshScope(partial: Partial<RefreshOptions>): RefreshOptions {
@@ -46,6 +41,7 @@ function refreshScope(partial: Partial<RefreshOptions>): RefreshOptions {
     tasks: false,
     files: false,
     notifications: false,
+    overview: false,
     ...partial,
   }
 }
@@ -57,17 +53,30 @@ const REFRESH_ALL: RefreshOptions = refreshScope({
   tasks: true,
   files: true,
   notifications: true,
+  overview: true,
 })
 
 const FILENAME_VISIBILITY_KEY = 'piko.download.hideFilenames'
 const TASK_PAGE_SIZE = 50
 const FILE_PAGE_SIZE = 50
+const TAB_TITLES: Record<TabKey, string> = {
+  overview: '概览',
+  tasks: '下载任务',
+  files: '文件索引',
+  logs: '运行日志',
+  manage: '管理设置',
+}
 
 function tabFromPath(pathname: string): TabKey {
   if (pathname.startsWith('/manage') || pathname.startsWith('/sources')) return 'manage'
   if (pathname.startsWith('/files')) return 'files'
   if (pathname.startsWith('/logs')) return 'logs'
-  return 'tasks'
+  if (pathname.startsWith('/tasks')) return 'tasks'
+  return 'overview'
+}
+
+function tabPath(tab: TabKey): string {
+  return tab === 'overview' ? '/' : `/${tab}`
 }
 
 function readHideFilenames(): boolean {
@@ -84,7 +93,7 @@ export function App() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
   const [checkingAuth, setCheckingAuth] = useState(true)
   const [activeTab, setActiveTab] = useState<TabKey>(() => tabFromPath(window.location.pathname))
-  const [sseState, setSseState] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting')
+  const [sseState, setSseState] = useState<SseState>('connecting')
 
   const [stats, setStats] = useState<SystemStats | null>(null)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
@@ -94,6 +103,7 @@ export function App() {
   const [tasks, setTasks] = useState<TaskView[]>([])
   const [taskTotal, setTaskTotal] = useState(0)
   const [taskOffset, setTaskOffset] = useState(0)
+  const [overviewTasks, setOverviewTasks] = useState<TaskView[]>([])
   const [files, setFiles] = useState<FileView[]>([])
   const [fileTotal, setFileTotal] = useState(0)
   const [fileOffset, setFileOffset] = useState(0)
@@ -117,6 +127,9 @@ export function App() {
   const [restartingForUpdate, setRestartingForUpdate] = useState(false)
   const [updateError, setUpdateError] = useState('')
   const [toast, setToast] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const [manageSection, setManageSection] = useState<ManageSection>('storage')
+  const [manageDetailOpen, setManageDetailOpen] = useState(false)
+
   const refreshTimerRef = useRef<number | null>(null)
   const pendingRefreshRef = useRef<RefreshOptions>(refreshScope({}))
   const taskRequestSeqRef = useRef(0)
@@ -131,6 +144,10 @@ export function App() {
     const id = window.setTimeout(() => setToast(null), 3500)
     return () => window.clearTimeout(id)
   }, [toast])
+
+  useEffect(() => {
+    document.title = `${TAB_TITLES[activeTab]} · Piko Download Server`
+  }, [activeTab])
 
   useEffect(() => {
     try {
@@ -150,76 +167,85 @@ export function App() {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  const refreshAll = useCallback(async (options: RefreshOptions = REFRESH_ALL) => {
-    const taskRequestSeq = options.tasks ? ++taskRequestSeqRef.current : 0
-    const fileRequestSeq = options.files ? ++fileRequestSeqRef.current : 0
-    try {
-      const [nextStats, nextSettings, nextSources, nextTasks, nextFiles, nextNotifications] = await Promise.all([
-        options.stats ? api.getStats() : Promise.resolve(null),
-        options.settings ? api.getSettings() : Promise.resolve(null),
-        options.sources ? api.listSources() : Promise.resolve(null),
-        options.tasks
-          ? api.listTasks({
-              state: taskStateFilter,
-              source_id: taskSourceFilter,
-              q: debouncedTaskSearch,
-              limit: TASK_PAGE_SIZE,
-              offset: taskOffset,
-            })
-          : Promise.resolve(null),
-        options.files
-          ? api.listFiles({
-              remote_state: fileRemoteState,
-              source_id: fileSourceFilter,
-              q: debouncedFileSearch,
-              limit: FILE_PAGE_SIZE,
-              offset: fileOffset,
-            })
-          : Promise.resolve(null),
-        options.notifications ? api.listNotifications() : Promise.resolve(null),
-      ])
-      if (nextStats) {
-        setStats(nextStats)
-        setSpeedHistory((prev) => [...prev.slice(-24), nextStats.total_speed_bytes])
-      }
-      if (nextSettings) setSettings(nextSettings)
-      if (nextSources) setSources(nextSources.sources || [])
-      if (nextNotifications) setNotificationChannels(nextNotifications.channels || [])
-      if (nextTasks && taskRequestSeq === taskRequestSeqRef.current) {
-        const nextTaskList = nextTasks.tasks || []
-        const nextTaskTotal = nextTasks.total || 0
-        setTasks(nextTaskList)
-        setTaskTotal(nextTaskTotal)
-        if (taskOffset > 0 && nextTaskList.length === 0 && nextTaskTotal > 0) {
-          setTaskOffset(Math.floor((nextTaskTotal - 1) / TASK_PAGE_SIZE) * TASK_PAGE_SIZE)
+  const refreshAll = useCallback(
+    async (options: RefreshOptions = REFRESH_ALL) => {
+      const taskRequestSeq = options.tasks ? ++taskRequestSeqRef.current : 0
+      const fileRequestSeq = options.files ? ++fileRequestSeqRef.current : 0
+      try {
+        const [nextStats, nextSettings, nextSources, nextTasks, nextFiles, nextNotifications, nextOverview] = await Promise.all([
+          options.stats ? api.getStats() : Promise.resolve(null),
+          options.settings ? api.getSettings() : Promise.resolve(null),
+          options.sources ? api.listSources() : Promise.resolve(null),
+          options.tasks
+            ? api.listTasks({
+                state: taskStateFilter,
+                source_id: taskSourceFilter,
+                q: debouncedTaskSearch,
+                limit: TASK_PAGE_SIZE,
+                offset: taskOffset,
+              })
+            : Promise.resolve(null),
+          options.files
+            ? api.listFiles({
+                remote_state: fileRemoteState,
+                source_id: fileSourceFilter,
+                q: debouncedFileSearch,
+                limit: FILE_PAGE_SIZE,
+                offset: fileOffset,
+              })
+            : Promise.resolve(null),
+          options.notifications ? api.listNotifications() : Promise.resolve(null),
+          options.overview ? api.listTasks({ limit: 12, offset: 0 }) : Promise.resolve(null),
+        ])
+        if (nextStats) {
+          setStats(nextStats)
+          setSpeedHistory((prev) => [...prev.slice(-24), nextStats.total_speed_bytes])
         }
-        setInspectedTask((prev) => (prev ? nextTaskList.find((t) => t.id === prev.id) || null : null))
-      }
-      if (nextFiles && fileRequestSeq === fileRequestSeqRef.current) {
-        const nextFileList = nextFiles.files || []
-        const nextFileTotal = nextFiles.total || 0
-        setFiles(nextFileList)
-        setFileTotal(nextFileTotal)
-        if (fileOffset > 0 && nextFileList.length === 0 && nextFileTotal > 0) {
-          setFileOffset(Math.floor((nextFileTotal - 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE)
+        if (nextSettings) setSettings(nextSettings)
+        if (nextSources) setSources(nextSources.sources || [])
+        if (nextNotifications) setNotificationChannels(nextNotifications.channels || [])
+        if (nextOverview) {
+          const nextOverviewTasks = nextOverview.tasks || []
+          setOverviewTasks(nextOverviewTasks)
+          setInspectedTask((prev) => (prev ? nextOverviewTasks.find((task) => task.id === prev.id) || prev : null))
+        }
+        if (nextTasks && taskRequestSeq === taskRequestSeqRef.current) {
+          const nextTaskList = nextTasks.tasks || []
+          const nextTaskTotal = nextTasks.total || 0
+          setTasks(nextTaskList)
+          setTaskTotal(nextTaskTotal)
+          if (taskOffset > 0 && nextTaskList.length === 0 && nextTaskTotal > 0) {
+            setTaskOffset(Math.floor((nextTaskTotal - 1) / TASK_PAGE_SIZE) * TASK_PAGE_SIZE)
+          }
+          setInspectedTask((prev) => (prev ? nextTaskList.find((task) => task.id === prev.id) || prev : null))
+        }
+        if (nextFiles && fileRequestSeq === fileRequestSeqRef.current) {
+          const nextFileList = nextFiles.files || []
+          const nextFileTotal = nextFiles.total || 0
+          setFiles(nextFileList)
+          setFileTotal(nextFileTotal)
+          if (fileOffset > 0 && nextFileList.length === 0 && nextFileTotal > 0) {
+            setFileOffset(Math.floor((nextFileTotal - 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE)
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message !== '请先登录') {
+          notify('error', err.message)
         }
       }
-    } catch (err) {
-      if (err instanceof Error && err.message !== '请先登录') {
-        notify('error', err.message)
-      }
-    }
-  }, [
-    taskStateFilter,
-    taskSourceFilter,
-    debouncedTaskSearch,
-    taskOffset,
-    fileRemoteState,
-    fileSourceFilter,
-    debouncedFileSearch,
-    fileOffset,
-    notify,
-  ])
+    },
+    [
+      taskStateFilter,
+      taskSourceFilter,
+      debouncedTaskSearch,
+      taskOffset,
+      fileRemoteState,
+      fileSourceFilter,
+      debouncedFileSearch,
+      fileOffset,
+      notify,
+    ],
+  )
 
   const scheduleRefresh = useCallback((scope: RefreshOptions) => {
     const pending = pendingRefreshRef.current
@@ -230,6 +256,7 @@ export function App() {
       tasks: pending.tasks || scope.tasks,
       files: pending.files || scope.files,
       notifications: pending.notifications || scope.notifications,
+      overview: pending.overview || scope.overview,
     }
     if (refreshTimerRef.current !== null) return
     refreshTimerRef.current = window.setTimeout(() => {
@@ -241,17 +268,14 @@ export function App() {
   }, [refreshAll])
 
   useEffect(() => {
-    api.setUnauthorizedHandler(() => {
-      setUser(null)
-    })
+    api.setUnauthorizedHandler(() => setUser(null))
     api
       .getSetupStatus()
       .then(async (status) => {
         setSetupStatus(status)
         if (status.needs_setup) return
         try {
-          const u = await api.me()
-          setUser(u)
+          setUser(await api.me())
         } catch {
           setUser(null)
         }
@@ -302,6 +326,11 @@ export function App() {
     }
   }, [])
 
+  const openUpdateDialog = useCallback(() => {
+    setShowUpdateDialog(true)
+    void refreshUpdate(true)
+  }, [refreshUpdate])
+
   const startUpdate = useCallback(async () => {
     if (!updateInfo?.available || !updateInfo.can_apply || applyingUpdate || restartingForUpdate) return
     setApplyingUpdate(true)
@@ -336,30 +365,30 @@ export function App() {
   useEffect(() => {
     if (!user) return
     setSseState('connecting')
-    const es = new EventSource(api.apiURL('/api/events'), { withCredentials: true })
-    es.addEventListener('ready', () => {
+    const eventSource = new EventSource(api.apiURL('/api/events'), { withCredentials: true })
+    eventSource.addEventListener('ready', () => {
       setSseState('connected')
       void refreshAll()
     })
     const handleTaskProgress = () => scheduleRefresh(refreshScope({ stats: true, tasks: true }))
-    const handleTaskOutcome = () => scheduleRefresh(refreshScope({ stats: true, tasks: true, files: true }))
-    const handleCatalog = () => scheduleRefresh(refreshScope({ stats: true, sources: true, tasks: true, files: true }))
+    const handleTaskOutcome = () => scheduleRefresh(refreshScope({ stats: true, tasks: true, files: true, overview: true }))
+    const handleCatalog = () => scheduleRefresh(refreshScope({ stats: true, sources: true, tasks: true, files: true, overview: true }))
     const handleSettings = () => scheduleRefresh(refreshScope({ stats: true, settings: true }))
     const handleStats = () => scheduleRefresh(refreshScope({ stats: true }))
-    ;['task.updated'].forEach((name) => es.addEventListener(name, handleTaskProgress))
+    eventSource.addEventListener('task.updated', handleTaskProgress)
     ;['task.started', 'task.completed', 'task.failed', 'task.conflict', 'task.retry', 'tasks.queued'].forEach((name) => {
-      es.addEventListener(name, handleTaskOutcome)
+      eventSource.addEventListener(name, handleTaskOutcome)
     })
     ;['source.updated', 'scan.started', 'scan.finished', 'scan.failed'].forEach((name) => {
-      es.addEventListener(name, handleCatalog)
+      eventSource.addEventListener(name, handleCatalog)
     })
-    es.addEventListener('settings.updated', handleSettings)
+    eventSource.addEventListener('settings.updated', handleSettings)
     ;['system.stats', 'system.low_disk', 'system.disk_ok', 'status.report'].forEach((name) => {
-      es.addEventListener(name, handleStats)
+      eventSource.addEventListener(name, handleStats)
     })
-    es.onerror = () => setSseState('reconnecting')
+    eventSource.onerror = () => setSseState('reconnecting')
     return () => {
-      es.close()
+      eventSource.close()
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current)
         refreshTimerRef.current = null
@@ -370,209 +399,107 @@ export function App() {
 
   function switchTab(tab: TabKey) {
     setActiveTab(tab)
-    const targetPath = `/${tab}`
+    if (tab === 'manage' && window.innerWidth < 1024) {
+      setManageDetailOpen(false)
+    }
+    const targetPath = tabPath(tab)
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath)
     }
   }
 
-  function changeTaskStateFilter(value: string) {
-    setTaskStateFilter(value)
+  function showTasks(state = '') {
+    setTaskStateFilter(state)
     setTaskOffset(0)
+    switchTab('tasks')
   }
 
-  function changeTaskSourceFilter(value: string) {
-    setTaskSourceFilter(value)
-    setTaskOffset(0)
+  function showManage(section?: ManageSection) {
+    switchTab('manage')
+    if (section) {
+      setManageSection(section)
+      if (window.innerWidth < 1024) {
+        setManageDetailOpen(true)
+      }
+    }
   }
 
-  function changeTaskSearch(value: string) {
-    setTaskSearch(value)
-    setTaskOffset(0)
+  async function scanAllSources() {
+    try {
+      const result = await api.scanAllSources()
+      notify('ok', `已安排 ${result.scheduled} 个来源立即扫描`)
+      await refreshAll()
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : '触发全部扫描失败')
+    }
   }
 
-  function changeFileRemoteState(value: string) {
-    setFileRemoteState(value)
-    setFileOffset(0)
-  }
-
-  function changeFileSourceFilter(value: string) {
-    setFileSourceFilter(value)
-    setFileOffset(0)
-  }
-
-  function changeFileSearch(value: string) {
-    setFileSearch(value)
-    setFileOffset(0)
+  async function handleLogout() {
+    await api.logout()
+    setUser(null)
   }
 
   if (checkingAuth) {
-    return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-sm text-slate-400">正在加载会话…</div>
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-canvas">
+        <ShellPlaceholder label="正在加载会话…" />
+      </div>
+    )
   }
+
   if (setupStatus?.needs_setup) {
     return (
       <SetupView
         status={setupStatus}
-        onComplete={(u) => {
+        onComplete={(nextUser) => {
           setSetupStatus(null)
-          setUser(u)
+          setUser(nextUser)
         }}
       />
     )
   }
+
   if (!user) {
-    return <LoginView onAuthenticated={(u) => setUser(u)} />
+    return <LoginView onAuthenticated={setUser} />
   }
 
-  const sourceMap = new Map(sources.map((s) => [s.id, s.local_alias]))
-
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
-              <CloudDownload className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-                <h1 className="truncate text-base font-semibold tracking-tight">Piko Download Server</h1>
-                <span
-                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${
-                    sseState === 'connected'
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                      : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                  }`}
-                >
-                  <span className={`h-1.5 w-1.5 rounded-full ${sseState === 'connected' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
-                  {sseState === 'connected' ? '实时连接' : sseState === 'connecting' ? '连接中' : '重连中'}
-                </span>
-              </div>
-              <p className="truncate text-xs text-slate-400">已登录管理员：{user.username}</p>
-            </div>
-          </div>
-
-          <div className="flex w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end">
-            <button
-              onClick={() => setShowUpdateDialog(true)}
-              title={`当前版本 ${updateInfo?.current_version || '未知'}，点击检查在线升级`}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
-                updateInfo?.available
-                  ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20'
-                  : 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <ArrowUpCircle className="h-3.5 w-3.5" />
-              <span className="hidden max-w-52 truncate font-mono lg:inline">v{updateInfo?.current_version || '…'}</span>
-              {updateInfo?.available && (
-                <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-100">可升级</span>
-              )}
-            </button>
-            <button
-              onClick={() => setHideFilenames((value) => !value)}
-              title={hideFilenames ? '显示明文文件名' : '隐藏文件名'}
-              aria-pressed={hideFilenames}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${
-                hideFilenames
-                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                  : 'border-slate-800 bg-slate-900 text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              {hideFilenames ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              <span className="hidden sm:inline">{hideFilenames ? '文件名已隐藏' : '文件名可见'}</span>
-            </button>
-            <button
-              onClick={() => void refreshAll()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              刷新
-            </button>
-            <button
-              onClick={async () => {
-                await api.logout()
-                setUser(null)
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 cursor-pointer"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              退出
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-7xl space-y-4 px-4 py-4 sm:space-y-6 sm:px-6 sm:py-6">
-        <section className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-          <div className="flex min-w-0 items-center justify-between gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
-            <div className="min-w-0">
-              <div className="text-xs text-slate-400 flex items-center gap-1.5"><Activity className="h-3.5 w-3.5 text-blue-400" /> 实时总速度</div>
-              <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">{formatSpeed(stats?.total_speed_bytes)}</div>
-              <div className="mt-0.5 text-xs text-slate-400 tabular-nums">活动下载：{stats?.active_workers ?? 0}</div>
-            </div>
-            <div className="hidden shrink-0 sm:block">
-              <SpeedSparkline samples={speedHistory} />
-            </div>
-          </div>
-
-          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5"><Layers className="h-3.5 w-3.5 text-amber-400" /> 队列与暂停</div>
-            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">
-              {stats?.queued_count ?? 0} <span className="text-sm font-normal text-slate-500">/</span> {stats?.paused_count ?? 0}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-400">排队等待 / 已暂停</div>
-          </div>
-
-          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5"><FileCheck2 className="h-3.5 w-3.5 text-emerald-400" /> 已交付 / 异常</div>
-            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">
-              {stats?.completed_count ?? 0} <span className="text-sm font-normal text-slate-500">/</span>{' '}
-              <span className={(stats?.failed_count ?? 0) > 0 ? 'text-rose-400' : ''}>{stats?.failed_count ?? 0}</span>
-            </div>
-            <div className="mt-0.5 text-xs text-slate-400">累计交付 / 失败或冲突</div>
-          </div>
-
-          <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/70 p-3 sm:p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5"><HardDrive className="h-3.5 w-3.5 text-cyan-400" /> 下载卷可用空间</div>
-            <div className="mt-1.5 truncate text-lg font-semibold tabular-nums sm:text-xl">{formatBytes(stats?.free_space_bytes)}</div>
-            <div className="mt-0.5 text-xs truncate" title={settings?.download_dir}>
-              {stats?.low_disk_blocked ? (
-                <span className="text-rose-400">空间低于阈值，已暂停新派发</span>
-              ) : (
-                <span className="text-slate-400 font-mono">{settings?.download_dir || '空间充足'}</span>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <nav className="grid grid-cols-2 gap-2 border-b border-slate-800 pb-3 sm:flex sm:flex-wrap sm:items-center">
-          {[
-            { key: 'tasks' as const, label: '下载任务', icon: CloudDownload, count: taskTotal },
-            { key: 'files' as const, label: '文件索引', icon: FileCheck2, count: fileTotal },
-            { key: 'logs' as const, label: '运行日志', icon: ScrollText, count: null },
-            { key: 'manage' as const, label: '管理设置', icon: Settings, count: sources.length },
-          ].map((tab) => {
-            const Icon = tab.icon
-            const active = activeTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                onClick={() => switchTab(tab.key)}
-                className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition cursor-pointer sm:justify-start sm:px-4 ${
-                  active
-                    ? 'bg-slate-800 text-white border border-slate-700'
-                    : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-                {tab.count !== null && (
-                  <span className="rounded-full bg-slate-950 px-2 py-0.5 text-xs text-slate-400 tabular-nums">{tab.count}</span>
-                )}
-              </button>
-            )
-          })}
-        </nav>
+    <>
+      <AppShell
+        tab={activeTab}
+        onTab={switchTab}
+        user={user}
+        sseState={sseState}
+        version={updateInfo?.current_version}
+        updateAvailable={updateInfo?.available ?? false}
+        hideFilenames={hideFilenames}
+        taskCount={taskTotal}
+        activeTaskCount={(stats?.active_workers ?? 0) + (stats?.queued_count ?? 0)}
+        fileCount={fileTotal}
+        onToggleFilenames={() => setHideFilenames((value) => !value)}
+        onRefresh={() => void refreshAll()}
+        onOpenLogs={() => switchTab('logs')}
+        onOpenUpdate={openUpdateDialog}
+        onLogout={() => void handleLogout()}
+      >
+        {activeTab === 'overview' && (
+          <OverviewTab
+            stats={stats}
+            settings={settings}
+            sources={sources}
+            tasks={overviewTasks}
+            speedHistory={speedHistory}
+            updateInfo={updateInfo}
+            hideFilenames={hideFilenames}
+            onShowTasks={showTasks}
+            onShowFiles={() => switchTab('files')}
+            onShowManage={showManage}
+            onShowLogs={() => switchTab('logs')}
+            onOpenUpdate={openUpdateDialog}
+            onScanAll={() => void scanAllSources()}
+            onInspect={(task) => setInspectedTask(task)}
+          />
+        )}
 
         {activeTab === 'tasks' && (
           <TasksTab
@@ -585,9 +512,18 @@ export function App() {
             total={taskTotal}
             limit={TASK_PAGE_SIZE}
             offset={taskOffset}
-            onStateFilterChange={changeTaskStateFilter}
-            onSourceFilterChange={changeTaskSourceFilter}
-            onSearchChange={changeTaskSearch}
+            onStateFilterChange={(value) => {
+              setTaskStateFilter(value)
+              setTaskOffset(0)
+            }}
+            onSourceFilterChange={(value) => {
+              setTaskSourceFilter(value)
+              setTaskOffset(0)
+            }}
+            onSearchChange={(value) => {
+              setTaskSearch(value)
+              setTaskOffset(0)
+            }}
             onOffsetChange={setTaskOffset}
             onTaskAction={async (id, action) => {
               try {
@@ -599,8 +535,8 @@ export function App() {
             }}
             onBatchAction={async (action) => {
               try {
-                const res = await api.batchTasks(action, taskSourceFilter)
-                notify('ok', `已处理 ${res.affected} 个任务`)
+                const result = await api.batchTasks(action, taskSourceFilter)
+                notify('ok', `已处理 ${result.affected} 个任务`)
                 await refreshAll()
               } catch (err) {
                 notify('error', err instanceof Error ? err.message : '批量操作失败')
@@ -610,12 +546,48 @@ export function App() {
           />
         )}
 
+        {activeTab === 'files' && (
+          <FilesTab
+            files={files}
+            sources={sources}
+            remoteStateFilter={fileRemoteState}
+            sourceFilter={fileSourceFilter}
+            searchQuery={fileSearch}
+            hideFilenames={hideFilenames}
+            total={fileTotal}
+            limit={FILE_PAGE_SIZE}
+            offset={fileOffset}
+            onRemoteStateChange={(value) => {
+              setFileRemoteState(value)
+              setFileOffset(0)
+            }}
+            onSourceFilterChange={(value) => {
+              setFileSourceFilter(value)
+              setFileOffset(0)
+            }}
+            onSearchChange={(value) => {
+              setFileSearch(value)
+              setFileOffset(0)
+            }}
+            onOffsetChange={setFileOffset}
+          />
+        )}
+
+        {activeTab === 'logs' && <LogsTab />}
+
         {activeTab === 'manage' && (
           <ManageTab
             settings={settings}
             sources={sources}
             notificationChannels={notificationChannels}
             activeWorkers={stats?.active_workers ?? 0}
+            section={manageSection}
+            detailOpen={manageDetailOpen}
+            updateInfo={updateInfo}
+            onSectionChange={setManageSection}
+            onDetailOpenChange={setManageDetailOpen}
+            onOpenUpdate={openUpdateDialog}
+            onOpenLogs={() => switchTab('logs')}
             onSaveSettings={async (patch) => {
               const updated = await api.updateSettings(patch)
               setSettings(updated)
@@ -623,9 +595,7 @@ export function App() {
               await refreshAll()
             }}
             onSaveProxy={async (proxyURL) => {
-              const updated = await api.updateProxy(
-                proxyURL === null ? { clear: true } : { proxy_url: proxyURL },
-              )
+              const updated = await api.updateProxy(proxyURL === null ? { clear: true } : { proxy_url: proxyURL })
               notify('ok', updated.proxy_configured ? '代理已启用并通过连接验证' : '代理已关闭')
               await refreshAll()
             }}
@@ -653,15 +623,7 @@ export function App() {
                 notify('error', err instanceof Error ? err.message : '触发扫描失败')
               }
             }}
-            onScanAllSources={async () => {
-              try {
-                const res = await api.scanAllSources()
-                notify('ok', `已安排 ${res.scheduled} 个来源立即扫描`)
-                await refreshAll()
-              } catch (err) {
-                notify('error', err instanceof Error ? err.message : '触发全部扫描失败')
-              }
-            }}
+            onScanAllSources={scanAllSources}
             onDeleteSource={async (id) => {
               try {
                 await api.deleteSource(id)
@@ -705,32 +667,12 @@ export function App() {
             }}
           />
         )}
-
-        {activeTab === 'files' && (
-          <FilesTab
-            files={files}
-            sources={sources}
-            remoteStateFilter={fileRemoteState}
-            sourceFilter={fileSourceFilter}
-            searchQuery={fileSearch}
-            hideFilenames={hideFilenames}
-            total={fileTotal}
-            limit={FILE_PAGE_SIZE}
-            offset={fileOffset}
-            onRemoteStateChange={changeFileRemoteState}
-            onSourceFilterChange={changeFileSourceFilter}
-            onSearchChange={changeFileSearch}
-            onOffsetChange={setFileOffset}
-          />
-        )}
-
-        {activeTab === 'logs' && <LogsTab />}
-      </main>
+      </AppShell>
 
       <TaskDetailDrawer
         task={inspectedTask}
         hideFilenames={hideFilenames}
-        sourceName={inspectedTask ? sourceMap.get(inspectedTask.source_id) || inspectedTask.source_id : ''}
+        sourceName={inspectedTask ? sources.find((source) => source.id === inspectedTask.source_id)?.local_alias || inspectedTask.source_id : ''}
         onClose={() => setInspectedTask(null)}
         onAction={async (id, action) => {
           try {
@@ -757,15 +699,16 @@ export function App() {
 
       {toast && (
         <div
-          className={`fixed bottom-5 right-5 z-50 rounded-xl border px-4 py-2.5 text-xs font-medium shadow-xl ${
+          className={`fixed inset-x-4 bottom-24 z-50 rounded-xl border px-3.5 py-2.5 text-xs font-medium shadow-2xl sm:inset-x-auto sm:bottom-6 sm:right-6 sm:max-w-sm ${
             toast.kind === 'error'
-              ? 'border-rose-500/40 bg-rose-950/90 text-rose-200'
-              : 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200'
+              ? 'border-rose-500/30 bg-rose-950/95 text-rose-200'
+              : 'border-emerald-500/30 bg-emerald-950/95 text-emerald-200'
           }`}
+          role="status"
         >
           {toast.text}
         </div>
       )}
-    </div>
+    </>
   )
 }
