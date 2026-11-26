@@ -29,12 +29,18 @@ import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -108,12 +114,18 @@ internal fun FilePreviewSheet(
     isBlurred: Boolean,
     onDismiss: () -> Unit,
     onOpen: () -> Unit,
-    onToggleBlur: () -> Unit,
 ) {
     val file = name.file
+    var previewRevealed by remember(file.id) { mutableStateOf(false) }
+    val blurred = isBlurred && !previewRevealed
     val quick = previewQuickActions(file, actions, onOpen)
     val star = actions.firstOrNull { it.icon == Icons.Outlined.StarOutline || it.icon == Icons.Filled.Star }
-    val remaining = actions.filterNot { it in quick || it === star }
+    val remaining = actions.filterNot {
+        it in quick ||
+            it === star ||
+            it.icon == Icons.Outlined.Visibility ||
+            it.icon == Icons.Outlined.VisibilityOff
+    }
     val danger = remaining.filter { it.destructive }
     val more = remaining.filterNot { it.destructive }
 
@@ -147,9 +159,9 @@ internal fun FilePreviewSheet(
 
             FilePreviewHero(
                 file = file,
-                kind = previewKindOf(file, isBlurred),
+                kind = previewKindOf(file, blurred),
                 onOpen = { sheet.hideThen(onOpen) },
-                onToggleBlur = onToggleBlur,
+                onToggleBlur = { previewRevealed = true },
             )
 
             PreviewInfo(name, locationLabel, star)

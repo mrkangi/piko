@@ -4,6 +4,7 @@ import dev.piko.shared.i18n.tr
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.piko.data.repository.isPlayableVideo
@@ -106,16 +108,31 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
     }
     val player = support.rememberPreviewBackend()
     val repository = LocalPikoServices.current.mediaRepository
+    val mounts = LocalPikoServices.current.driveRepository.localMounts
     val cover = videoCoverOf(file)
-    val url by produceState("", file.id) {
+    val target by produceState<PlaybackTarget?>(null, file.id) {
         val prepared = repository.preparePlayback(file.id).getOrNull()
-        value = prepared?.let { it.proxyUrl ?: it.info.currentUrl }.orEmpty()
-        awaitDispose { prepared?.close() }
+        if (prepared != null) {
+            value = (prepared.proxyUrl ?: prepared.info.currentUrl)
+                .takeIf { it.isNotBlank() }
+                ?.let(PlaybackTarget::Url)
+            awaitDispose { prepared.close() }
+        } else {
+            value = runCatching {
+                val mount = mounts.find(file.id)
+                val path = mounts.resolve(file.id) ?: return@runCatching null
+                if (mount?.isNetworkMount == true) PlaybackTarget.Url(path) else PlaybackTarget.LocalFile(path)
+            }.getOrNull()
+        }
     }
     var muted by remember { mutableStateOf(false) }
-    LaunchedEffect(url) {
-        if (url.isNotBlank()) {
-            runCatching { player.open(PlaybackTarget.Url(url), startMillis = 0L, playWhenReady = false) }
+    var scrubbing by remember { mutableStateOf(false) }
+    var scrubTarget by remember { mutableStateOf(0L) }
+    var wasPlayingBeforeScrub by remember { mutableStateOf(false) }
+    LaunchedEffect(target) {
+        val openTarget = target
+        if (openTarget != null) {
+            runCatching { player.open(openTarget, startMillis = 0L, playWhenReady = false) }
         }
     }
     LaunchedEffect(muted) { player.setVolume(if (muted) 0f else 1f) }
@@ -123,18 +140,48 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
 
     val duration = player.durationMillis
     val position = player.positionMillis.coerceIn(0L, duration.takeIf { it > 0L } ?: Long.MAX_VALUE)
-    val fraction = if (duration > 0L) position.toFloat() / duration else 0f
+    val shownPosition = if (scrubbing) scrubTarget else position
+    val fraction = if (duration > 0L) shownPosition.toFloat() / duration else 0f
     Box(Modifier.fillMaxSize()) {
         if (cover.isNotEmpty()) {
             SpoilerThumbnail(cover, isBlurred = false, PosterSpoilerBlur, Modifier.fillMaxSize())
         }
-        if (url.isNotBlank()) {
+        if (target != null) {
             support.Surface(
                 player,
                 Modifier.fillMaxSize().alpha(if (player.isBuffering) 0f else 1f),
             )
         }
-        if (url.isBlank() || player.isBuffering) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(duration, target) {
+                    if (duration <= 0L || target == null) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            scrubbing = true
+                            wasPlayingBeforeScrub = player.isPlaying
+                            if (player.isPlaying) player.pause()
+                            scrubTarget = player.positionMillis.coerceIn(0L, duration)
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            scrubTarget = (scrubTarget + (dragAmount / size.width.toFloat() * duration.toFloat()).toLong())
+                                .coerceIn(0L, duration)
+                        },
+                        onDragEnd = {
+                            player.seekTo(scrubTarget)
+                            if (wasPlayingBeforeScrub) player.play()
+                            scrubbing = false
+                        },
+                        onDragCancel = {
+                            if (wasPlayingBeforeScrub) player.play()
+                            scrubbing = false
+                        },
+                    )
+                },
+        )
+        if (target == null || player.isBuffering) {
             MediaLoadingIndicator(Modifier.align(Alignment.Center))
         }
         PreviewMediaChip(file.extensionLabel() ?: tr("视频", "Video", "動画", "동영상", "影片"), Modifier.align(Alignment.TopStart).padding(10.dp))
@@ -143,23 +190,38 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
             tr("全屏播放", "Play fullscreen", "全画面で再生", "전체 화면 재생", "全螢幕播放"),
             Modifier.align(Alignment.TopEnd).padding(10.dp),
         )
-        Surface(
-            onClick = {
-                if (url.isNotBlank()) {
-                    if (player.isPlaying) player.pause() else player.play()
-                }
-            },
-            shape = CircleShape,
-            color = Color.White.copy(alpha = 0.94f),
-            contentColor = Color(0xFF15131A),
-            modifier = Modifier.align(Alignment.Center).size(58.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
-                    Modifier.size(30.dp),
+        if (scrubbing) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Black.copy(alpha = 0.64f),
+                contentColor = Color.White,
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Text(
+                    formatTimeMs(scrubTarget),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
                 )
+            }
+        } else {
+            Surface(
+                onClick = {
+                    if (target != null) {
+                        if (player.isPlaying) player.pause() else player.play()
+                    }
+                },
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.94f),
+                contentColor = Color(0xFF15131A),
+                modifier = Modifier.align(Alignment.Center).size(58.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
+                        Modifier.size(30.dp),
+                    )
+                }
             }
         }
         Column(
@@ -171,7 +233,7 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    formatTimeMs(position),
+                    formatTimeMs(shownPosition),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White,
                 )

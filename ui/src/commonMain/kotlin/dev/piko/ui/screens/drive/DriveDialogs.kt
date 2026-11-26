@@ -305,7 +305,6 @@ internal fun DriveSheetHost(
                 isBlurred = isBlurred,
                 onDismiss = onDismissSheet,
                 onOpen = { onOpenItem(target) },
-                onToggleBlur = { state.toggleSpoiler(target.id) },
             )
         }
         DriveSheet.MobileGoToPath -> {

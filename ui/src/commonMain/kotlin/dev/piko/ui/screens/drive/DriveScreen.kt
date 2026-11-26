@@ -1179,7 +1179,9 @@ private fun DriveScreenContent(
                 else if (state.isSelectionMode) state.setSelected(file.id, file.id !in state.selectedFileIds)
                 else if (!latestDesktop) {
                     val usePreview = !file.isUploading &&
-                        !file.isVirtual &&
+                        !file.isVaulted &&
+                        !file.isImportPreview &&
+                        !ArchiveEntryId.isEntry(file.id) &&
                         state.libraryView != DriveLibrary.TRASH &&
                         state.archiveView == null &&
                         state.importPreviewView == null
