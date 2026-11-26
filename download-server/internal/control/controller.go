@@ -218,6 +218,7 @@ func (c *Controller) Setup(ctx context.Context, input SetupInput) (store.AdminUs
 		"segment_threads":           fmt.Sprintf("%d", config.DefaultSegmentThreads),
 		"segment_min_bytes":         fmt.Sprintf("%d", config.DefaultSegmentMinBytes),
 		"default_scan_interval_sec": fmt.Sprintf("%d", int(config.DefaultScanInterval.Seconds())),
+		"scan_failure_threshold":    fmt.Sprintf("%d", config.DefaultScanFailureThreshold),
 		"min_free_space_bytes":      fmt.Sprintf("%d", config.DefaultMinFreeSpaceBytes),
 	}); err != nil {
 		return store.AdminUser{}, err

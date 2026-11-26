@@ -661,7 +661,11 @@ func (manager *Manager) message(ctx context.Context, event events.Event) (string
 		if source, err := manager.store.GetSource(ctx, event.SourceID); err == nil {
 			sourceName = source.LocalAlias
 		}
-		return fmt.Sprintf("来源扫描失败\n来源：%s\n详情请在管理页查看", sourceName), nil
+		text := fmt.Sprintf("来源扫描连续失败\n来源：%s", sourceName)
+		if event.Count > 0 {
+			text += fmt.Sprintf("\n连续失败：%d 次", event.Count)
+		}
+		return text + "\n详情请在管理页查看", nil
 	}
 	if strings.HasPrefix(event.Type, "task.") {
 		count := event.Count

@@ -379,7 +379,7 @@ export function App() {
     ;['task.started', 'task.completed', 'task.failed', 'task.conflict', 'task.retry', 'tasks.queued'].forEach((name) => {
       eventSource.addEventListener(name, handleTaskOutcome)
     })
-    ;['source.updated', 'scan.started', 'scan.finished', 'scan.failed'].forEach((name) => {
+    ;['source.updated', 'scan.started', 'scan.finished', 'scan.failed', 'scan.retrying'].forEach((name) => {
       eventSource.addEventListener(name, handleCatalog)
     })
     eventSource.addEventListener('settings.updated', handleSettings)

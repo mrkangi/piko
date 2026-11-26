@@ -204,3 +204,96 @@ func TestMinFileSizeSkipsSmallFiles(t *testing.T) {
 		t.Fatalf("expected only large file to be enqueued, got %+v", pub.EnqueuedTasks)
 	}
 }
+
+func TestScanFailureDebounceAndRecovery(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	fake := backend.NewFakeBackend()
+	fake.PutDir("d_root", "", "Media")
+	fake.PutFile("f1", "d_root", "clip.mkv", "G1", []byte("clip"), time.Now())
+	broker := events.NewBroker()
+	eventCh, unsubscribe := broker.Subscribe(128)
+	defer unsubscribe()
+
+	svc := NewService(st, fake, broker, "acct_1", 5*time.Minute, 5)
+	svc.SetFailureThreshold(3)
+	src, err := svc.CreateSource(ctx, CreateSourceInput{
+		RemoteRootID: "d_root",
+		LocalAlias:   "Media",
+		InitialMode:  store.InitialModeMonitorNewOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake.SetListHook(func(parentID string, cursor string, attempt int) error {
+		return &backend.Error{Kind: backend.ErrTransient, Message: "temporary network failure"}
+	})
+	drainFailedEvents := func() int {
+		count := 0
+		for {
+			select {
+			case event := <-eventCh:
+				if event.Type == "scan.failed" {
+					count++
+				}
+			default:
+				return count
+			}
+		}
+	}
+
+	for failure := 1; failure <= 2; failure++ {
+		if _, err := svc.ScanSource(ctx, src.ID); err == nil {
+			t.Fatalf("failure %d: expected scan error", failure)
+		}
+		latest, err := st.GetSource(ctx, src.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latest.LastScanStatus != "RETRYING" || latest.ConsecutiveFailures != failure {
+			t.Fatalf("failure %d: expected RETRYING count=%d, got status=%s count=%d", failure, failure, latest.LastScanStatus, latest.ConsecutiveFailures)
+		}
+		if got := drainFailedEvents(); got != 0 {
+			t.Fatalf("failure %d: expected no confirmed scan.failed event before threshold, got %d", failure, got)
+		}
+	}
+
+	if _, err := svc.ScanSource(ctx, src.ID); err == nil {
+		t.Fatal("third failure: expected scan error")
+	}
+	latest, err := st.GetSource(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.LastScanStatus != "FAILED" || latest.ConsecutiveFailures != 3 {
+		t.Fatalf("expected FAILED count=3 at threshold, got status=%s count=%d", latest.LastScanStatus, latest.ConsecutiveFailures)
+	}
+	if got := drainFailedEvents(); got != 1 {
+		t.Fatalf("expected one confirmed scan.failed event at threshold, got %d", got)
+	}
+
+	if _, err := svc.ScanSource(ctx, src.ID); err == nil {
+		t.Fatal("fourth failure: expected scan error")
+	}
+	if got := drainFailedEvents(); got != 0 {
+		t.Fatalf("expected no repeated scan.failed event after threshold, got %d", got)
+	}
+
+	fake.SetListHook(nil)
+	if _, err := svc.ScanSource(ctx, src.ID); err != nil {
+		t.Fatalf("expected recovery scan to succeed: %v", err)
+	}
+	latest, err = st.GetSource(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.LastScanStatus != "SUCCEEDED" || latest.ConsecutiveFailures != 0 {
+		t.Fatalf("expected SUCCEEDED count=0 after recovery, got status=%s count=%d", latest.LastScanStatus, latest.ConsecutiveFailures)
+	}
+}

@@ -332,30 +332,60 @@ func (store *Store) InsertScanEntries(ctx context.Context, entries []ScanEntry) 
 	return tx.Commit()
 }
 
-func (store *Store) FailScanRun(ctx context.Context, runID string, sourceID string, message string, nextRetryAt int64) error {
+func (store *Store) FailScanRun(ctx context.Context, runID string, sourceID string, message string, nextRetryAt int64, failureThreshold int) (ScanFailureResult, error) {
 	tx, err := store.beginImmediate(ctx)
 	if err != nil {
-		return err
+		return ScanFailureResult{}, err
 	}
 	defer tx.Rollback()
 
+	var previousFailures int
+	if err := tx.QueryRowContext(ctx, `SELECT consecutive_failures FROM sources WHERE id = ?`, sourceID).Scan(&previousFailures); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ScanFailureResult{}, ErrNotFound
+		}
+		return ScanFailureResult{}, err
+	}
+	if failureThreshold < 1 {
+		failureThreshold = 1
+	}
+	consecutiveFailures := previousFailures + 1
+	status := "RETRYING"
+	confirmed := false
+	if consecutiveFailures >= failureThreshold {
+		status = "FAILED"
+		confirmed = previousFailures < failureThreshold
+	}
+
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM scan_entries WHERE scan_run_id = ?`, runID); err != nil {
-		return err
+		return ScanFailureResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE scan_runs SET status = 'FAILED', error_message = ?, finished_at = ? WHERE id = ?`, message, now, runID); err != nil {
-		return err
+		return ScanFailureResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sources SET
-			last_scan_at = ?, last_scan_status = 'FAILED', last_scan_error = ?,
-			consecutive_failures = consecutive_failures + 1, next_scan_at = ?, updated_at = ?
+			last_scan_at = ?, last_scan_status = ?, last_scan_error = ?,
+			consecutive_failures = ?, next_scan_at = ?, updated_at = ?
 		WHERE id = ?`,
-		now, message, nextRetryAt, now, sourceID,
+		now, status, message, consecutiveFailures, nextRetryAt, now, sourceID,
 	); err != nil {
-		return err
+		return ScanFailureResult{}, err
 	}
-	return tx.Commit()
+	src, err := getSourceTx(ctx, tx, sourceID)
+	if err != nil {
+		return ScanFailureResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ScanFailureResult{}, err
+	}
+	return ScanFailureResult{
+		Source:              src,
+		ConsecutiveFailures: consecutiveFailures,
+		Threshold:           failureThreshold,
+		Confirmed:           confirmed,
+	}, nil
 }
 
 type PublishResult struct {

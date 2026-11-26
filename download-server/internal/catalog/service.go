@@ -20,6 +20,11 @@ var (
 	ErrInvalidSource = errors.New("invalid source configuration")
 )
 
+const (
+	defaultFailureThreshold = 3
+	maxFailureThreshold     = 20
+)
+
 type CreateSourceInput struct {
 	RemoteRootID     string `json:"remote_root_id"`
 	LocalAlias       string `json:"local_alias"`
@@ -30,12 +35,13 @@ type CreateSourceInput struct {
 }
 
 type Service struct {
-	store           *store.Store
-	remote          backend.Catalog
-	broker          *events.Broker
-	accountID       string
-	defaultInterval time.Duration
-	maxRetries      int
+	store            *store.Store
+	remote           backend.Catalog
+	broker           *events.Broker
+	accountID        string
+	defaultInterval  time.Duration
+	failureThreshold int
+	maxRetries       int
 
 	mu       sync.Mutex
 	inFlight map[string]bool
@@ -56,15 +62,16 @@ func NewService(
 		defaultInterval = 5 * time.Minute
 	}
 	return &Service{
-		store:           st,
-		remote:          remote,
-		broker:          broker,
-		accountID:       accountID,
-		defaultInterval: defaultInterval,
-		maxRetries:      maxRetries,
-		inFlight:        make(map[string]bool),
-		pending:         make(map[string]bool),
-		wakeCh:          make(chan struct{}, 1),
+		store:            st,
+		remote:           remote,
+		broker:           broker,
+		accountID:        accountID,
+		defaultInterval:  defaultInterval,
+		failureThreshold: defaultFailureThreshold,
+		maxRetries:       maxRetries,
+		inFlight:         make(map[string]bool),
+		pending:          make(map[string]bool),
+		wakeCh:           make(chan struct{}, 1),
 	}
 }
 
@@ -92,6 +99,21 @@ func (svc *Service) SetDefaultInterval(d time.Duration) {
 	}
 	svc.mu.Lock()
 	svc.defaultInterval = d
+	svc.mu.Unlock()
+}
+
+func (svc *Service) FailureThreshold() int {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	return svc.failureThreshold
+}
+
+func (svc *Service) SetFailureThreshold(threshold int) {
+	if threshold < 1 || threshold > maxFailureThreshold {
+		return
+	}
+	svc.mu.Lock()
+	svc.failureThreshold = threshold
 	svc.mu.Unlock()
 }
 
@@ -304,13 +326,10 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 	if src.RemoteRootID != "" {
 		rootEntry, statErr := svc.remote.Stat(ctx, src.RemoteRootID)
 		if statErr != nil {
-			nextRetry := backoffNextScan(src.ConsecutiveFailures)
-			_, _ = svc.store.UpdateSource(ctx, sourceID, nil, nil, nil, false)
-			return svc.failWithoutRun(ctx, src, fmt.Sprintf("root inaccessible: %v", statErr), nextRetry)
+			return svc.failWithoutRun(ctx, src, fmt.Sprintf("root inaccessible: %v", statErr))
 		}
 		if !rootEntry.IsDir {
-			nextRetry := backoffNextScan(src.ConsecutiveFailures)
-			return svc.failWithoutRun(ctx, src, "root object is not a directory", nextRetry)
+			return svc.failWithoutRun(ctx, src, "root object is not a directory")
 		}
 	}
 
@@ -324,23 +343,13 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 
 	err = svc.collectTree(ctx, run.ID, latestSrc)
 	if err != nil {
-		nextRetry := backoffNextScan(latestSrc.ConsecutiveFailures)
-		_ = svc.store.FailScanRun(context.Background(), run.ID, sourceID, err.Error(), nextRetry)
-		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
-		svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: sourceID, Message: err.Error()})
-		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
-		log.Printf("scan failed: source=%s stage=collect", sourceID)
+		_, _ = svc.recordScanFailure(sourceID, run.ID, err, latestSrc.ConsecutiveFailures)
 		return store.PublishResult{}, err
 	}
 
 	published, err := svc.store.PublishScanRun(ctx, run.ID, svc.maxRetries)
 	if err != nil {
-		nextRetry := backoffNextScan(latestSrc.ConsecutiveFailures)
-		_ = svc.store.FailScanRun(context.Background(), run.ID, sourceID, err.Error(), nextRetry)
-		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
-		svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: sourceID, Message: err.Error()})
-		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
-		log.Printf("scan failed: source=%s stage=publish", sourceID)
+		_, _ = svc.recordScanFailure(sourceID, run.ID, err, latestSrc.ConsecutiveFailures)
 		return store.PublishResult{}, err
 	}
 
@@ -365,16 +374,49 @@ func (svc *Service) ScanSource(ctx context.Context, sourceID string) (store.Publ
 	return published, nil
 }
 
-func (svc *Service) failWithoutRun(ctx context.Context, src store.Source, message string, nextRetry int64) (store.PublishResult, error) {
-	run, _, err := svc.store.StartScanRun(ctx, src.ID)
-	if err == nil {
-		_ = svc.store.FailScanRun(context.Background(), run.ID, src.ID, message, nextRetry)
+func (svc *Service) failWithoutRun(ctx context.Context, src store.Source, message string) (store.PublishResult, error) {
+	run, latestSrc, err := svc.store.StartScanRun(ctx, src.ID)
+	if err != nil {
+		log.Printf("scan precheck failure could not start run: source=%s", src.ID)
+		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: src.ID})
+		return store.PublishResult{}, errors.New(message)
 	}
-	svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: src.ID, Message: "failed"})
-	svc.broker.Publish(events.Event{Type: "scan.failed", SourceID: src.ID, Message: message})
-	svc.broker.Publish(events.Event{Type: "source.updated", SourceID: src.ID})
-	log.Printf("scan failed: source=%s stage=precheck", src.ID)
+	_, _ = svc.recordScanFailure(src.ID, run.ID, errors.New(message), latestSrc.ConsecutiveFailures)
 	return store.PublishResult{}, errors.New(message)
+}
+
+func (svc *Service) recordScanFailure(sourceID string, runID string, scanErr error, previousFailures int) (store.ScanFailureResult, error) {
+	threshold := svc.FailureThreshold()
+	nextRetry := backoffNextScan(previousFailures)
+	result, err := svc.store.FailScanRun(context.Background(), runID, sourceID, scanErr.Error(), nextRetry, threshold)
+	if err != nil {
+		log.Printf("scan failure state update failed: source=%s", sourceID)
+		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
+		svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+		return store.ScanFailureResult{}, err
+	}
+
+	if result.Confirmed {
+		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "failed"})
+		svc.broker.Publish(events.Event{
+			Type:     "scan.failed",
+			SourceID: sourceID,
+			Count:    result.ConsecutiveFailures,
+			Message:  scanErr.Error(),
+		})
+		log.Printf("scan failed: source=%s failures=%d threshold=%d", sourceID, result.ConsecutiveFailures, result.Threshold)
+	} else {
+		svc.broker.Publish(events.Event{Type: "scan.finished", SourceID: sourceID, Message: "retrying"})
+		svc.broker.Publish(events.Event{
+			Type:     "scan.retrying",
+			SourceID: sourceID,
+			Count:    result.ConsecutiveFailures,
+			Message:  scanErr.Error(),
+		})
+		log.Printf("scan retrying: source=%s failures=%d threshold=%d", sourceID, result.ConsecutiveFailures, result.Threshold)
+	}
+	svc.broker.Publish(events.Event{Type: "source.updated", SourceID: sourceID})
+	return result, nil
 }
 
 type dirWork struct {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nihildigit/piko/download-server/internal/backend"
 	"github.com/nihildigit/piko/download-server/internal/catalog"
+	"github.com/nihildigit/piko/download-server/internal/config"
 	"github.com/nihildigit/piko/download-server/internal/control"
 	"github.com/nihildigit/piko/download-server/internal/download"
 	"github.com/nihildigit/piko/download-server/internal/events"
@@ -465,6 +466,7 @@ type systemSettingsPayload struct {
 	SegmentThreads                    int    `json:"segment_threads"`
 	SegmentMinSizeMiB                 int64  `json:"segment_min_size_mib"`
 	DefaultScanIntervalSec            int    `json:"default_scan_interval_sec"`
+	ScanFailureThreshold              int    `json:"scan_failure_threshold"`
 	MinFreeSpaceMiB                   int64  `json:"min_free_space_mib"`
 	NotificationStatusIntervalMinutes int    `json:"notification_status_interval_minutes"`
 }
@@ -474,7 +476,13 @@ func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPay
 	status, _ := srv.controller.Status(ctx)
 	proxyStatus, _ := srv.controller.ProxyStatus(ctx)
 	statusInterval := 30
+	scanFailureThreshold := config.DefaultScanFailureThreshold
 	if settings, settingsErr := srv.store.GetSettings(ctx); settingsErr == nil {
+		if raw := strings.TrimSpace(settings["scan_failure_threshold"]); raw != "" {
+			if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 1 && parsed <= 20 {
+				scanFailureThreshold = parsed
+			}
+		}
 		if raw := strings.TrimSpace(settings["notification_status_interval_minutes"]); raw != "" {
 			if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed >= 0 {
 				statusInterval = parsed
@@ -492,6 +500,7 @@ func (srv *Server) currentSettingsPayload(ctx context.Context) systemSettingsPay
 		SegmentThreads:                    dlOpts.SegmentThreads,
 		SegmentMinSizeMiB:                 dlOpts.SegmentMinBytes / (1024 * 1024),
 		DefaultScanIntervalSec:            int(srv.catalog.DefaultInterval().Seconds()),
+		ScanFailureThreshold:              scanFailureThreshold,
 		MinFreeSpaceMiB:                   dlOpts.MinFreeSpaceBytes / (1024 * 1024),
 		NotificationStatusIntervalMinutes: statusInterval,
 	}
@@ -508,6 +517,7 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 		SegmentThreads                    *int    `json:"segment_threads"`
 		SegmentMinSizeMiB                 *int64  `json:"segment_min_size_mib"`
 		DefaultScanIntervalSec            *int    `json:"default_scan_interval_sec"`
+		ScanFailureThreshold              *int    `json:"scan_failure_threshold"`
 		MinFreeSpaceMiB                   *int64  `json:"min_free_space_mib"`
 		NotificationStatusIntervalMinutes *int    `json:"notification_status_interval_minutes"`
 	}
@@ -532,6 +542,14 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		nextInterval = *req.DefaultScanIntervalSec
+	}
+	nextFailureThreshold := curr.ScanFailureThreshold
+	if req.ScanFailureThreshold != nil {
+		if *req.ScanFailureThreshold < 1 || *req.ScanFailureThreshold > 20 {
+			writeError(w, http.StatusBadRequest, "invalid_setting", "扫描失败判定阈值必须在 1 到 20 之间")
+			return
+		}
+		nextFailureThreshold = *req.ScanFailureThreshold
 	}
 	nextMinFreeMiB := curr.MinFreeSpaceMiB
 	if req.MinFreeSpaceMiB != nil {
@@ -599,6 +617,7 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 	}
 	srv.download.UpdateOptions(nextConcurrent, nextMinFreeBytes, nextSegmentThreads, nextSegmentMinMiB*1024*1024)
 	srv.catalog.SetDefaultInterval(time.Duration(nextInterval) * time.Second)
+	srv.catalog.SetFailureThreshold(nextFailureThreshold)
 
 	if err := srv.store.SaveSettings(r.Context(), map[string]string{
 		"download_dir":                         nextDownloadDir,
@@ -606,6 +625,7 @@ func (srv *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request, 
 		"segment_threads":                      strconv.Itoa(nextSegmentThreads),
 		"segment_min_bytes":                    strconv.FormatInt(nextSegmentMinMiB*1024*1024, 10),
 		"default_scan_interval_sec":            strconv.Itoa(nextInterval),
+		"scan_failure_threshold":               strconv.Itoa(nextFailureThreshold),
 		"min_free_space_bytes":                 strconv.FormatInt(nextMinFreeBytes, 10),
 		"notification_status_interval_minutes": strconv.Itoa(nextStatusInterval),
 	}); err != nil {

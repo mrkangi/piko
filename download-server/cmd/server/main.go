@@ -82,6 +82,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 	segmentThreads := config.DefaultSegmentThreads
 	segmentMinBytes := int64(config.DefaultSegmentMinBytes)
 	scanInterval := config.DefaultScanInterval
+	scanFailureThreshold := config.DefaultScanFailureThreshold
 	minFreeSpace := int64(config.DefaultMinFreeSpaceBytes)
 	defaultDownloadDir := cfg.DownloadDir
 	if saved, err := st.GetSettings(ctx); err == nil {
@@ -99,6 +100,9 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 		}
 		if v, err := strconv.Atoi(saved["default_scan_interval_sec"]); err == nil && v >= 10 {
 			scanInterval = time.Duration(v) * time.Second
+		}
+		if v, err := strconv.Atoi(saved["scan_failure_threshold"]); err == nil && v >= 1 && v <= 20 {
+			scanFailureThreshold = v
 		}
 		if v, err := strconv.ParseInt(saved["min_free_space_bytes"], 10, 64); err == nil && v >= 0 {
 			minFreeSpace = v
@@ -118,6 +122,7 @@ func runServer(ctx context.Context, cfg config.Config, catOverride backend.Catal
 
 	broker := events.NewBroker()
 	catSvc := catalog.NewService(st, runtime, broker, "", scanInterval, config.DefaultMaxRetries)
+	catSvc.SetFailureThreshold(scanFailureThreshold)
 	dlSvc := download.NewService(st, fsStore, runtime, runtime, broker, download.Options{
 		MaxConcurrent:     maxConcurrent,
 		MinFreeSpaceBytes: minFreeSpace,
