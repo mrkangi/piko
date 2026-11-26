@@ -92,16 +92,7 @@ func BuildFPK(binaryPath, outputPath, pkgName, rawVersion, platform string) erro
 		return fmt.Errorf("binary %s is empty", binaryPath)
 	}
 
-	appTGZ, err := buildTarGz([]fileEntry{
-		{name: "./bin/", mode: 0o755, dir: true},
-		{name: "./bin/download-server", mode: 0o755, body: binBytes},
-	}, fixedTime())
-	if err != nil {
-		return fmt.Errorf("build app.tgz: %w", err)
-	}
-
 	version := SanitizeVersion(rawVersion)
-	manifest := buildManifest(pkgName, version, platform, hex.EncodeToString(md5Sum(appTGZ)))
 
 	privilege, err := assetFS.ReadFile("assets/privilege")
 	if err != nil {
@@ -136,6 +127,23 @@ func BuildFPK(binaryPath, outputPath, pkgName, rawVersion, platform string) erro
 		return fmt.Errorf("read large icon: %w", err)
 	}
 
+	appTGZ, err := buildTarGz([]fileEntry{
+		{name: "./bin/", mode: 0o755, dir: true},
+		{name: "./bin/download-server", mode: 0o755, body: binBytes},
+		{name: "./config/", mode: 0o755, dir: true},
+		{name: "./config/privilege", mode: 0o644, body: privilege},
+		{name: "./config/resource", mode: 0o644, body: resource},
+		{name: "./ui/", mode: 0o755, dir: true},
+		{name: "./ui/config", mode: 0o644, body: uiConfig},
+		{name: "./ui/images/", mode: 0o755, dir: true},
+		{name: "./ui/images/64.png", mode: 0o644, body: icon64},
+		{name: "./ui/images/256.png", mode: 0o644, body: icon256},
+	}, fixedTime())
+	if err != nil {
+		return fmt.Errorf("build app.tgz: %w", err)
+	}
+	manifest := buildManifest(pkgName, version, platform, hex.EncodeToString(md5Sum(appTGZ)))
+
 	scriptNames := []string{
 		"main",
 		"common",
@@ -168,11 +176,6 @@ func BuildFPK(binaryPath, outputPath, pkgName, rawVersion, platform string) erro
 		{name: "config/resource", mode: 0o644, body: resource},
 		{name: "wizard/", mode: 0o755, dir: true},
 		{name: "wizard/uninstall", mode: 0o644, body: uninstall},
-		{name: "ui/", mode: 0o755, dir: true},
-		{name: "ui/config", mode: 0o644, body: uiConfig},
-		{name: "ui/images/", mode: 0o755, dir: true},
-		{name: "ui/images/64.png", mode: 0o644, body: icon64},
-		{name: "ui/images/256.png", mode: 0o644, body: icon256},
 		{name: "piko-download-server.sc", mode: 0o644, body: firewall},
 		{name: "health.json", mode: 0o644, body: health},
 		{name: "ICON.PNG", mode: 0o644, body: icon64},
@@ -206,6 +209,7 @@ func buildManifest(pkgName, version, platform, checksum string) string {
 		{"desktop_uidir", "ui"},
 		{"desktop_applaunchname", pkgName + ".Application"},
 		{"service_port", "7788"},
+		{"ctl_stop", "true"},
 		{"desc", "PikPak 远程下载与目录同步服务，含 Web 管理界面。"},
 		{"source", "thirdparty"},
 		{"checksum", checksum},

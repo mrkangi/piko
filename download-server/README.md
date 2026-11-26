@@ -278,12 +278,12 @@ download-server-<版本>-fnos-x86.fpk   # x86_64 设备
 download-server-<版本>-fnos-arm.fpk   # ARM64 设备
 ```
 
-`.fpk` 是飞牛应用中心使用的 tar.gz 包，包含 `manifest`、`app.tgz`、`cmd`、`config`、`wizard`、`ui`、图标和防火墙声明。应用以专用用户运行，不依赖 Docker。
+`.fpk` 是飞牛应用中心使用的 tar.gz 包，包含 `manifest`、`app.tgz`、`cmd`、`config`、`wizard`、图标和防火墙声明。桌面入口配置与图标按 fnOS 规范放在 `app.tgz` 的 `ui/` 下，安装后落在 `target/ui`，应用中心卡片的「打开」可直接跳到 `http://<NAS 地址>:7788/`。应用以专用用户运行，不依赖 Docker。
 
 ### 安装
 
 1. 在飞牛应用中心选择手动安装，上传对应架构的 `.fpk`。
-2. 安装完成后从应用中心打开 Piko Download Server，或访问 `http://<NAS 地址>:7788/`。
+2. 安装完成后在应用中心点击「打开」，或访问 `http://<NAS 地址>:7788/`。
 3. 首次启动的 Setup Token 写入应用日志。
 
 ### 路径与配置

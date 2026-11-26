@@ -82,9 +82,6 @@ func TestBuildFPK(t *testing.T) {
 		"config/privilege",
 		"config/resource",
 		"wizard/uninstall",
-		"ui/config",
-		"ui/images/64.png",
-		"ui/images/256.png",
 		"piko-download-server.sc",
 		"health.json",
 		"ICON.PNG",
@@ -94,6 +91,9 @@ func TestBuildFPK(t *testing.T) {
 			t.Fatalf("fpk missing %q", name)
 		}
 	}
+	if _, ok := outer["ui/config"]; ok {
+		t.Fatal("ui/config must be packed into app.tgz so fnOS installs it under target/ui")
+	}
 
 	manifest := parseManifest(string(outer["manifest"].body))
 	for key, expected := range map[string]string{
@@ -101,6 +101,7 @@ func TestBuildFPK(t *testing.T) {
 		"version":               "9.9.9-2026-web-ui",
 		"platform":              "x86",
 		"service_port":          "7788",
+		"ctl_stop":              "true",
 		"source":                "thirdparty",
 		"desktop_applaunchname": "piko-download-server.Application",
 	} {
@@ -119,6 +120,17 @@ func TestBuildFPK(t *testing.T) {
 	}
 	if string(appFiles["./bin/download-server"].body) != "fake fnos binary\n" {
 		t.Fatal("app.tgz binary content mismatch")
+	}
+	for _, name := range []string{
+		"./config/privilege",
+		"./config/resource",
+		"./ui/config",
+		"./ui/images/64.png",
+		"./ui/images/256.png",
+	} {
+		if _, ok := appFiles[name]; !ok {
+			t.Fatalf("app.tgz missing %q", name)
+		}
 	}
 
 	for name, entry := range map[string]tarEntry{
@@ -141,7 +153,7 @@ func TestBuildFPK(t *testing.T) {
 	var ui struct {
 		URL map[string]json.RawMessage `json:".url"`
 	}
-	if err := json.Unmarshal(outer["ui/config"].body, &ui); err != nil {
+	if err := json.Unmarshal(appFiles["./ui/config"].body, &ui); err != nil {
 		t.Fatalf("ui/config is not valid JSON: %v", err)
 	}
 	if _, ok := ui.URL[manifest["desktop_applaunchname"]]; !ok {
