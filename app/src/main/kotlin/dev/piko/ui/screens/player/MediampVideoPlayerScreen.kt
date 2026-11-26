@@ -25,13 +25,21 @@ import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
+import androidx.core.view.WindowCompat
 import dev.piko.MainActivity
 import dev.piko.R
+import dev.piko.shared.i18n.enCount
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import dev.piko.shared.media.player.isPlayerSubtitleName
+import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.ui.LocalPikoServices
+import dev.piko.ui.components.formatTimeMs
+import dev.piko.ui.components.toReadableSize
+import dev.piko.ui.platform.VideoPreviewHandoffs
+import dev.piko.ui.theme.LocalAppearance
+import dev.piko.ui.theme.isDark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -99,9 +107,14 @@ fun MediampVideoPlayerScreen(
     val driveRepo = app.driveRepository
 
     var siblingVideos by remember(initialFileId) { mutableStateOf<List<FileStat>>(emptyList()) }
+    var siblingLoaded by remember(initialFileId) { mutableStateOf(false) }
 
     val preferences = LocalPikoServices.current.preferences
-    val backend = remember {
+    // 从移动端长按预览进入时，预览播放器已经在放这一条。接管它和它的代理流，
+    // 详情页首帧直接沿用原会话，不再重新 prepare/open。
+    val handoff = remember(initialFileId) { VideoPreviewHandoffs.take(initialFileId) }
+    val ownBackend = remember(handoff) {
+        if (handoff != null) return@remember null
         // 启动时已读过偏好，DataStore 有缓存，first() 不等磁盘
         val hardwareDecoding = runBlocking { preferences.hardwareDecodingFlow.first() }
         val compatibleHardwareDecoding = runBlocking { preferences.compatibleHardwareDecodingFlow.first() }
@@ -112,7 +125,8 @@ fun MediampVideoPlayerScreen(
             reducedCache = standaloneWindow,
         )
     }
-    val state = remember(initialFileId) {
+    val backend: PlaybackBackend = handoff?.backend ?: requireNotNull(ownBackend)
+    val state = remember(initialFileId, handoff) {
         PlayerScreenState(
             repository = app.mediampMediaRepository,
             backend = backend,
@@ -121,6 +135,7 @@ fun MediampVideoPlayerScreen(
             initialFileName = initialFileName,
             initialLocalPath = initialLocalPath,
             initialStartMillis = initialStartMillis,
+            initialAdopted = handoff?.adopt(),
             resolveLocalPath = { fileId, hint ->
                 // SAF 目录里的下载是 content: URI，File 判断不了存在与否，交给后端去打开
                 hint?.takeIf { it.startsWith("content:") || File(it).exists() }
@@ -133,8 +148,10 @@ fun MediampVideoPlayerScreen(
     DisposableEffect(state) {
         onDispose { state.release() }
     }
-    DisposableEffect(backend) {
-        onDispose { backend.release() }
+    DisposableEffect(backend, handoff) {
+        onDispose {
+            if (handoff != null) handoff.release() else (backend as MpvPlaybackBackend).release()
+        }
     }
     var resumeAfterLock by remember { mutableStateOf(false) }
     LaunchedEffect(paused) {
@@ -178,11 +195,13 @@ fun MediampVideoPlayerScreen(
         val siblings = driveRepo.siblingMedia(initialFileId)
         siblingVideos = siblings.videos
         state.playlist = playlistOf(siblingVideos, app.sessionManager, siblings.subtitles)
+        siblingLoaded = true
     }
 
     // 内存任务表 App 重启就空：同目录元数据到了之后，用磁盘再验一次，
     // 下好的片子直接从当前位置换到本地文件，不必再从云端取流
-    LaunchedEffect(state.fileId, siblingVideos) {
+    LaunchedEffect(state.fileId, siblingVideos, handoff) {
+        if (handoff != null) return@LaunchedEffect
         if (state.isLocalPlayback) return@LaunchedEffect
         val stat = siblingVideos.find { it.id == state.fileId } ?: return@LaunchedEffect
         app.downloadManager.findCompletedLocalPath(stat)?.let(state::useLocalCopy)
@@ -445,29 +464,52 @@ fun MediampVideoPlayerScreen(
         if (isFullscreen) exitFullscreen() else onBackClick()
     }
 
+    val configuration = LocalConfiguration.current
+    val inlineDetail = !standaloneWindow && !isFullscreen && !state.isImage &&
+        configuration.screenWidthDp < configuration.screenHeightDp
+    val appDark = LocalAppearance.current.isDark()
+    DisposableEffect(inlineDetail, appDark) {
+        val window = context.findActivity()?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        controller?.isAppearanceLightStatusBars = if (inlineDetail) false else !appDark
+        onDispose { controller?.isAppearanceLightStatusBars = !appDark }
+    }
+
+    val upNext = remember(state.playlist, state.fileId) {
+        upNextEntries(state.playlist, state.fileId)
+    }
+    val currentEntry = state.currentEntry
+    val metadata = remember(currentEntry, state.durationMillis, upNext.size, siblingLoaded, state.isLocalPlayback) {
+        buildList {
+            currentEntry?.sectionLabel?.takeIf { it.isNotBlank() }?.let(::add)
+            if (siblingLoaded) {
+                add(tr("本目录 ${upNext.size + 1} 个视频", "${enCount(upNext.size + 1, "video")} in this folder", "このフォルダーに動画 ${upNext.size + 1} 本", "이 폴더의 동영상 ${upNext.size + 1}개", "本資料夾 ${upNext.size + 1} 部影片"))
+            }
+            currentEntry?.size?.takeIf { it > 0L }?.let { add(it.toReadableSize()) }
+            state.durationMillis.takeIf { it > 0L }?.let {
+                add(tr("时长 ${formatTimeMs(it)}", "Duration ${formatTimeMs(it)}", "長さ ${formatTimeMs(it)}", "길이 ${formatTimeMs(it)}", "時長 ${formatTimeMs(it)}"))
+            }
+            if (state.isLocalPlayback) {
+                add(tr("本地文件", "Local file", "ローカルファイル", "로컬 파일", "本機檔案"))
+            }
+        }.joinToString(" · ")
+    }
+    val playerFileActions = rememberPlayerFileActions(state.fileId, state.isLocalPlayback) { message ->
+        scope.launch { snackbarHostState.showSnackbar(message, withDismissAction = true) }
+    }
+
     val leave = {
         orientationController.resetOrientation()
         onBackClick()
     }
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
-        if (state.isImage) {
-            AsyncImage(
-                model = state.mediaInfo?.currentUrl,
-                contentDescription = state.title,
-                modifier = Modifier.fillMaxSize(),
-            )
-            PlayerTheme {
-                PlayerTopBar(
-                    title = state.title,
-                    episodeLabel = null,
-                    isLocalPlayback = state.isLocalPlayback,
-                    onBackClick = leave,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
+    val playerContent: @Composable (Modifier, Modifier, Boolean) -> Unit = { stageModifier, videoModifier, embedded ->
+        Box(stageModifier.background(Color.Black)) {
+            if (handoff != null) {
+                handoff.support.Surface(handoff.backend, videoModifier)
+            } else {
+                MpvVideoSurface(backend as MpvPlaybackBackend, videoModifier)
             }
-        } else {
-            MpvVideoSurface(backend, Modifier.fillMaxSize())
 
             MobilePlayerControls(
                 title = state.title,
@@ -509,6 +551,7 @@ fun MediampVideoPlayerScreen(
                 },
                 isFullscreen = isFullscreen,
                 showFullscreenToggle = !standaloneWindow,
+                embedded = embedded,
                 playlist = state.playlist,
                 currentFileId = state.fileId,
                 hasPrevious = state.previousEntry != null,
@@ -530,10 +573,10 @@ fun MediampVideoPlayerScreen(
                 onSelectSubtitleTrack = state::selectSubtitleTrack,
                 brightness = brightness,
                 volume = mediaVolume,
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                fileActions = rememberPlayerFileActions(state.fileId, state.isLocalPlayback) { message ->
-                    scope.launch { snackbarHostState.showSnackbar(message, withDismissAction = true) }
+                snackbarHost = {
+                    if (!embedded) SnackbarHost(snackbarHostState)
                 },
+                fileActions = playerFileActions,
                 rotationDegrees = state.rotationDegrees.takeIf { state.supportsRotation },
                 onRotationChange = { degrees ->
                     // 转了 90 度，片子横竖对调。全屏时屏幕跟着换方向；不在全屏时只转画面，页面照旧，
@@ -547,6 +590,43 @@ fun MediampVideoPlayerScreen(
                 onPickDriveSubtitle = { file: FileStat -> state.addDriveSubtitle(file.id, file.name) }
                     .takeIf { state.canAddSubtitle },
             )
+        }
+    }
+
+    Box(modifier.fillMaxSize().background(Color.Black)) {
+        if (state.isImage) {
+            AsyncImage(
+                model = state.mediaInfo?.currentUrl,
+                contentDescription = state.title,
+                modifier = Modifier.fillMaxSize(),
+            )
+            PlayerTheme {
+                PlayerTopBar(
+                    title = state.title,
+                    episodeLabel = null,
+                    isLocalPlayback = state.isLocalPlayback,
+                    onBackClick = leave,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+            }
+        } else if (inlineDetail) {
+            VideoDetailPage(
+                title = state.title,
+                metadata = metadata,
+                currentFileId = state.fileId,
+                actions = playerFileActions,
+                upNext = upNext,
+                isSpoilerBlurred = isSpoilerBlurEnabled,
+                playlistLoading = !siblingLoaded,
+                videoAspect = state.videoAspect,
+                snackbarHostState = snackbarHostState,
+                onSelectEntry = state::playEntry,
+                player = { stageModifier, videoModifier ->
+                    playerContent(stageModifier, videoModifier, true)
+                },
+            )
+        } else {
+            playerContent(Modifier.fillMaxSize(), Modifier.fillMaxSize(), false)
         }
     }
 }

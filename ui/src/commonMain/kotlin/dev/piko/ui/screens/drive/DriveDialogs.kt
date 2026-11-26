@@ -237,6 +237,7 @@ internal fun DriveSheetHost(
     selectionActionsOf: (List<FileStat>) -> List<SheetAction>,
     isSpoilerBlurEnabled: Boolean,
     onOpenItem: (FileStat) -> Unit,
+    onOpenVideo: (FileStat, Long) -> Unit,
     onEnterSelection: (FileStat) -> Unit,
     onCopySource: (FileStat) -> Unit,
     onUpdateFolderStack: (List<PathBreadcrumb>) -> Unit,
@@ -305,6 +306,7 @@ internal fun DriveSheetHost(
                 isBlurred = isBlurred,
                 onDismiss = onDismissSheet,
                 onOpen = { onOpenItem(target) },
+                onOpenVideo = { startMillis -> onOpenVideo(target, startMillis) },
             )
         }
         DriveSheet.MobileGoToPath -> {

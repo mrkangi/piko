@@ -50,6 +50,18 @@ import kotlin.time.TimeSource
  * 控件与画面表面各端自己做，这里只暴露控件需要的纯数据与动作，让控件保持无状态。
  * 形状与 DriveScreenState 相同：Compose State、派生值走 derivedStateOf、一次性提示走 [messages]。
  */
+
+/**
+ * 预览播放器已经打开的会话。详情页接管时不再准备取流或调用 [PlaybackBackend.open]，
+ * 直接沿用同一个后端、代理连接与画面进度。
+ */
+data class AdoptedPlayback(
+    val prepared: PreparedPlayback?,
+    val mediaInfo: PlayableMediaInfo?,
+    val localPath: String?,
+    val usingProxy: Boolean,
+)
+
 class PlayerScreenState(
     private val repository: PikoMediaRepository,
     private val backend: PlaybackBackend,
@@ -59,6 +71,8 @@ class PlayerScreenState(
     initialLocalPath: String? = null,
     /** 从这里开播，不查续播记录。随机片段里「看完整」从正在看的那一处接着放。 */
     initialStartMillis: Long? = null,
+    /** 预览播放器交出的现成会话；非 null 时跳过首次准备与 open。 */
+    initialAdopted: AdoptedPlayback? = null,
     /**
      * 这个文件在本机的完整副本，没有返回 null。[hint] 是调用方已知的路径，可能已被删除。
      * 分段下载的片段不算完整副本，由平台自己排除。
@@ -300,7 +314,20 @@ class PlayerScreenState(
                 applyTrackPreferences()
             }
         }
-        reload()
+        if (initialAdopted != null) adopt(initialAdopted) else reload()
+    }
+
+    private fun adopt(adopted: AdoptedPlayback) {
+        prepared = adopted.prepared
+        mediaInfo = adopted.mediaInfo
+        localPathHint = adopted.localPath ?: localPathHint
+        isLocalPlayback = adopted.localPath != null
+        usingProxy = adopted.usingProxy
+        activeQuality = adopted.mediaInfo?.transcodeName
+        isPreparing = false
+        isRecovering = false
+        startedThisAttempt = true
+        lastKnownPositionMillis = backend.positionMillis.coerceAtLeast(0L)
     }
 
     fun selectAudioTrack(track: MediaTrack) {

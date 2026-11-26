@@ -76,7 +76,7 @@ private fun WorkspaceStateProvider(holder: SaveableStateHolder, key: Long, conte
 @Composable
 internal fun WorkspaceContextHost(
     model: WorkspaceViewModel,
-    onPlay: (FileStat, List<FileStat>) -> Unit,
+    onPlay: (FileStat, List<FileStat>, Long?) -> Unit,
     onReveal: (FileStat) -> Unit,
     onTransfers: () -> Unit,
     onOpenSpaceMap: ((folderId: String, folderName: String) -> Unit)? = null,
@@ -130,7 +130,7 @@ internal fun WorkspaceContextHost(
                         is WorkspaceContext.ImportDraft -> model.importModels[context.id]?.state?.let { draft ->
                             val content: @Composable () -> Unit = {
                                 InstantSheetContent(draft, view = model.importView(context.id), headerShown = true, fillHeight = true, onPreview = { id, name ->
-                                    onPlay(FileStat(id = id, name = name), emptyList())
+                                    onPlay(FileStat(id = id, name = name), emptyList(), null)
                                 })
                             }
                             if (wide) {

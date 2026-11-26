@@ -367,7 +367,7 @@ class DesktopPikoPlatform(
 
     override val videoPreview: VideoPreviewSupport = object : VideoPreviewSupport {
         @Composable
-        override fun rememberPreviewBackend(keyframeStart: Boolean): PreviewBackend {
+        override fun rememberPreviewBackend(keyframeStart: Boolean, fullFeatured: Boolean): PreviewBackend {
             BundledMpvRuntime.ensure()
             val playerJob = remember { SupervisorJob() }
             val playerScope = remember(playerJob) { CoroutineScope(Dispatchers.Main.immediate + playerJob) }
@@ -381,7 +381,7 @@ class DesktopPikoPlatform(
                     MediampPlaybackBackend(
                         player,
                         playerScope,
-                        preview = true,
+                        preview = !fullFeatured,
                         keyframeStart = keyframeStart,
                         hardwareDecoding = hardwareDecoding,
                         compatibleHardwareDecoding = compatibleHardwareDecoding,

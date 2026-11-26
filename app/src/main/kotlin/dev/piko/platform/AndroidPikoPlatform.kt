@@ -625,8 +625,10 @@ class AndroidPikoPlatform(
 
     /** 片段预览用段落模式的 libmpv：缓存小；画面走 TextureView，能随面板圆角裁切。 */
     private inner class MpvPreviewSupport : VideoPreviewSupport {
+        override val supportsSeamlessHandoff: Boolean = true
+
         @Composable
-        override fun rememberPreviewBackend(keyframeStart: Boolean): PreviewBackend {
+        override fun rememberPreviewBackend(keyframeStart: Boolean, fullFeatured: Boolean): PreviewBackend {
             val preferences = LocalPikoServices.current.preferences
             return remember {
                 // 启动时已读过偏好，DataStore 有缓存，first() 不等磁盘
@@ -635,7 +637,7 @@ class AndroidPikoPlatform(
                 MpvPreviewBackend(
                     MpvPlaybackBackend(
                         context,
-                        preview = true,
+                        preview = !fullFeatured,
                         keyframeStart = keyframeStart,
                         hardwareDecoding = hardwareDecoding,
                         compatibleHardwareDecoding = compatibleHardwareDecoding,

@@ -187,6 +187,8 @@ fun PlayerTopBar(
     isLocalPlayback: Boolean,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 内嵌在视频详情页时不重复画标题：详情正文会完整展示标题，顶栏只留返回与操作。 */
+    showTitle: Boolean = true,
     onTracksClick: (() -> Unit)? = null,
     onStatsClick: (() -> Unit)? = null,
     onSettingsClick: (() -> Unit)? = null,
@@ -216,34 +218,36 @@ fun PlayerTopBar(
         }
         // 标题这一块兼做拖动窗口的地方（仅限没有标题栏的桌面窗口）
         Box(Modifier.weight(1f).windowDragArea().padding(horizontal = 12.dp)) {
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
-                tooltip = { PlainTooltip { Text(title) } },
-                state = rememberTooltipState(),
-            ) {
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMediumEmphasized,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.MiddleEllipsis,
-                    )
-                    if (episodeLabel != null || isLocalPlayback) {
-                        Row(
-                            modifier = Modifier.padding(top = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (episodeLabel != null) {
-                                Text(
-                                    text = episodeLabel,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                )
+            if (showTitle) {
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
+                    tooltip = { PlainTooltip { Text(title) } },
+                    state = rememberTooltipState(),
+                ) {
+                    Column {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMediumEmphasized,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.MiddleEllipsis,
+                        )
+                        if (episodeLabel != null || isLocalPlayback) {
+                            Row(
+                                modifier = Modifier.padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (episodeLabel != null) {
+                                    Text(
+                                        text = episodeLabel,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                }
+                                if (isLocalPlayback) LocalPlaybackBadge()
                             }
-                            if (isLocalPlayback) LocalPlaybackBadge()
                         }
                     }
                 }
@@ -592,6 +596,8 @@ internal fun PlayerBottomBar(
     onToggleFullscreen: () -> Unit,
     /** 独立窗口的面板尺寸由系统窗口管理器决定，不给全屏键。 */
     showFullscreenToggle: Boolean = true,
+    /** 内嵌在视频详情页时只让开左右系统手势区；底边不是屏幕底边，不能再垫导航栏高度。 */
+    embedded: Boolean = false,
     modifier: Modifier = Modifier,
     onScrubbingChange: (Boolean) -> Unit = {},
     /** 当前音量，0 即静音；为 null 时不给音量键与滑块（移动端，或平台没有可调的音量）。 */
@@ -608,7 +614,13 @@ internal fun PlayerBottomBar(
             .fillMaxWidth()
             .background(Brush.verticalGradient(BottomScrim))
             .windowInsetsPadding(
-                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
+                WindowInsets.safeDrawing.only(
+                    if (embedded) {
+                        WindowInsetsSides.Horizontal
+                    } else {
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                    },
+                ),
             )
             .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = if (isLandscape) 8.dp else 12.dp),
     ) {

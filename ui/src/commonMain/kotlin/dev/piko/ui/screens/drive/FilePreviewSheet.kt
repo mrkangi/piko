@@ -114,11 +114,20 @@ internal fun FilePreviewSheet(
     isBlurred: Boolean,
     onDismiss: () -> Unit,
     onOpen: () -> Unit,
+    onOpenVideo: (startMillis: Long) -> Unit,
 ) {
     val file = name.file
     var previewRevealed by remember(file.id) { mutableStateOf(false) }
     val blurred = isBlurred && !previewRevealed
-    val quick = previewQuickActions(file, actions, onOpen)
+    val playback = remember(file.id) { PreviewPlaybackHandoff() }
+    val openVideo = {
+        playback.offer(file.id)
+        onOpenVideo(playback.positionMillis)
+    }
+    val openCurrent = {
+        if (file.isPlayableVideo()) openVideo() else onOpen()
+    }
+    val quick = previewQuickActions(file, actions, openCurrent)
     val star = actions.firstOrNull { it.icon == Icons.Outlined.StarOutline || it.icon == Icons.Filled.Star }
     val remaining = actions.filterNot {
         it in quick ||
@@ -160,8 +169,13 @@ internal fun FilePreviewSheet(
             FilePreviewHero(
                 file = file,
                 kind = previewKindOf(file, blurred),
-                onOpen = { sheet.hideThen(onOpen) },
+                onOpen = { sheet.hideThen(openCurrent) },
+                onOpenVideo = { startMillis ->
+                    playback.offer(file.id)
+                    sheet.hideThen { onOpenVideo(startMillis) }
+                },
                 onToggleBlur = { previewRevealed = true },
+                playback = playback,
             )
 
             PreviewInfo(name, locationLabel, star)

@@ -86,6 +86,13 @@ internal fun tileColumns(mode: DriveViewMode, size: TileSize, width: WidthClass)
 }
 
 /**
+ * 海报墙按用户尺寸档位与窗口宽度算出的列数。
+ * 播放详情页的后续视频网格也走这里，保证与外边海报墙的小/中/大档位一致。
+ */
+fun posterTileColumns(tileSizeName: String, widthClass: WidthClass): Int =
+    tileColumns(DriveViewMode.POSTER, TileSize.of(tileSizeName), widthClass)
+
+/**
  * 卡片宽度的上限，只在超宽屏上起作用，每档各一个：只给一个上限时，2560 宽下中档与大档都被它挤成同样的栏数。
  * 各档的上限要比 1440 宽的窗口里这一档的卡宽大一截（大档海报墙那里约 370dp），否则平常的窗口里也多挤出一栏。
  */

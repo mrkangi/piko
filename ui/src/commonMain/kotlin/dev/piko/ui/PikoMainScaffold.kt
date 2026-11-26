@@ -895,7 +895,7 @@ fun PikoMainScaffold(
                                             onSelectMainTab = { currentTab = it },
                                             onTabClick = ::onTabClick,
                                             onMeasuredContentSize = { if (latestResizing) pendingContentSize = it else contentSize = it },
-                                            onPlayVideo = { file, playlist -> playVideo(file, playlist) },
+                                            onPlayVideo = { file, playlist, startMillis -> playVideo(file, playlist, startMillis) },
                                             onPlayLocal = ::playLocal,
                                             onRevealById = { id -> coroutineScope.launch { revealInDrive(id) } },
                                             onOpenCloudFile = { fileId, _ -> revealInDrive(fileId) },
@@ -949,7 +949,7 @@ fun PikoMainScaffold(
                                             }
                                         }
                                         FilesScreen(
-                                            onNavigateToVideoPlayer = { file, playlist -> playVideo(file, playlist) },
+                                            onNavigateToVideoPlayer = { file, playlist, startMillis -> playVideo(file, playlist, startMillis) },
                                             onOpenTransfers = ::openTransfers,
                                             onOpenDuplicateReport = ::openDuplicateReport,
                                             addressDestinations = tabDestinations() + pageDestinations(),

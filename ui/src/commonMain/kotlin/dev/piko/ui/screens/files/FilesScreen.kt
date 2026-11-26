@@ -8,7 +8,7 @@ import io.github.nihildigit.pikpak.FileStat
 
 @Composable
 fun FilesScreen(
-    onNavigateToVideoPlayer: (file: FileStat, playlist: List<FileStat>) -> Unit,
+    onNavigateToVideoPlayer: (file: FileStat, playlist: List<FileStat>, startMillis: Long?) -> Unit,
     onNavigateToFolder: (folderId: String, folderName: String) -> Unit = { _, _ -> },
     /** 见 DriveScreen 的同名参数。 */
     scrollToTopRequests: Int = 0,

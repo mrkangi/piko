@@ -351,13 +351,25 @@ fun interface ExternalVideoPlayer {
 /** 片段下载面板与随机片段里的画面预览：一个缓存小、不自动播放的播放后端，加上它的画面表面。 */
 interface VideoPreviewSupport {
     /**
+     * 预览播放器能否原样交给应用内播放页继续播。为 true 时详情页接管同一个后端与取流会话，
+     * 不再重新打开文件；桌面端的预览后端由组合生命周期持有，暂不支持。
+     */
+    val supportsSeamlessHandoff: Boolean get() = false
+
+    /**
      * 返回的后端由调用方在离开组合时 release。
      *
      * [keyframeStart] 为 true 时从起点之前最近的关键帧起播，不精确定位：精确定位要从关键帧一路解码到起点，
      * 多读多解几秒。随机片段不在乎从哪一帧起；片段下载要按所选时刻预览，保持精确。
+     *
+     * [fullFeatured] 为 true 时按完整播放器配置创建后端（字幕、VR、解码档与正常缓存），
+     * 供需要把会话交给播放详情页的预览使用；信息流与片段预览保持默认的轻量配置。
      */
     @Composable
-    fun rememberPreviewBackend(keyframeStart: Boolean = false): PreviewBackend
+    fun rememberPreviewBackend(
+        keyframeStart: Boolean = false,
+        fullFeatured: Boolean = false,
+    ): PreviewBackend
 
     @Composable
     fun Surface(backend: PreviewBackend, modifier: Modifier)

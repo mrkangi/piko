@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -96,6 +97,7 @@ import dev.piko.shared.state.GallerySession
 import dev.piko.shared.state.InstantSheetState
 import dev.piko.shared.upload.UploadSelection
 import dev.piko.shared.upload.isUploading
+import dev.piko.ui.CompactDockSnackbarClearance
 import dev.piko.ui.LocalPikoServices
 import dev.piko.ui.LocalRootSnackbar
 import dev.piko.ui.ObserveMessages
@@ -126,6 +128,7 @@ import dev.piko.ui.screens.instant.DiscardAddLinkLabel
 import dev.piko.ui.screens.instant.InstantSheetContent
 import dev.piko.ui.screens.instant.rememberDiscardAddLink
 import dev.piko.ui.screens.instant.summary
+import dev.piko.ui.theme.LocalFramed
 import dev.piko.ui.theme.frame
 import dev.piko.ui.workbench.LocalFileWorkspace
 import dev.piko.ui.workbench.LocalTaskSlot
@@ -187,7 +190,7 @@ private class DriveViewEvents(
     val onFeedShownChange: ((Boolean) -> Unit)?,
     val onOpenSelectedFeed: ((List<FileStat>) -> Unit)?,
     val onResumeFeed: (() -> Unit)?,
-    val onNavigateToPlayer: (FileStat, List<FileStat>) -> Unit,
+    val onNavigateToPlayer: (FileStat, List<FileStat>, Long?) -> Unit,
     val onOpenTransfers: () -> Unit,
     val onPickFiles: () -> Unit,
     val onPickFolder: () -> Unit,
@@ -267,7 +270,7 @@ fun DriveScreen(
     currentFolderId: String = "",
     currentFolderName: String = tr("我的网盘", "My drive", "マイドライブ", "내 드라이브", "我的雲端硬碟"),
     onNavigateToFolder: (folderId: String, folderName: String) -> Unit,
-    onNavigateToVideoPlayer: (file: FileStat, playlist: List<FileStat>) -> Unit,
+    onNavigateToVideoPlayer: (file: FileStat, playlist: List<FileStat>, startMillis: Long?) -> Unit,
     scrollToTopRequests: Int = 0,
     onOpenTransfers: () -> Unit = {},
     onOpenDuplicateReport: (() -> Unit)? = null,
@@ -659,7 +662,7 @@ fun DriveScreen(
         addLink = addLink,
         snackbarHostState = snackbarHostState,
         onOpenTransfers = onOpenTransfers,
-        onNavigateToPlayer = { file -> navigateToPlayer(file, emptyList()) },
+        onNavigateToPlayer = { file -> navigateToPlayer(file, emptyList(), null) },
         onLocatedFileChanged = { locatedFileId = it },
     )
 
@@ -1073,7 +1076,7 @@ private fun DriveScreenContent(
         onOpenInExternalPlayer = events.onOpenInExternalPlayer,
         onOpenInNewTab = openInNewTab,
         onTogglePin = events.onTogglePinFolder,
-        onPlayVideo = events.onNavigateToPlayer,
+        onPlayVideo = { file, playlist -> events.onNavigateToPlayer(file, playlist, null) },
         onPreviewImage = events.onRequestImagePreview,
         onOpenSelectedGallery = events.onOpenSelectedGallery,
         onOpenFolderInGallery = { folder ->
@@ -1131,7 +1134,11 @@ private fun DriveScreenContent(
                     withDismissAction = true,
                 )
             }
-            file.isPlayableVideo() -> latestEvents.onNavigateToPlayer(file, currentFiles.filter { it.isPlayableVideo() && (!it.isImportPreview || it.hash.isNotBlank()) })
+            file.isPlayableVideo() -> latestEvents.onNavigateToPlayer(
+                file,
+                currentFiles.filter { it.isPlayableVideo() && (!it.isImportPreview || it.hash.isNotBlank()) },
+                null,
+            )
             file.isPreviewableImage() && file.previewImageCoverUrl().isNotBlank() -> latestEvents.onRequestImagePreview(file)
             file.isNetworkMount -> scope.launch {
                 services.driveRepository.localMounts.streamUrl(file.id)?.let(platform::openUrl)
@@ -1477,7 +1484,9 @@ private fun DriveScreenContent(
         addLink = addLink,
         desktop = desktop,
         onTargetPicked = navigation::updateFolderStack,
-        onPreview = { fileId, fileName -> events.onNavigateToPlayer(FileStat(id = fileId, name = fileName), emptyList()) },
+        onPreview = { fileId, fileName ->
+            events.onNavigateToPlayer(FileStat(id = fileId, name = fileName), emptyList(), null)
+        },
     )
     AddLinkBlockedAction(addLink)
 
@@ -1536,10 +1545,17 @@ private fun DriveScreenContent(
             },
     ) {
         TaskSheetScaffold(taskSheet) {
+            val compactDockSnackbarClearance =
+                if (!LocalFramed.current && !state.isSelectionMode) CompactDockSnackbarClearance else 0.dp
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (pathInTopBar) MaterialTheme.colorScheme.frame else MaterialTheme.colorScheme.background,
-                snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                snackbarHost = {
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.padding(bottom = compactDockSnackbarClearance),
+                    )
+                },
                 topBar = {
                     if (pathInTopBar) {
                         DriveDesktopHeader(
@@ -1762,6 +1778,13 @@ private fun DriveScreenContent(
         },
         isSpoilerBlurEnabled = snapshot.isSpoilerBlurEnabled,
         onOpenItem = openItem,
+        onOpenVideo = { file, startMillis ->
+            latestEvents.onNavigateToPlayer(
+                file,
+                latestIntents.displayedFiles.filter { it.isPlayableVideo() && (!it.isImportPreview || it.hash.isNotBlank()) },
+                startMillis,
+            )
+        },
         onEnterSelection = { state.enterSelection(it.id) },
         onCopySource = events.onCopySource,
         onUpdateFolderStack = navigation::updateFolderStack,

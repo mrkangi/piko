@@ -118,6 +118,8 @@ fun MobilePlayerControls(
     onToggleFullscreen: () -> Unit,
     /** 独立窗口里窗口尺寸归系统管，不给全屏键。 */
     showFullscreenToggle: Boolean = true,
+    /** 内嵌在视频详情页的画面区里：顶栏不重复标题，底栏不占屏幕导航栏高度。 */
+    embedded: Boolean = false,
     modifier: Modifier = Modifier,
     isFullscreen: Boolean = false,
     playlist: List<PlaylistEntry> = emptyList(),
@@ -428,6 +430,7 @@ fun MobilePlayerControls(
                         episodeLabel = episodeLabel,
                         isLocalPlayback = isLocalPlayback,
                         onBackClick = onBack,
+                        showTitle = !embedded,
                         onTracksClick = {
                             ui.interacted()
                             ui.openSheet = PlayerSheet.Tracks
@@ -528,6 +531,7 @@ fun MobilePlayerControls(
                             }
                         },
                         showFullscreenToggle = showFullscreenToggle,
+                        embedded = embedded,
                         onToggleFullscreen = {
                             ui.interacted()
                             onToggleFullscreen()

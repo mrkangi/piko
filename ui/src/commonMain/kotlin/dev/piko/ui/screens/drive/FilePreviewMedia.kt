@@ -5,6 +5,7 @@ import dev.piko.shared.i18n.tr
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.Pause
@@ -36,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -50,12 +53,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.piko.data.repository.isPlayableVideo
 import dev.piko.data.repository.isPreviewableImage
 import dev.piko.shared.data.isExtractableArchive
+import dev.piko.shared.media.PlayableMediaInfo
+import dev.piko.shared.media.PreparedPlayback
+import dev.piko.shared.media.player.AdoptedPlayback
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.ui.LocalPikoServices
 import dev.piko.ui.components.MediaLoadingIndicator
@@ -66,16 +73,66 @@ import dev.piko.ui.components.formatTimeMs
 import dev.piko.ui.components.previewImageCoverUrl
 import dev.piko.ui.components.typeIcon
 import dev.piko.ui.platform.LocalPikoPlatform
+import dev.piko.ui.platform.PreviewBackend
+import dev.piko.ui.platform.VideoPreviewHandoff
+import dev.piko.ui.platform.VideoPreviewHandoffs
 import dev.piko.ui.platform.VideoPreviewSupport
 import io.github.nihildigit.pikpak.FileStat
 import io.github.nihildigit.pikpak.videoThumbnailUrlOf
+
+/**
+ * 预览播放器与播放详情页之间的交接。
+ *
+ * 普通字段记录点击那一刻的位置与已在播放的会话，避免为了读进度把整块面板按帧重组。
+ * 交接成功后预览面板离开组合时跳过 release，由详情页接管同一个后端与代理流。
+ */
+internal class PreviewPlaybackSource(
+    val target: PlaybackTarget,
+    val prepared: PreparedPlayback?,
+    val info: PlayableMediaInfo?,
+    val localPath: String?,
+    val usingProxy: Boolean,
+)
+
+internal class PreviewPlaybackHandoff {
+    var positionMillis: Long = 0L
+    var backend: PreviewBackend? = null
+    var support: VideoPreviewSupport? = null
+    var source: PreviewPlaybackSource? = null
+    var handedOff: Boolean = false
+
+    fun offer(fileId: String): Boolean {
+        if (handedOff) return true
+        val backend = backend ?: return false
+        val support = support ?: return false
+        val source = source ?: return false
+        if (!support.supportsSeamlessHandoff) return false
+        VideoPreviewHandoffs.offer(
+            VideoPreviewHandoff(
+                fileId = fileId,
+                support = support,
+                backend = backend,
+                adopted = AdoptedPlayback(
+                    prepared = source.prepared,
+                    mediaInfo = source.info,
+                    localPath = source.localPath,
+                    usingProxy = source.usingProxy,
+                ),
+            ),
+        )
+        handedOff = true
+        return true
+    }
+}
 
 @Composable
 internal fun FilePreviewHero(
     file: FileStat,
     kind: FilePreviewKind,
     onOpen: () -> Unit,
+    onOpenVideo: (startMillis: Long) -> Unit,
     onToggleBlur: () -> Unit,
+    playback: PreviewPlaybackHandoff,
 ) {
     Box(
         Modifier
@@ -87,7 +144,7 @@ internal fun FilePreviewHero(
     ) {
         when (kind) {
             FilePreviewKind.Blurred -> BlurredHero(file, onToggleBlur)
-            FilePreviewKind.Video -> VideoPreviewHero(file, onOpen)
+            FilePreviewKind.Video -> VideoPreviewHero(file, onOpenVideo, playback)
             FilePreviewKind.Image -> ImagePreviewHero(file, onOpen)
             FilePreviewKind.Audio,
             FilePreviewKind.Folder,
@@ -100,28 +157,49 @@ internal fun FilePreviewHero(
 }
 
 @Composable
-private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
+private fun VideoPreviewHero(
+    file: FileStat,
+    onOpenDetail: (startMillis: Long) -> Unit,
+    playback: PreviewPlaybackHandoff,
+) {
     val support = LocalPikoPlatform.current.videoPreview
     if (support == null) {
         IconPreviewHero(file, FilePreviewKind.Video)
         return
     }
-    val player = support.rememberPreviewBackend()
+    val player = support.rememberPreviewBackend(fullFeatured = support.supportsSeamlessHandoff)
     val repository = LocalPikoServices.current.mediaRepository
     val mounts = LocalPikoServices.current.driveRepository.localMounts
     val cover = videoCoverOf(file)
-    val target by produceState<PlaybackTarget?>(null, file.id) {
+    val source by produceState<PreviewPlaybackSource?>(null, file.id) {
         val prepared = repository.preparePlayback(file.id).getOrNull()
         if (prepared != null) {
-            value = (prepared.proxyUrl ?: prepared.info.currentUrl)
+            val url = (prepared.proxyUrl ?: prepared.info.currentUrl)
                 .takeIf { it.isNotBlank() }
-                ?.let(PlaybackTarget::Url)
-            awaitDispose { prepared.close() }
+            if (url != null) {
+                value = PreviewPlaybackSource(
+                    target = PlaybackTarget.Url(url),
+                    prepared = prepared,
+                    info = prepared.info,
+                    localPath = null,
+                    usingProxy = prepared.proxyUrl != null,
+                )
+            } else {
+                prepared.close()
+            }
+            awaitDispose { if (!playback.handedOff) prepared.close() }
         } else {
             value = runCatching {
                 val mount = mounts.find(file.id)
                 val path = mounts.resolve(file.id) ?: return@runCatching null
-                if (mount?.isNetworkMount == true) PlaybackTarget.Url(path) else PlaybackTarget.LocalFile(path)
+                val network = mount?.isNetworkMount == true
+                PreviewPlaybackSource(
+                    target = if (network) PlaybackTarget.Url(path) else PlaybackTarget.LocalFile(path),
+                    prepared = null,
+                    info = null,
+                    localPath = path.takeUnless { network },
+                    usingProxy = false,
+                )
             }.getOrNull()
         }
     }
@@ -129,24 +207,35 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
     var scrubbing by remember { mutableStateOf(false) }
     var scrubTarget by remember { mutableStateOf(0L) }
     var wasPlayingBeforeScrub by remember { mutableStateOf(false) }
-    LaunchedEffect(target) {
-        val openTarget = target
-        if (openTarget != null) {
-            runCatching { player.open(openTarget, startMillis = 0L, playWhenReady = false) }
+    LaunchedEffect(source) {
+        val openSource = source
+        if (openSource != null) {
+            runCatching { player.open(openSource.target, startMillis = 0L, playWhenReady = false) }
         }
     }
     LaunchedEffect(muted) { player.setVolume(if (muted) 0f else 1f) }
-    DisposableEffect(player) { onDispose { player.release() } }
+    DisposableEffect(player) { onDispose { if (!playback.handedOff) player.release() } }
 
     val duration = player.durationMillis
     val position = player.positionMillis.coerceIn(0L, duration.takeIf { it > 0L } ?: Long.MAX_VALUE)
     val shownPosition = if (scrubbing) scrubTarget else position
     val fraction = if (duration > 0L) shownPosition.toFloat() / duration else 0f
+    val togglePlayback = {
+        if (source != null) {
+            if (player.isPlaying) player.pause() else player.play()
+        }
+    }
+    SideEffect {
+        playback.positionMillis = shownPosition
+        playback.backend = player
+        playback.support = support
+        playback.source = source
+    }
     Box(Modifier.fillMaxSize()) {
         if (cover.isNotEmpty()) {
             SpoilerThumbnail(cover, isBlurred = false, PosterSpoilerBlur, Modifier.fillMaxSize())
         }
-        if (target != null) {
+        if (source != null) {
             support.Surface(
                 player,
                 Modifier.fillMaxSize().alpha(if (player.isBuffering) 0f else 1f),
@@ -155,8 +244,8 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(duration, target) {
-                    if (duration <= 0L || target == null) return@pointerInput
+                .pointerInput(duration, source) {
+                    if (duration <= 0L || source == null) return@pointerInput
                     detectHorizontalDragGestures(
                         onDragStart = {
                             scrubbing = true
@@ -179,16 +268,21 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
                             scrubbing = false
                         },
                     )
+                }
+                .pointerInput(duration, source) {
+                    if (source == null) return@pointerInput
+                    detectTapGestures(onDoubleTap = { togglePlayback() })
                 },
         )
-        if (target == null || player.isBuffering) {
+        if (source == null || player.isBuffering) {
             MediaLoadingIndicator(Modifier.align(Alignment.Center))
         }
         PreviewMediaChip(file.extensionLabel() ?: tr("视频", "Video", "動画", "동영상", "影片"), Modifier.align(Alignment.TopStart).padding(10.dp))
         PreviewExpandButton(
-            onOpen,
-            tr("全屏播放", "Play fullscreen", "全画面で再生", "전체 화면 재생", "全螢幕播放"),
-            Modifier.align(Alignment.TopEnd).padding(10.dp),
+            onClick = { onOpenDetail(player.positionMillis.coerceAtLeast(0L)) },
+            description = tr("播放详情", "Play details", "再生詳細", "재생 상세", "播放詳情"),
+            icon = Icons.AutoMirrored.Outlined.OpenInNew,
+            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
         )
         if (scrubbing) {
             Surface(
@@ -203,26 +297,6 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
                 )
             }
-        } else {
-            Surface(
-                onClick = {
-                    if (target != null) {
-                        if (player.isPlaying) player.pause() else player.play()
-                    }
-                },
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.94f),
-                contentColor = Color(0xFF15131A),
-                modifier = Modifier.align(Alignment.Center).size(58.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
-                        Modifier.size(30.dp),
-                    )
-                }
-            }
         }
         Column(
             Modifier
@@ -232,6 +306,22 @@ private fun VideoPreviewHero(file: FileStat, onOpen: () -> Unit) {
                 .padding(start = 14.dp, end = 14.dp, top = 26.dp, bottom = 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    onClick = togglePlayback,
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.42f),
+                    contentColor = Color.White,
+                    modifier = Modifier.size(30.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
+                            Modifier.size(18.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
                 Text(
                     formatTimeMs(shownPosition),
                     style = MaterialTheme.typography.labelSmall,
@@ -414,7 +504,12 @@ private fun PreviewMediaChip(label: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PreviewExpandButton(onClick: () -> Unit, description: String, modifier: Modifier = Modifier) {
+private fun PreviewExpandButton(
+    onClick: () -> Unit,
+    description: String,
+    modifier: Modifier = Modifier,
+    icon: ImageVector = Icons.Outlined.OpenInFull,
+) {
     Surface(
         onClick = onClick,
         shape = CircleShape,
@@ -423,7 +518,7 @@ private fun PreviewExpandButton(onClick: () -> Unit, description: String, modifi
         modifier = modifier,
     ) {
         Icon(
-            Icons.Outlined.OpenInFull,
+            icon,
             description,
             Modifier.padding(8.dp).size(18.dp),
         )

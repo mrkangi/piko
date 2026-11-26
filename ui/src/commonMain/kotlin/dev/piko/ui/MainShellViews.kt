@@ -190,7 +190,7 @@ internal fun MainHomeContent(
     onSelectMainTab: (MainTab) -> Unit,
     onTabClick: (MainTab) -> Unit,
     onMeasuredContentSize: (IntSize) -> Unit,
-    onPlayVideo: (FileStat, List<FileStat>) -> Unit,
+    onPlayVideo: (FileStat, List<FileStat>, Long?) -> Unit,
     onPlayLocal: (String, String, String?) -> Unit,
     onRevealById: (String) -> Unit,
     onOpenCloudFile: suspend (String, String) -> Boolean,
@@ -340,6 +340,9 @@ internal fun MainHomeContent(
 }
 
 private val CompactDockHeight = 64.dp
+
+/** 紧凑网盘页的 Snackbar 要抬到悬浮 dock 之上，避免提示被 dock 盖住。 */
+internal val CompactDockSnackbarClearance = CompactDockHeight + 16.dp
 
 /** 手机底部 dock：图标与文字同行，三段等分；新建入口在紧凑顶栏，不再占用底部空间。 */
 @Composable
