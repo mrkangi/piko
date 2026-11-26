@@ -110,6 +110,7 @@ class PikoClientManager(
     private val switchLock = Mutex()
 
     private var reconnectJob: Job? = null
+    private val authRecoveryMutex = Mutex()
 
     init {
         scope.launch(Dispatchers.Default) { restore() }
@@ -174,6 +175,41 @@ class PikoClientManager(
                 throw e
             }
         }.onFailure { PikoLog.w(TAG, "密码登录失败，${describeAuthError(it)}", it) }
+
+    /**
+     * 普通 API 请求已经试过 SDK 的刷新与验证码恢复仍然失败时，用保存的密码重建一次会话。
+     * 保留同一个 client，目录树、传输预算与正在读的界面都不用换实例。
+     *
+     * [rejectedSession] 用来识别并发恢复：别的请求已经换出新会话时不再重复退出登录。
+     * 没有保存密码时不强退会话，只把账号标成需要重新登录，让用户自己决定。
+     */
+    override suspend fun recoverAuthentication(client: PikPakClient, rejectedSession: Session?): Boolean =
+        authRecoveryMutex.withLock {
+            if (_currentClient.value !== client) return@withLock false
+            val current = client.currentSession
+            if (current != null && current !== rejectedSession) return@withLock true
+            if (credentialsOf(client.account)?.password == null) {
+                PikoLog.w(TAG, "会话被拒且没有保存的密码，标记账号需要重新登录")
+                markExpired(client.account)
+                return@withLock false
+            }
+            PikoLog.w(TAG, "会话被服务端拒绝，使用保存的密码重新登录")
+            runSuspendCatching {
+                client.logout()
+                client.login()
+            }.fold(
+                onSuccess = {
+                    _expiredAccounts.update { it - client.account }
+                    PikoLog.i(TAG, "会话已恢复")
+                    true
+                },
+                onFailure = {
+                    PikoLog.w(TAG, "恢复会话失败，${describeAuthError(it)}", it)
+                    markExpired(client.account)
+                    false
+                },
+            )
+        }
 
     suspend fun loginWithToken(account: String, token: String, refreshToken: String = ""): Result<PikPakClient> =
         runSuspendCatching {

@@ -13,6 +13,7 @@ import dev.piko.shared.data.ImportPreviewLocation
 import dev.piko.shared.data.isDriveFolderId
 import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.data.isImportPreview
+import dev.piko.shared.data.isAuthenticationFailure
 import dev.piko.shared.data.outsideArchives
 import dev.piko.data.repository.isPlayableVideo
 import io.github.nihildigit.pikpak.thumbnailUrlOf
@@ -1159,7 +1160,7 @@ class DriveScreenState(
                 .onFailure {
                     // 消息是一次性的，弹完就没了；而列表此刻显示的是上一次的内容，
                     // 界面需要一个持续的标记才能说明「这是陈旧数据」
-                    loadError = it.message ?: tr("读取网盘失败", "Failed to load drive", "ドライブを読み込めませんでした", "드라이브를 불러오지 못했습니다", "讀取雲端硬碟失敗")
+                    loadError = loadFailureMessage(it, tr("读取网盘失败", "Failed to load drive", "ドライブを読み込めませんでした", "드라이브를 불러오지 못했습니다", "讀取雲端硬碟失敗"))
                     _messages.tryEmit(tr("加载失败", "Failed to load", "読み込みに失敗しました", "불러오지 못했습니다", "載入失敗"))
                 }
             isLoading = false
@@ -1212,7 +1213,7 @@ class DriveScreenState(
                 }
                 .logFailure(TAG, tr("读取${library.title}失败", "Failed to load ${library.title}", "${library.title}を読み込めませんでした", "${library.title} 불러오기 실패", "讀取${library.title}失敗"))
                 .onFailure {
-                    loadError = it.message ?: tr("读取${library.title}失败", "Failed to load ${library.title}", "${library.title}を読み込めませんでした", "${library.title} 불러오기 실패", "讀取${library.title}失敗")
+                    loadError = loadFailureMessage(it, tr("读取${library.title}失败", "Failed to load ${library.title}", "${library.title}を読み込めませんでした", "${library.title} 불러오기 실패", "讀取${library.title}失敗"))
                     _messages.tryEmit(tr("加载失败", "Failed to load", "読み込みに失敗しました", "불러오지 못했습니다", "載入失敗"))
                 }
             isLoading = false
@@ -1851,6 +1852,13 @@ class DriveScreenState(
     private suspend fun describeFolders(folders: List<Pair<FileStat, List<ChildFile>?>>) {
         folders.forEach { (folder, content) -> _folderViews[folder.id] = folderView(folder, content) }
     }
+
+    private fun loadFailureMessage(error: Throwable, fallback: String): String =
+        if (error is PikPakException && error.isAuthenticationFailure()) {
+            tr("登录状态已失效，请重新登录", "Your session has expired. Please sign in again", "ログイン状態の有効期限が切れました。再ログインしてください", "로그인 상태가 만료되었습니다. 다시 로그인해 주세요", "登入狀態已失效，請重新登入")
+        } else {
+            error.message ?: fallback
+        }
 
     private suspend fun folderView(folder: FileStat, content: List<ChildFile>?): DriveFolderView {
         while (true) {

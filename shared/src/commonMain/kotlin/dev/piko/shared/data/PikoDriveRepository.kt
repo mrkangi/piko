@@ -1349,11 +1349,28 @@ open class PikoDriveRepository(
             if (VirtualLocation.isVirtual(parentId)) {
                 return@runSuspendCatching virtualBrowsable(parentId, sortOrder) ?: emptyList()
             }
-            val listing = fetchListing(parentId, asked)
+            val listing = withAuthenticationRecovery(asked) { fetchListing(parentId, asked) }
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
             val entries = readAndRecordVaultEntries(parentId, listing, store, asked, logFailure = true)
             if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
             withVaulted(parentId, listing, entries, sortOrder)
+        }
+    }
+
+    /**
+     * 云端读取被会话问题拒绝时，交给 [PikoClientProvider] 用保存的密码恢复一次并重试。
+     * 只重试只读列表；写操作的结果不能仅凭异常类型判断是否已经落盘。
+     */
+    internal suspend fun <T> withAuthenticationRecovery(asked: PikPakClient, block: suspend () -> T): T {
+        val rejectedSession = asked.currentSession
+        try {
+            return block()
+        } catch (error: PikPakException) {
+            if (!error.isAuthenticationFailure()) throw error
+            if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
+            if (!clientManager.recoverAuthentication(asked, rejectedSession)) throw error
+            if (clientManager.currentClient.value !== asked) throw CancellationException("Account changed")
+            return block()
         }
     }
 
