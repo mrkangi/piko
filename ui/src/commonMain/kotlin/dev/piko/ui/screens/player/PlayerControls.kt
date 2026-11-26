@@ -99,6 +99,7 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -189,12 +190,20 @@ fun PlayerTopBar(
     modifier: Modifier = Modifier,
     /** 内嵌在视频详情页时不重复画标题：详情正文会完整展示标题，顶栏只留返回与操作。 */
     showTitle: Boolean = true,
+    /** 紧凑画面：缩小容器与内边距，给内嵌播放器让出更多画面。 */
+    compact: Boolean = false,
     onTracksClick: (() -> Unit)? = null,
     onStatsClick: (() -> Unit)? = null,
     onSettingsClick: (() -> Unit)? = null,
 ) {
     // 桌面端独立的播放窗口没有标题栏：关窗按钮放在右上角，与其他按钮同款，左边的返回键与它重复，不再显示
     val framelessWindow = LocalFramelessWindow.current
+    val buttonContainer = if (compact) {
+        IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow)
+    } else {
+        null
+    }
+    val buttonIconSize = if (compact) 20.dp else 24.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -204,7 +213,7 @@ fun PlayerTopBar(
             .windowInsetsPadding(
                 WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
             )
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = if (compact) 4.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (framelessWindow == null) {
@@ -214,10 +223,11 @@ fun PlayerTopBar(
                 onClick = onBackClick,
                 tooltipBelow = true,
                 containerSize = IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow),
+                iconSize = buttonIconSize,
             )
         }
         // 标题这一块兼做拖动窗口的地方（仅限没有标题栏的桌面窗口）
-        Box(Modifier.weight(1f).windowDragArea().padding(horizontal = 12.dp)) {
+        Box(Modifier.weight(1f).windowDragArea().padding(horizontal = if (compact) 6.dp else 12.dp)) {
             if (showTitle) {
                 TooltipBox(
                     positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
@@ -260,6 +270,8 @@ fun PlayerTopBar(
                 onClick = onTracksClick,
                 tooltipBelow = true,
                 shortcut = "C",
+                containerSize = buttonContainer,
+                iconSize = buttonIconSize,
             )
         }
         if (onStatsClick != null) {
@@ -268,6 +280,8 @@ fun PlayerTopBar(
                 label = tr("详细信息", "Details", "詳細情報", "세부 정보", "詳細資訊"),
                 onClick = onStatsClick,
                 tooltipBelow = true,
+                containerSize = buttonContainer,
+                iconSize = buttonIconSize,
             )
         }
         if (onSettingsClick != null) {
@@ -276,6 +290,8 @@ fun PlayerTopBar(
                 label = tr("播放设置", "Playback settings", "再生設定", "재생 설정", "播放設定"),
                 onClick = onSettingsClick,
                 tooltipBelow = true,
+                containerSize = buttonContainer,
+                iconSize = buttonIconSize,
             )
         }
         if (framelessWindow != null) {
@@ -285,12 +301,16 @@ fun PlayerTopBar(
                 label = if (onTop) tr("取消置顶", "Unpin", "最前面表示を解除", "고정 해제", "取消置頂") else tr("置顶", "Pin on top", "最前面に表示", "항상 위에 표시", "置頂"),
                 onClick = { framelessWindow.setAlwaysOnTop(!onTop) },
                 tooltipBelow = true,
+                containerSize = buttonContainer,
+                iconSize = buttonIconSize,
             )
             PlayerIconButton(
                 icon = Icons.Filled.Close,
                 label = tr("关闭", "Close", "閉じる", "닫기", "關閉"),
                 onClick = framelessWindow::close,
                 tooltipBelow = true,
+                containerSize = buttonContainer,
+                iconSize = buttonIconSize,
             )
         }
     }
@@ -547,7 +567,8 @@ private val READOUT_BAR_WIDTH = 120.dp
 private val PlayContainerSize = DpSize(64.dp, 56.dp)
 
 /**
- * 播放器底栏：进度条在上，时间与选集、倍速、全屏在下。
+ * 播放器底栏：非内嵌时进度条在上，时间与选集、倍速、全屏在下。
+ * 内嵌详情页只画紧凑的一行控件，贴底进度条由 [MobilePlayerControls] 单独常驻。
  *
  * 系统手势区的处理分两层：整栏让出 safeDrawing；进度条额外让出左右两侧的系统手势区，
  * 那里的横向拖动会被系统返回手势先拿走。按钮只响应点击，不受手势区影响，不必让。
@@ -596,6 +617,12 @@ internal fun PlayerBottomBar(
     onToggleFullscreen: () -> Unit,
     /** 独立窗口的面板尺寸由系统窗口管理器决定，不给全屏键。 */
     showFullscreenToggle: Boolean = true,
+    /** 内嵌详情页把播放键放进紧凑底栏，避免和中央播放键重复占空间。 */
+    isPlaying: Boolean = false,
+    onPlayPause: () -> Unit = {},
+    /** 内嵌详情页的顶栏只留返回与设置；音轨、统计放进「更多」。 */
+    onTracksClick: (() -> Unit)? = null,
+    onStatsClick: (() -> Unit)? = null,
     /** 内嵌在视频详情页时只让开左右系统手势区；底边不是屏幕底边，不能再垫导航栏高度。 */
     embedded: Boolean = false,
     modifier: Modifier = Modifier,
@@ -608,6 +635,18 @@ internal fun PlayerBottomBar(
 ) {
     var scrubPositionMillis by remember { mutableStateOf<Long?>(null) }
     val shownPosition = scrubPositionMillis ?: previewPositionMillis ?: positionMillis
+    val compactRow = compactWidth || embedded
+    val iconContainer = if (embedded) {
+        IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow)
+    } else {
+        null
+    }
+    val iconSize = if (embedded) 20.dp else 24.dp
+    val timeStyle = if (embedded) {
+        MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
+    } else {
+        TimeTextStyle()
+    }
 
     Column(
         modifier = modifier
@@ -622,40 +661,57 @@ internal fun PlayerBottomBar(
                     },
                 ),
             )
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = if (isLandscape) 8.dp else 12.dp),
+            .padding(
+                start = if (embedded) 12.dp else 16.dp,
+                end = if (embedded) 10.dp else 16.dp,
+                top = if (embedded) 2.dp else 8.dp,
+                bottom = if (embedded) EmbeddedSeekBarHeight else if (isLandscape) 8.dp else 12.dp,
+            ),
     ) {
-        PlayerSeekBar(
-            positionMillis = positionMillis,
-            previewMillis = previewPositionMillis,
-            durationMillis = durationMillis,
-            bufferedPositionMillis = bufferedPositionMillis,
-            onSeek = onSeek,
-            thumbOnHoverOnly = thumbOnHoverOnly,
-            onScrub = { target ->
-                val wasScrubbing = scrubPositionMillis != null
-                scrubPositionMillis = target
-                if (wasScrubbing != (target != null)) onScrubbingChange(target != null)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeGestures.only(WindowInsetsSides.Horizontal)),
-        )
-        Spacer(Modifier.height(4.dp))
+        if (!embedded) {
+            PlayerSeekBar(
+                positionMillis = positionMillis,
+                previewMillis = previewPositionMillis,
+                durationMillis = durationMillis,
+                bufferedPositionMillis = bufferedPositionMillis,
+                onSeek = onSeek,
+                thumbOnHoverOnly = thumbOnHoverOnly,
+                onScrub = { target ->
+                    val wasScrubbing = scrubPositionMillis != null
+                    scrubPositionMillis = target
+                    if (wasScrubbing != (target != null)) onScrubbingChange(target != null)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeGestures.only(WindowInsetsSides.Horizontal)),
+            )
+            Spacer(Modifier.height(4.dp))
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (embedded) {
+                    PlayerIconButton(
+                        icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        label = if (isPlaying) tr("暂停", "Pause", "一時停止", "일시 중지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
+                        onClick = onPlayPause,
+                        containerSize = iconContainer,
+                        iconSize = iconSize,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 // 换集在时间前面，照多数播放器底栏的排法。没有上一集或下一集时禁用而不是隐藏，时间不会左右跳
-                if (showEpisodeSkip) {
+                if (showEpisodeSkip && !embedded) {
                     PlayerIconButton(icon = Icons.Filled.SkipPrevious, label = tr("上一集", "Previous episode", "前のエピソード", "이전 에피소드", "上一集"), onClick = onPrevious, enabled = hasPrevious)
                     PlayerIconButton(icon = Icons.Filled.SkipNext, label = tr("下一集", "Next episode", "次のエピソード", "다음 에피소드", "下一集"), onClick = onNext, enabled = hasNext)
                     Spacer(Modifier.width(8.dp))
                 }
                 // 照 YouTube 放在换集之后、时间之前，右边一组的位置不变。窄屏收进「更多」：
                 // 静音键也要占一格，加了 VR 之后一行放不下
-                if (volume != null && !compactWidth) {
+                if (volume != null && !compactRow) {
                     PlayerVolumeControl(
                         volume = volume,
                         onVolumeChange = onVolumeChange,
@@ -666,7 +722,7 @@ internal fun PlayerBottomBar(
                 }
                 Text(
                     text = formatTime(shownPosition),
-                    style = TimeTextStyle(),
+                    style = timeStyle,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     softWrap = false,
@@ -674,7 +730,7 @@ internal fun PlayerBottomBar(
                 )
                 Text(
                     text = " / ${formatTime(durationMillis)}",
-                    style = TimeTextStyle(),
+                    style = timeStyle,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     softWrap = false,
@@ -682,10 +738,13 @@ internal fun PlayerBottomBar(
                 )
             }
 
-            if (compactWidth) {
+            if (compactRow) {
                 // 窄屏只把最常用的两枚留在栏内，其余进「更多」：360dp 竖屏里时间、
                 // 倍速、选集、VR、旋转、全屏同时排一行会把时间挤到换行
-                if (qualityOptions.isNotEmpty() || playbackSpeed != null || showEpisodes || (vrMode != null && onVrToggle != null) || volume != null) {
+                if (qualityOptions.isNotEmpty() || playbackSpeed != null || showEpisodes ||
+                    (vrMode != null && onVrToggle != null) || volume != null ||
+                    onTracksClick != null || onStatsClick != null
+                ) {
                     Box {
                         PlayerIconButton(
                             icon = Icons.Filled.MoreVert,
@@ -693,6 +752,8 @@ internal fun PlayerBottomBar(
                             onClick = { onMoreMenuOpenChange(true) },
                             // VR 开着时入口藏进菜单，按开启态高亮，免得看不出正在生效
                             active = vrMode?.enabled == true,
+                            containerSize = iconContainer,
+                            iconSize = iconSize,
                         )
                         PlayerMoreMenu(
                             expanded = isMoreMenuOpen,
@@ -708,6 +769,8 @@ internal fun PlayerBottomBar(
                             onVrToggle = onVrToggle,
                             volume = volume,
                             onToggleMute = onToggleMute,
+                            onTracksClick = onTracksClick,
+                            onStatsClick = onStatsClick,
                         )
                     }
                 }
@@ -765,7 +828,7 @@ internal fun PlayerBottomBar(
             }
             // 一次转 90 度，与 R 键相同。原先在播放设置里列四个角度，要转画面得先开面板，
             // 桌面上转了窗口还跟着对调，这一步该是顺手就点的
-            if (onRotate != null) {
+            if (onRotate != null && !embedded) {
                 PlayerIconButton(icon = Icons.Filled.Rotate90DegreesCw, label = tr("顺时针旋转 90 度", "Rotate 90° clockwise", "右に90度回転", "시계 방향으로 90도 회전", "順時針旋轉 90 度"), onClick = onRotate)
             }
             if (showFullscreenToggle) {
@@ -773,6 +836,8 @@ internal fun PlayerBottomBar(
                     icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
                     label = if (isFullscreen) tr("退出全屏", "Exit fullscreen", "全画面を終了", "전체 화면 종료", "結束全螢幕") else tr("全屏", "Fullscreen", "全画面", "전체 화면", "全螢幕"),
                     onClick = onToggleFullscreen,
+                    containerSize = iconContainer,
+                    iconSize = iconSize,
                 )
             }
         }
@@ -815,6 +880,8 @@ private fun PlayerMoreMenu(
     onVrToggle: (() -> Unit)?,
     volume: Float?,
     onToggleMute: () -> Unit,
+    onTracksClick: (() -> Unit)? = null,
+    onStatsClick: (() -> Unit)? = null,
 ) {
     var showSpeed by remember { mutableStateOf(false) }
     var showQuality by remember { mutableStateOf(false) }
@@ -918,6 +985,24 @@ private fun PlayerMoreMenu(
                             icon = Icons.Outlined.VideoLibrary,
                             label = tr("选集", "Playlist", "再生リスト", "재생 목록", "選集"),
                             onClick = onEpisodesClick,
+                        ),
+                    )
+                }
+                if (onTracksClick != null) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Outlined.Subtitles,
+                            label = tr("音轨与字幕", "Audio and subtitles", "音声と字幕", "오디오 및 자막", "音軌與字幕"),
+                            onClick = onTracksClick,
+                        ),
+                    )
+                }
+                if (onStatsClick != null) {
+                    add(
+                        PlayerMoreAction(
+                            icon = Icons.Outlined.Info,
+                            label = tr("详细信息", "Details", "詳細情報", "세부 정보", "詳細資訊"),
+                            onClick = onStatsClick,
                         ),
                     )
                 }
@@ -1284,6 +1369,7 @@ private fun PlayerChipButton(
  * 压在画面上又粗又闷。细轨道不在 M3 滑块的规格里，是视频播放器的通行做法。已播放段不用波浪：
  * M3 的波浪是进度指示器表示「过程在进行」的外观，滑块没有这一项；克制版也试过，在画面上仍然显得多余。
  * [thumbOnHoverOnly] 时手柄平时隐藏、悬停才出现（鼠标）；触屏没有悬停，手柄一直显示，否则看不出能拖。
+ * [edgeAligned] 让轨道贴住画面底边，[emphasized] 控制收起态的淡化与细线，[thumbVisible] 隐藏静止时的圆点。
  *
  * 不用 Material 的 Slider：换手柄与轨道的重载两端没有交集（Android 的 1.5.0-alpha28 与桌面的
  * 1.12.0-alpha03 各缺一半），手柄固定是 44dp 高的竖条，配不了细轨道。手势自己接：按下即跳到该处，
@@ -1301,6 +1387,14 @@ internal fun PlayerSeekBar(
     onScrub: (Long?) -> Unit = {},
     // 在别处拖动进度（播放器画面上的横滑）时的目标处：手柄与时间气泡照拖动进度条本身的样子显示在这里
     previewMillis: Long? = null,
+    /** 贴住画面底边画：轨道落在布局最下方，展开态的圆点允许向画面外轻微溢出。 */
+    edgeAligned: Boolean = false,
+    /** 控制层是否展开。收起时轨道更细、更淡，让进度让回画面。 */
+    emphasized: Boolean = true,
+    /** 是否由进度条自己画手柄。内嵌详情页把它关掉，交给画面级覆盖层画，才能越过播放器边界。 */
+    thumbVisible: Boolean = true,
+    /** 把当前视觉进度交给外部覆盖层，拖动预览与回退等待都算在内。 */
+    onVisualFraction: ((Float) -> Unit)? = null,
 ) {
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     var hoverFraction by remember { mutableStateOf<Float?>(null) }
@@ -1325,19 +1419,41 @@ internal fun PlayerSeekBar(
     val scrubFraction = dragFraction ?: previewMillis?.let(::fractionOf)
     val fraction = scrubFraction ?: fractionOf(pendingSeekMillis ?: positionMillis)
     val bufferedFraction = fractionOf(bufferedPositionMillis)
+    SideEffect { onVisualFraction?.invoke(fraction) }
     val focusInteraction = remember { MutableInteractionSource() }
     val isFocused by focusInteraction.collectIsFocusedAsState()
     val isEngaged = scrubFraction != null || hoverFraction != null || isFocused
     val scheme = MaterialTheme.colorScheme
-    val trackColors = SeekTrackColors(
-        active = scheme.primary,
-        inactive = scheme.onSurface.copy(alpha = INACTIVE_TRACK_ALPHA),
-        buffered = scheme.onSurface.copy(alpha = BUFFERED_TRACK_ALPHA),
-    )
     val motion = MaterialTheme.motionScheme
-    val thickness by animateDpAsState(if (isEngaged) SeekTrackEngagedThickness else SeekTrackThickness, motion.fastSpatialSpec())
+    val idle = edgeAligned && !emphasized && scrubFraction == null && hoverFraction == null && !isFocused
+    val activeColor by animateColorAsState(
+        if (emphasized) scheme.primary else scheme.onSurface.copy(alpha = IDLE_ACTIVE_TRACK_ALPHA),
+        motion.fastEffectsSpec(),
+        label = "seek-active-color",
+    )
+    val inactiveColor by animateColorAsState(
+        scheme.onSurface.copy(alpha = if (emphasized) INACTIVE_TRACK_ALPHA else IDLE_INACTIVE_TRACK_ALPHA),
+        motion.fastEffectsSpec(),
+        label = "seek-inactive-color",
+    )
+    val bufferedColorValue by animateColorAsState(
+        scheme.onSurface.copy(alpha = if (emphasized) BUFFERED_TRACK_ALPHA else IDLE_BUFFERED_TRACK_ALPHA),
+        motion.fastEffectsSpec(),
+        label = "seek-buffered-color",
+    )
+    val trackColors = SeekTrackColors(
+        active = activeColor,
+        inactive = inactiveColor,
+        buffered = bufferedColorValue,
+    )
+    val restingThickness = if (idle) EdgeIdleTrackThickness else SeekTrackThickness
+    val thickness by animateDpAsState(
+        if (isEngaged) SeekTrackEngagedThickness else restingThickness,
+        motion.fastSpatialSpec(),
+    )
     val thumbRadius by animateDpAsState(
         when {
+            !thumbVisible -> 0.dp
             scrubFraction != null -> SeekThumbDraggingRadius
             // 键盘停在进度条上时手柄要露出来，否则看不出焦点在这里、方向键会动它
             thumbOnHoverOnly && hoverFraction == null && !isFocused -> 0.dp
@@ -1368,13 +1484,13 @@ internal fun PlayerSeekBar(
 
     val focusRingColor = scheme.secondary
 
-    BoxWithConstraints(modifier = modifier.height(SeekBarHeight)) {
+    BoxWithConstraints(modifier = modifier.height(if (edgeAligned) EmbeddedSeekBarHeight else SeekBarHeight)) {
         Box(
             Modifier
                 .fillMaxWidth()
                 // 布局仍占 SeekBarHeight，接触摸的这一层撑到 48dp、上下各溢出一截，轨道画在正中不挪位置。
                 // 不能指望 Compose 的最小触控区自动外扩：它只在别处都没接住时才生效，而进度条底下铺着整屏的手势层
-                .requiredHeight(SeekTouchHeight)
+                .requiredHeight(if (edgeAligned) EmbeddedSeekBarHeight else SeekTouchHeight)
                 .handCursor(enabled)
                 // 按下即跳到该处并开始拖动，松手才真正 seek
                 .pointerInput(enabled) {
@@ -1423,6 +1539,7 @@ internal fun PlayerSeekBar(
                         thumbRadius = thumbRadius.toPx(),
                         inset = SeekThumbDraggingRadius.toPx(),
                         focusRing = if (isFocused) focusRingColor else null,
+                        bottomAligned = edgeAligned,
                     )
                 }
                 // M3 滑块的键盘约定：Tab 停到手柄上，方向键调值。在播放器与信息流里，上级根节点的
@@ -1500,8 +1617,10 @@ private fun DrawScope.drawSeekTrack(
     thumbRadius: Float,
     inset: Float,
     focusRing: Color?,
+    bottomAligned: Boolean = false,
 ) {
-    val centerY = size.height / 2
+    // 贴底时轨道下沿压住画面底边；手柄以轨道为圆心，下半圆允许溢出画面。
+    val centerY = if (bottomAligned) size.height - thickness / 2 else size.height / 2
     val start = inset
     val end = size.width - inset
     val thumbX = start + (end - start) * fraction
@@ -1649,14 +1768,21 @@ private val BottomScrim = listOf(
 // 不随触控区改；触控区另取 48dp 的最小触控尺寸，细轨道要能点中
 private val SeekBarHeight = 32.dp
 private val SeekTouchHeight = 48.dp
+internal val EmbeddedSeekBarHeight = 14.dp
+internal val EmbeddedSeekBarInset = 9.dp
+internal val EmbeddedSeekBarThumbRadius = 6.dp
 private val SeekFocusRingWidth = 3.dp
 private val SeekFocusRingGap = 2.dp
 private val SeekTrackThickness = 4.dp
 private val SeekTrackEngagedThickness = 8.dp
+private val EdgeIdleTrackThickness = 2.dp
 private val SeekThumbRadius = 6.dp
 private val SeekThumbDraggingRadius = 9.dp
 private const val INACTIVE_TRACK_ALPHA = 0.28f
 private const val BUFFERED_TRACK_ALPHA = 0.55f
+private const val IDLE_ACTIVE_TRACK_ALPHA = 0.42f
+private const val IDLE_INACTIVE_TRACK_ALPHA = 0.14f
+private const val IDLE_BUFFERED_TRACK_ALPHA = 0.24f
 
 private const val CONTAINER_ALPHA = 0.72f
 private const val LOADING_INDICATOR_FRACTION = 0.75f

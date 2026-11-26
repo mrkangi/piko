@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -37,6 +40,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -54,6 +58,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.zIndex
 import dev.piko.data.auth.PlayerGestureDefaults
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.media.player.MediaTrack
@@ -221,7 +226,12 @@ fun MobilePlayerControls(
 
     val chromeVisible = ui.controlsVisible && !ui.isLocked && !ui.isEditingCropRegion
     val bottomBarVisible = (chromeVisible || seekPreviewMillis != null) && !ui.isEditingCropRegion
-    val centerVisible = ((chromeVisible && !ui.isBoosting) || isLoading || centerIndicator != null) && errorMessage == null && !ui.isEditingCropRegion
+    val centerVisible = ((chromeVisible && !ui.isBoosting) || isLoading || centerIndicator != null) &&
+        (!embedded || !isPlaying || isLoading || centerIndicator != null) &&
+        errorMessage == null && !ui.isEditingCropRegion
+    // 内嵌详情页的贴底进度条独立于底栏：拖动它只临时点亮并露出圆点，不强行展开整套控件。
+    var embeddedScrubPositionMillis by remember { mutableStateOf<Long?>(null) }
+    var embeddedSeekFraction by remember { mutableStateOf(0f) }
 
     BackHandler(enabled = isFullscreen && !ui.isEditingCropRegion, onBack = onToggleFullscreen)
     BackHandler(enabled = ui.isEditingCropRegion) { ui.cancelCropEdit(onAspectRatioChange) }
@@ -246,6 +256,8 @@ fun MobilePlayerControls(
         Box(
             modifier = modifier
                 .fillMaxSize()
+                // 内嵌详情页的进度圆点允许轻微越出画面底边，后面的正文不能把它裁掉。
+                .then(if (embedded) Modifier.graphicsLayer { clip = false } else Modifier)
                 .onSizeChanged { viewportSize = it }
                 .onPreviewKeyEvent { event ->
                     // VR 模式下 R 是「回正视角」，不再是画面旋转
@@ -431,14 +443,15 @@ fun MobilePlayerControls(
                         isLocalPlayback = isLocalPlayback,
                         onBackClick = onBack,
                         showTitle = !embedded,
+                        compact = embedded,
                         onTracksClick = {
                             ui.interacted()
                             ui.openSheet = PlayerSheet.Tracks
-                        }.takeIf { hasTracksEntry },
+                        }.takeIf { hasTracksEntry && !embedded },
                         onStatsClick = {
                             ui.interacted()
                             ui.openSheet = PlayerSheet.Stats
-                        }.takeIf { playbackStats != null },
+                        }.takeIf { playbackStats != null && !embedded },
                         onSettingsClick = {
                             ui.interacted()
                             ui.openSheet = PlayerSheet.Settings
@@ -470,7 +483,7 @@ fun MobilePlayerControls(
                         isFullscreen = isFullscreen,
                         thumbOnHoverOnly = seekThumbOnHoverOnly,
                         positionMillis = positionMillis,
-                        previewPositionMillis = seekPreviewMillis,
+                        previewPositionMillis = embeddedScrubPositionMillis ?: seekPreviewMillis,
                         durationMillis = durationMillis,
                         bufferedPositionMillis = bufferedPositionMillis,
                         playbackSpeed = playbackSpeed,
@@ -524,13 +537,26 @@ fun MobilePlayerControls(
                                 onVrModeChange(current.toggled(title))
                             }
                         },
-                        onRotate = rotationDegrees?.let { degrees ->
+                        onRotate = rotationDegrees?.takeIf { !embedded }?.let { degrees ->
                             {
                                 ui.interacted()
                                 onRotationChange((degrees + 90) % 360)
                             }
                         },
                         showFullscreenToggle = showFullscreenToggle,
+                        isPlaying = isPlaying,
+                        onPlayPause = {
+                            ui.interacted()
+                            onPlayPause()
+                        },
+                        onTracksClick = {
+                            ui.interacted()
+                            ui.openSheet = PlayerSheet.Tracks
+                        }.takeIf { hasTracksEntry && embedded },
+                        onStatsClick = {
+                            ui.interacted()
+                            ui.openSheet = PlayerSheet.Stats
+                        }.takeIf { playbackStats != null && embedded },
                         embedded = embedded,
                         onToggleFullscreen = {
                             ui.interacted()
@@ -555,6 +581,53 @@ fun MobilePlayerControls(
                                 exit = slideOutVertically(motion.fastSpatialSpec()) { it / 2 },
                             ),
                     )
+                }
+            }
+
+            if (embedded && errorMessage == null && !ui.isEditingCropRegion && !ui.isLocked) {
+                val barEmphasized = chromeVisible || embeddedScrubPositionMillis != null || seekPreviewMillis != null
+                PlayerSeekBar(
+                    positionMillis = positionMillis,
+                    previewMillis = seekPreviewMillis,
+                    durationMillis = durationMillis,
+                    bufferedPositionMillis = bufferedPositionMillis,
+                    onSeek = {
+                        ui.interacted()
+                        onSeek(it)
+                    },
+                    thumbOnHoverOnly = false,
+                    onScrub = { target ->
+                        embeddedScrubPositionMillis = target
+                        if (target != null) ui.interacted()
+                    },
+                    edgeAligned = true,
+                    emphasized = barEmphasized,
+                    // 进度条自己的绘制边界会裁掉下半圆；圆点交给下面同级的 Canvas 画。
+                    thumbVisible = false,
+                    onVisualFraction = { embeddedSeekFraction = it },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
+                )
+                if (barEmphasized) {
+                    val thumbColor = MaterialTheme.colorScheme.primary
+                    Canvas(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(EmbeddedSeekBarHeight)
+                            .zIndex(2f),
+                    ) {
+                        val inset = EmbeddedSeekBarInset.toPx()
+                        drawCircle(
+                            color = thumbColor,
+                            radius = EmbeddedSeekBarThumbRadius.toPx(),
+                            center = Offset(
+                                x = inset + (size.width - 2 * inset) * embeddedSeekFraction,
+                                y = size.height,
+                            ),
+                        )
+                    }
                 }
             }
 
@@ -583,7 +656,7 @@ fun MobilePlayerControls(
             )
 
             AnimatedVisibility(
-                visible = ui.controlsVisible && errorMessage == null && !ui.isEditingCropRegion,
+                visible = ui.controlsVisible && !embedded && errorMessage == null && !ui.isEditingCropRegion,
                 enter = fadeIn(motion.defaultEffectsSpec()),
                 exit = fadeOut(motion.fastEffectsSpec()),
                 modifier = Modifier

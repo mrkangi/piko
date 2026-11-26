@@ -35,8 +35,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import dev.piko.shared.i18n.enCount
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.media.player.PlaylistEntry
@@ -84,7 +86,10 @@ internal fun VideoDetailPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(stageHeight)
-                    .background(Color.Black),
+                    .background(Color.Black)
+                    // 贴底进度条的圆点允许轻微进入下方正文，抬高整块舞台即可让它画在正文之上。
+                    .zIndex(1f)
+                    .graphicsLayer { clip = false },
             ) {
                 player(
                     Modifier.fillMaxSize(),
