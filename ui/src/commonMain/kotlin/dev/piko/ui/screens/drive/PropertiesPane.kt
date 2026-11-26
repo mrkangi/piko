@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.piko.data.repository.isPlayableVideo
 import dev.piko.shared.data.FolderUsage
 import dev.piko.shared.data.isDriveFolderId
+import dev.piko.shared.data.isNetworkMount
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.state.DriveItemName
 import dev.piko.ui.LocalPikoServices
@@ -213,8 +214,18 @@ private fun SingleDetails(
             if (file.isFolder) {
                 val typeField = DetailField(
                     label = tr("类型", "Type", "種類", "유형", "類型"),
-                    value = if (dev.piko.shared.data.LocalLocation.of(file.id)?.segments?.isEmpty() == true) tr("本机挂载文件夹", "Mounted local folder", "ローカルマウントフォルダー", "로컬 마운트 폴더", "本機掛載資料夾") else tr("文件夹", "Folder", "フォルダー", "폴더", "資料夾"),
-                    supportingText = if (dev.piko.shared.data.LocalLocation.isLocal(file.id)) tr("本机只读挂载，未上传至云端", "Read-only local mount; not uploaded to cloud", "ローカル読み取り専用マウント。クラウドには未アップロード", "로컬 읽기 전용 마운트. 클라우드에 업로드되지 않음", "本機唯讀掛載，未上傳至雲端") else null,
+                    value = if (dev.piko.shared.data.LocalLocation.of(file.id)?.segments?.isEmpty() == true) {
+                        if (file.isNetworkMount) {
+                            tr("网络挂载文件夹", "Mounted network folder", "ネットワークマウントフォルダー", "네트워크 마운트 폴더", "網路掛載資料夾")
+                        } else {
+                            tr("本机挂载文件夹", "Mounted local folder", "ローカルマウントフォルダー", "로컬 마운트 폴더", "本機掛載資料夾")
+                        }
+                    } else tr("文件夹", "Folder", "フォルダー", "폴더", "資料夾"),
+                    supportingText = when {
+                        file.isNetworkMount -> tr("网络只读挂载，未上传至云端", "Read-only network mount; not uploaded to cloud", "ネットワーク読み取り専用マウント。クラウドには未アップロード", "네트워크 읽기 전용 마운트. 클라우드에 업로드되지 않음", "網路唯讀掛載，未上傳至雲端")
+                        dev.piko.shared.data.LocalLocation.isLocal(file.id) -> tr("本机只读挂载，未上传至云端", "Read-only local mount; not uploaded to cloud", "ローカル読み取り専用マウント。クラウドには未アップロード", "로컬 읽기 전용 마운트. 클라우드에 업로드되지 않음", "本機唯讀掛載，未上傳至雲端")
+                        else -> null
+                    },
                 )
                 val usageField = usage.takeIf { it.isNotEmpty() }?.let { DetailField(tr("内容", "Contents", "内容", "내용", "內容"), it) }
                 if (usageField != null) add(DetailRow.PairRow(typeField, usageField)) else add(DetailRow.Single(typeField))
@@ -338,6 +349,9 @@ private fun FolderDetails(target: PropertiesTarget.Folder) {
     val driveRepo = LocalPikoServices.current.driveRepository
     val vaultedFolders by driveRepo.vaultedFolders.collectAsStateWithLifecycle()
     val fullyVaultedFolders by driveRepo.fullyVaultedFolders.collectAsStateWithLifecycle()
+    val networkMount = remember(target.id) {
+        driveRepo.localMounts.findCached(target.id)?.isNetworkMount == true
+    }
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Surface(
@@ -386,6 +400,7 @@ private fun FolderDetails(target: PropertiesTarget.Folder) {
             }
             if (target.id.isNotEmpty()) {
                 when {
+                    networkMount -> add(DetailRow.Single(DetailField(tr("挂载状态", "Mount status", "マウント状態", "마운트 상태", "掛載狀態"), tr("网络只读挂载，未上传至云端", "Read-only network mount; not uploaded to cloud", "ネットワーク読み取り専用マウント。クラウドには未アップロード", "네트워크 읽기 전용 마운트. 클라우드에 업로드되지 않음", "網路唯讀掛載，未上傳至雲端"))))
                     dev.piko.shared.data.LocalLocation.isLocal(target.id) -> add(DetailRow.Single(DetailField(tr("挂载状态", "Mount status", "マウント状態", "마운트 상태", "掛載狀態"), tr("本机只读挂载，未上传至云端", "Read-only local mount; not uploaded to cloud", "ローカル読み取り専用マウント。クラウドには未アップロード", "로컬 읽기 전용 마운트. 클라우드에 업로드되지 않음", "本機唯讀掛載，未上傳至雲端"))))
                     target.id in fullyVaultedFolders -> add(DetailRow.Single(DetailField(tr("归档状态", "Archive status", "アーカイブ状態", "보관 상태", "歸檔狀態"), tr("完全归档（仅保留引用，不占网盘空间）", "Fully archived (references only; no cloud storage used)", "完全アーカイブ（参照のみ、ドライブ容量を使用しません）", "전체 보관 (참조만 유지, 클라우드 공간 사용 안 함)", "完全歸檔（僅保留引用，不占雲端硬碟空間）"))))
                     target.id in vaultedFolders -> add(DetailRow.Single(DetailField(tr("归档状态", "Archive status", "アーカイブ状態", "보관 상태", "歸檔狀態"), tr("部分归档（包含归档引用）", "Partially archived (includes archive references)", "一部アーカイブ（アーカイブ参照を含む）", "일부 보관 (보관 참조 포함)", "部分歸檔（包含歸檔引用）"))))

@@ -15,7 +15,7 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 @Serializable
-enum class LocalMountKind { LOCAL, SMB }
+enum class LocalMountKind { LOCAL, SMB, WEBDAV }
 
 /** SMB2/3 共享的只读位置。密码不在这里，按设备与挂载 ID 存进平台机密存储。 */
 @Serializable
@@ -62,6 +62,66 @@ data class SmbMountInfo(
     }
 }
 
+/** WebDAV 服务器上的只读目录。密码不在这里，按设备与挂载 ID 存进平台机密存储。 */
+@Serializable
+data class WebDavMountInfo(
+    /** 已规整的目录地址，不含末尾斜杠，例如 `https://nas.local:5006/dav/media`。 */
+    val url: String,
+    val username: String = "",
+) {
+    init {
+        require(url.isNotBlank() && url.length <= 2048)
+        require(url.none { it == ' ' || it == '\n' || it == '\r' || it == '\t' })
+        require('?' !in url && '#' !in url)
+        val scheme = url.substringBefore("://", "").lowercase()
+        require(scheme == "http" || scheme == "https")
+        val authority = url.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#')
+        require(authority.isNotBlank() && '@' !in authority)
+    }
+
+    val defaultName: String
+        get() {
+            val last = url.substringAfter("://").substringAfter('/', "").trim('/').substringAfterLast('/')
+            return decodeWebDavSegment(last).ifBlank {
+                url.substringAfter("://").substringBefore('/').substringBefore(':')
+            }
+        }
+
+    companion object {
+        /** 允许省略协议（按 https 处理），也接受末尾斜杠与 `http://`/`https://` 两种写法。 */
+        fun parse(raw: String): WebDavMountInfo? {
+            val text = raw.trim()
+            if (text.isEmpty()) return null
+            val withScheme = if ("://" in text) text else "https://$text"
+            return runCatching { WebDavMountInfo(withScheme.trimEnd('/')) }.getOrNull()
+        }
+    }
+}
+
+private fun decodeWebDavSegment(encoded: String): String {
+    if ('%' !in encoded) return encoded
+    val out = ByteArray(encoded.length)
+    var write = 0
+    var i = 0
+    while (i < encoded.length) {
+        val c = encoded[i]
+        if (c == '%' && i + 2 < encoded.length) {
+            val hi = encoded[i + 1].digitToIntOrNull(16)
+            val lo = encoded[i + 2].digitToIntOrNull(16)
+            if (hi != null && lo != null) {
+                out[write++] = ((hi shl 4) or lo).toByte()
+                i += 3
+                continue
+            }
+        }
+        val bytes = c.toString().encodeToByteArray()
+        bytes.copyInto(out, write)
+        write += bytes.size
+        i++
+    }
+    return out.decodeToString(0, write)
+}
+
 @Serializable
 data class LocalMount(
     val mountId: String,
@@ -73,14 +133,17 @@ data class LocalMount(
     val lanShared: Boolean = false,
     val kind: LocalMountKind = LocalMountKind.LOCAL,
     val smb: SmbMountInfo? = null,
+    val webDav: WebDavMountInfo? = null,
 ) {
     val isSmb: Boolean get() = kind == LocalMountKind.SMB
+    val isWebDav: Boolean get() = kind == LocalMountKind.WEBDAV
+    val isNetworkMount: Boolean get() = isSmb || isWebDav
     val location: LocalLocation get() = LocalLocation(mountId)
     fun toFileStat(thumbnailLink: String = "") = FileStat(id = location.id, name = fallbackName, parentId = DeviceLocation.SELF_ID,
         kind = io.github.nihildigit.pikpak.FileKind.FOLDER, thumbnailLink = thumbnailLink,
         params = buildMap {
             put("local_path", localRootUriOrPath)
-            if (isSmb) put("local_kind", "smb")
+            if (isSmb) put("local_kind", "smb") else if (isWebDav) put("local_kind", "webdav")
         },
         createdTime = kotlin.time.Instant.fromEpochMilliseconds(createdAtMs).toString())
 }
@@ -144,6 +207,8 @@ interface LocalFileAccess {
     suspend fun streamUrl(mount: LocalMount, location: LocalLocation): String? = null
     /** 给挂载对话框做连接测试；不支持网络挂载的来源抛异常或返回。 */
     suspend fun testSmb(info: SmbMountInfo, password: String) {}
+    /** 给 WebDAV 挂载对话框做连接测试；不支持时抛异常或返回。 */
+    suspend fun testWebDav(info: WebDavMountInfo, password: String) {}
     fun closeMount(mountId: String) {}
     fun folderCover(mount: LocalMount, location: LocalLocation = mount.location): String = ""
     fun cancelPending() {}
@@ -272,6 +337,55 @@ class LocalMounts(
         }.testSmb(info, password)
     }
 
+    suspend fun mountWebDav(info: WebDavMountInfo, name: String, password: String): LocalMountOutcome = lock.withLock {
+        val owner = requireNotNull(account())
+        val currentEntries = read()
+        val existing = currentEntries.firstOrNull {
+            it.account == owner && it.kind == LocalMountKind.WEBDAV && it.webDav?.url == info.url
+        }
+        if (existing != null) {
+            if (password.isNotEmpty()) {
+                requireNotNull(secrets) { dev.piko.shared.i18n.tr("挂载密码保管处不可用", "Mount password storage is unavailable", "マウントパスワードを保存できません", "마운트 비밀번호를 저장할 수 없습니다", "無法儲存掛載密碼") }
+                    .saveLocalMountPassword(owner, existing.mountId, password)
+                runCatching { access?.closeMount(existing.mountId) }
+            }
+            cached = currentEntries
+            return@withLock LocalMountOutcome(existing, alreadyMounted = true)
+        }
+        val entry = LocalMount(
+            mountId = Uuid.random().toString(),
+            account = owner,
+            localRootUriOrPath = info.url,
+            fallbackName = name.ifBlank { info.defaultName },
+            createdAtMs = Clock.System.now().toEpochMilliseconds(),
+            kind = LocalMountKind.WEBDAV,
+            webDav = info,
+        )
+        val entries = currentEntries + entry
+        check(owner == account())
+        requireNotNull(preferences).saveLocalMounts(json.encodeToString(entries))
+        try {
+            if (password.isNotEmpty()) {
+                requireNotNull(secrets) { dev.piko.shared.i18n.tr("挂载密码保管处不可用", "Mount password storage is unavailable", "マウントパスワードを保存できません", "마운트 비밀번호를 저장할 수 없습니다", "無法儲存掛載密碼") }
+                    .saveLocalMountPassword(owner, entry.mountId, password)
+            }
+        } catch (error: Throwable) {
+            val rolledBack = currentEntries
+            runCatching { requireNotNull(preferences).saveLocalMounts(json.encodeToString(rolledBack)) }
+            cached = rolledBack
+            throw error
+        }
+        cached = entries
+        changed(setOf(DeviceLocation.SELF_ID))
+        LocalMountOutcome(entry, alreadyMounted = false)
+    }
+
+    suspend fun testWebDav(info: WebDavMountInfo, password: String) {
+        requireNotNull(access) {
+            dev.piko.shared.i18n.tr("网络挂载不可用", "Network mounts are unavailable", "ネットワークマウントを利用できません", "네트워크 마운트를 사용할 수 없습니다", "網路掛載無法使用")
+        }.testWebDav(info, password)
+    }
+
     suspend fun mountOrExisting(path: String, name: String): LocalMountOutcome = lock.withLock {
         require(path.isNotBlank())
         val owner = requireNotNull(account())
@@ -351,7 +465,7 @@ class LocalMounts(
         val location = LocalLocation.of(id) ?: return null
         val mount = find(id) ?: error("本地文件夹已取消挂载")
         val reader = requireNotNull(access) { "本机文件夹不可访问" }
-        if (mount.isSmb) {
+        if (mount.isNetworkMount) {
             if (!subtitle) return null
             return safeRead { reader.streamUrl(mount, location) }
         }
@@ -361,7 +475,7 @@ class LocalMounts(
     suspend fun streamUrl(id: String): String? {
         val location = LocalLocation.of(id) ?: return null
         val mount = find(id) ?: return null
-        if (!mount.isSmb) return null
+        if (!mount.isNetworkMount) return null
         return safeRead { access?.streamUrl(mount, location) }
     }
     suspend fun probe(id: String): FileStat? {

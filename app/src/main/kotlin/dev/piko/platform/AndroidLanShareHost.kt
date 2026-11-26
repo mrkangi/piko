@@ -321,12 +321,14 @@ class AndroidLanShareHost(
 
     private fun publishedShares(): List<LanShareDescriptor> = runBlocking {
         repository.localMounts.all()
-            .filter { it.lanShared && !it.isSmb }
+            .filter { it.lanShared && it.kind == dev.piko.shared.data.LocalMountKind.LOCAL }
             .map { LanShareDescriptor(shareId = it.mountId, name = it.fallbackName) }
     }
 
     private suspend fun mountFor(shareId: String): LocalMount? =
-        repository.localMounts.all().firstOrNull { it.mountId == shareId && it.lanShared && !it.isSmb }
+        repository.localMounts.all().firstOrNull {
+            it.mountId == shareId && it.lanShared && it.kind == dev.piko.shared.data.LocalMountKind.LOCAL
+        }
 
     private suspend fun listShare(shareId: String, relativePath: String): List<FileStat> {
         val mount = mountFor(shareId) ?: throw LanShareException("share_not_found")

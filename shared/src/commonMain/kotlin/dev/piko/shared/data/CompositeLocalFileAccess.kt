@@ -2,13 +2,15 @@ package dev.piko.shared.data
 
 import io.github.nihildigit.pikpak.FileStat
 
-/** 本机路径/SAF 与 SMB 各有一个来源，按挂载类型分派。 */
+/** 本机路径/SAF、SMB 与 WebDAV 各有一个来源，按挂载类型分派。 */
 class CompositeLocalFileAccess(
     private val local: LocalFileAccess?,
     private val smb: LocalFileAccess?,
+    private val webDav: LocalFileAccess? = null,
 ) : LocalFileAccess {
     private fun source(mount: LocalMount): LocalFileAccess = when {
         mount.isSmb -> requireNotNull(smb) { "SMB 挂载不可用" }
+        mount.isWebDav -> requireNotNull(webDav) { "WebDAV 挂载不可用" }
         else -> requireNotNull(local) { "本机文件夹不可访问" }
     }
 
@@ -31,18 +33,27 @@ class CompositeLocalFileAccess(
         requireNotNull(smb) { "SMB 挂载不可用" }.testSmb(info, password)
     }
 
+    override suspend fun testWebDav(info: WebDavMountInfo, password: String) {
+        requireNotNull(webDav) { "WebDAV 挂载不可用" }.testWebDav(info, password)
+    }
+
     override fun closeMount(mountId: String) {
         local?.closeMount(mountId)
         smb?.closeMount(mountId)
+        webDav?.closeMount(mountId)
     }
 
     override fun folderCover(mount: LocalMount, location: LocalLocation): String {
-        if (mount.isSmb) return smb?.folderCover(mount, location).orEmpty()
-        return local?.folderCover(mount, location).orEmpty()
+        return when {
+            mount.isSmb -> smb?.folderCover(mount, location).orEmpty()
+            mount.isWebDav -> webDav?.folderCover(mount, location).orEmpty()
+            else -> local?.folderCover(mount, location).orEmpty()
+        }
     }
 
     override fun cancelPending() {
         local?.cancelPending()
         smb?.cancelPending()
+        webDav?.cancelPending()
     }
 }

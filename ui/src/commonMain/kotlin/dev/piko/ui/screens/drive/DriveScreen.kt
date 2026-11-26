@@ -62,6 +62,7 @@ import dev.piko.shared.data.ScrollAnchor
 import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.data.isLocal
+import dev.piko.shared.data.isNetworkMount
 import dev.piko.shared.data.isVirtual
 import dev.piko.shared.data.isVaulted
 import dev.piko.shared.download.DriveDownloadFolderSource
@@ -102,6 +103,7 @@ import dev.piko.ui.components.RemoteSendDialog
 import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.SmbMountDialog
+import dev.piko.ui.components.WebDavMountDialog
 import dev.piko.ui.components.JellyfinDialog
 import dev.piko.ui.components.PlexLoginDialog
 import dev.piko.ui.components.PlexManageDialog
@@ -452,6 +454,7 @@ fun DriveScreen(
     val pickLocalFolder = platform.rememberLocalFolderLauncher { path, name -> viewModel.completeLocalMount(path, name) }
     var showMountChooser by remember { mutableStateOf(false) }
     var showSmbMount by remember { mutableStateOf(false) }
+    var showWebDavMount by remember { mutableStateOf(false) }
     var showJellyfin by remember { mutableStateOf(false) }
     var showPlex by remember { mutableStateOf(false) }
     var showPlexManager by remember { mutableStateOf(false) }
@@ -474,6 +477,10 @@ fun DriveScreen(
                 showMountChooser = false
                 showSmbMount = true
             },
+            onWebDav = {
+                showMountChooser = false
+                showWebDavMount = true
+            },
             onJellyfin = {
                 showMountChooser = false
                 showJellyfin = true
@@ -490,6 +497,15 @@ fun DriveScreen(
             onTest = viewModel::testSmb,
             onMount = { info, name, password ->
                 viewModel.mountSmb(info, name, password)
+            },
+        )
+    }
+    if (showWebDavMount) {
+        WebDavMountDialog(
+            onDismiss = { showWebDavMount = false },
+            onTest = viewModel::testWebDav,
+            onMount = { info, name, password ->
+                viewModel.mountWebDav(info, name, password)
             },
         )
     }
@@ -1107,7 +1123,7 @@ private fun DriveScreenContent(
             }
             file.isPlayableVideo() -> latestEvents.onNavigateToPlayer(file, currentFiles.filter { it.isPlayableVideo() && (!it.isImportPreview || it.hash.isNotBlank()) })
             file.isPreviewableImage() && file.previewImageCoverUrl().isNotBlank() -> latestEvents.onRequestImagePreview(file)
-            file.isLocal && file.params["local_kind"] == "smb" -> scope.launch {
+            file.isNetworkMount -> scope.launch {
                 services.driveRepository.localMounts.streamUrl(file.id)?.let(platform::openUrl)
             }
             file.isLocal -> platform.localFiles.openExternally(file.params["local_path"].orEmpty(), false)

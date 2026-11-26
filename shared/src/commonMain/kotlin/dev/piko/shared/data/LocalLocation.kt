@@ -42,3 +42,7 @@ data class LocalLocation(val mountId: String, val segments: List<String> = empty
 
 val FileStat.isLocal: Boolean get() = LocalLocation.isLocal(id)
 val FileStat.isLocalMountRoot: Boolean get() = LocalLocation.of(id)?.let { it.directory && it.segments.isEmpty() } == true
+
+/** 经本机回环读取的挂载（SMB / WebDAV）：不能当成本机路径交给系统打开。 */
+val FileStat.isNetworkMount: Boolean
+    get() = LocalLocation.isLocal(id) && (params["local_kind"] == "smb" || params["local_kind"] == "webdav")

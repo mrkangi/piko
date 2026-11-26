@@ -60,7 +60,9 @@ fun LanShareDialog(onDismiss: () -> Unit) {
         ?: remember { mutableStateOf(emptyList<LanPeer>()) })
     val mounts by services.driveRepository.localMounts.flow.collectAsStateWithLifecycle(emptyList())
     val account = services.driveRepository.currentAccount
-    val published = remember(mounts, account) { mounts.filter { it.account == account && !it.isSmb } }
+    val published = remember(mounts, account) {
+        mounts.filter { it.account == account && it.kind == dev.piko.shared.data.LocalMountKind.LOCAL }
+    }
     var address by remember { mutableStateOf("") }
     var port by remember { mutableStateOf(LanLocalSettings.DEFAULT_PORT.toString()) }
     var code by remember { mutableStateOf("") }

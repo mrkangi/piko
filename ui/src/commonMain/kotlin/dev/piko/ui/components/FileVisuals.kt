@@ -107,7 +107,7 @@ fun FileStat.metaParts(includeDate: Boolean = true): List<String> = buildList {
     if (isVaulted) add(tr("已归档", "Archived", "アーカイブ済み", "보관됨", "已歸檔"))
     if (isLocalMountRoot) {
         add(
-            if (params["local_kind"] == "smb") {
+            if (params["local_kind"] == "smb" || params["local_kind"] == "webdav") {
                 tr("网络挂载", "Network mount", "ネットワークマウント", "네트워크 마운트", "網路掛載")
             } else {
                 tr("本机挂载", "Local mount", "ローカルマウント", "로컬 마운트", "本機掛載")

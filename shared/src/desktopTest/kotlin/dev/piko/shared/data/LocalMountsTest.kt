@@ -61,6 +61,39 @@ class LocalMountsTest {
         assertNull(secrets.passwords["account-a" to outcome.mount.mountId])
     }
 
+    @Test fun webDavAddressesAreNormalizedAndValidated() {
+        assertEquals("https://nas.local:5006/dav/media", WebDavMountInfo.parse("nas.local:5006/dav/media/")?.url)
+        assertEquals("http://nas.local/dav", WebDavMountInfo.parse(" http://nas.local/dav/ ")?.url)
+        assertEquals("media", WebDavMountInfo.parse("https://nas.local/dav/%6Dedia/")?.defaultName)
+        assertEquals("WebDAV", WebDavMountInfo.parse("https://nas.local/dav/WebDAV")?.defaultName)
+        assertNull(WebDavMountInfo.parse(""))
+        assertNull(WebDavMountInfo.parse("https://"))
+        assertNull(WebDavMountInfo.parse("ftp://nas.local/dav"))
+        assertNull(WebDavMountInfo.parse("https://user:pass@nas.local/dav"))
+        assertNull(WebDavMountInfo.parse("https://nas.local/dav with space"))
+    }
+
+    @Test fun webDavPasswordStaysOutOfTheMountTableAndIsClearedOnUnmount() = smoke { scope ->
+        val preferences = preferences()
+        val secrets = TestSecrets()
+        val mounts = LocalMounts(preferences, { "account-a" }, {}, scope).apply { this.secrets = secrets }
+        val info = assertNotNull(WebDavMountInfo.parse("https://nas.local:5006/dav/media"))
+        val outcome = mounts.mountWebDav(info.copy(username = "piko"), name = "NAS WebDAV", password = "hunter2")
+        assertTrue(outcome.mount.isWebDav)
+        assertTrue(outcome.mount.isNetworkMount)
+        assertEquals("https://nas.local:5006/dav/media", outcome.mount.localRootUriOrPath)
+        assertEquals("webdav", outcome.mount.toFileStat().params["local_kind"])
+        assertFalse(preferences.mounts.value.contains("hunter2"))
+        assertEquals("hunter2", secrets.passwords["account-a" to outcome.mount.mountId])
+
+        val again = mounts.mountWebDav(info.copy(username = "piko"), name = "ignored", password = "")
+        assertTrue(again.alreadyMounted)
+        assertEquals(outcome.mount.mountId, again.mount.mountId)
+
+        mounts.unmount(outcome.mount.location.id)
+        assertNull(secrets.passwords["account-a" to outcome.mount.mountId])
+    }
+
     @Test fun locationsRoundTripAndRejectTraversal() {
         for (directory in listOf(false, true)) {
             val location = LocalLocation("mount-1", listOf("私人 文件夹", "episode 01.mkv"), directory)

@@ -89,6 +89,7 @@ import dev.piko.shared.media.FileClipCache
 import dev.piko.shared.media.PikoMediaRepository
 import dev.piko.shared.media.proxy.installHttpStreamSource
 import dev.piko.shared.smb.SmbFileAccess
+import dev.piko.shared.webdav.WebDavFileAccess
 import dev.piko.shared.memory.PikoMemoryGovernor
 import dev.piko.shared.memory.cacheBudget
 import dev.piko.shared.net.PikoProxySelector
@@ -712,6 +713,9 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         uploadSources = DesktopPikoUploadSources(),
         localFileAccess = { changed -> DesktopLocalFileAccess(appScope, changed) },
         smbFileAccess = SmbFileAccess { mount ->
+            sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
+        },
+        webDavFileAccess = WebDavFileAccess({ HttpClient(OkHttp) }) { mount ->
             sessionStore.loadLocalMountPassword(mount.account, mount.mountId)
         },
         localMountSecrets = sessionStore,

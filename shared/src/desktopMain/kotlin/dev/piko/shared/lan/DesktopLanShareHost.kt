@@ -248,7 +248,7 @@ class DesktopLanShareHost(
 
     private fun publishedShares(): List<LanShareDescriptor> = runBlocking {
         repository.localMounts.all()
-            .filter { it.lanShared && !it.isSmb }
+            .filter { it.lanShared && it.kind == dev.piko.shared.data.LocalMountKind.LOCAL }
             .map { LanShareDescriptor(shareId = it.mountId, name = it.fallbackName) }
     }
 

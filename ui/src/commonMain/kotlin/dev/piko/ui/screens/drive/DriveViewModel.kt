@@ -19,6 +19,7 @@ import dev.piko.shared.data.ImportPreviewLocation
 import dev.piko.shared.data.LocalMountOutcome
 import dev.piko.shared.data.PikoDriveRepository
 import dev.piko.shared.data.SmbMountInfo
+import dev.piko.shared.data.WebDavMountInfo
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.download.PikoDownloadCoordinator
 import dev.piko.shared.i18n.tr
@@ -541,6 +542,22 @@ internal class DriveViewModel(
     suspend fun mountSmb(info: SmbMountInfo, name: String, password: String): LocalMountOutcome {
         val account = driveRepo.currentAccount ?: error(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入"))
         val outcome = driveRepo.localMounts.mountSmb(info, name, password)
+        if (account == driveRepo.currentAccount) {
+            state.restoreFolderStack(
+                listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),
+            )
+            state.highlight(setOf(outcome.mount.location.id))
+        }
+        return outcome
+    }
+
+    suspend fun testWebDav(info: WebDavMountInfo, password: String) {
+        driveRepo.localMounts.testWebDav(info, password)
+    }
+
+    suspend fun mountWebDav(info: WebDavMountInfo, name: String, password: String): LocalMountOutcome {
+        val account = driveRepo.currentAccount ?: error(tr("未登录", "Not signed in", "ログインしていません", "로그인하지 않았습니다", "尚未登入"))
+        val outcome = driveRepo.localMounts.mountWebDav(info, name, password)
         if (account == driveRepo.currentAccount) {
             state.restoreFolderStack(
                 listOf(PikoDriveRepository.ROOT_BREADCRUMB, DeviceLocation.rootCrumb()),

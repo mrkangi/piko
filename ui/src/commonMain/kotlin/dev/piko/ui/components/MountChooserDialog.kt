@@ -3,8 +3,12 @@ package dev.piko.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.LiveTv
@@ -26,6 +30,7 @@ fun MountChooserDialog(
     onDismiss: () -> Unit,
     onLocalFolder: (() -> Unit)?,
     onSmbShare: () -> Unit,
+    onWebDav: () -> Unit,
     onJellyfin: () -> Unit,
     onPlex: () -> Unit,
 ) {
@@ -41,6 +46,12 @@ fun MountChooserDialog(
             title = tr("SMB 共享", "SMB share", "SMB 共有", "SMB 공유", "SMB 共用"),
             supporting = tr("连接 NAS 或电脑上的共享目录", "Connect to a share on a NAS or computer", "NAS やパソコンの共有フォルダーに接続", "NAS 또는 컴퓨터의 공유 폴더에 연결", "連線 NAS 或電腦上的共用目錄"),
             onClick = onSmbShare,
+        ),
+        MountOption(
+            icon = Icons.Outlined.Cloud,
+            title = tr("WebDAV 服务器", "WebDAV server", "WebDAV サーバー", "WebDAV 서버", "WebDAV 伺服器"),
+            supporting = tr("连接支持 WebDAV 的网盘或 NAS 目录", "Connect to a WebDAV folder on a cloud drive or NAS", "WebDAV 対応のクラウドドライブや NAS のフォルダーに接続", "WebDAV를 지원하는 클라우드 드라이브 또는 NAS 폴더에 연결", "連線支援 WebDAV 的雲端硬碟或 NAS 目錄"),
+            onClick = onWebDav,
         ),
         MountOption(
             icon = Icons.Outlined.LiveTv,
@@ -65,7 +76,7 @@ fun MountChooserDialog(
         title = { Text(tr("挂载目录", "Mount folder", "フォルダーをマウント", "폴더 마운트", "掛載目錄")) },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 options.forEachIndexed { index, option ->

@@ -40,6 +40,7 @@ import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.data.isImportPreview
 import dev.piko.shared.data.isLocal
 import dev.piko.shared.data.isLocalMountRoot
+import dev.piko.shared.data.isNetworkMount
 import dev.piko.shared.data.isVirtual
 import dev.piko.shared.data.JellyfinLocation
 import dev.piko.shared.data.PlexLocation
@@ -429,7 +430,7 @@ internal fun buildDriveOperations(
                 }
             }
             val rawLocalPath = file.params["local_path"].orEmpty()
-            if (file.isLocal && !rawLocalPath.startsWith("content://") && !rawLocalPath.startsWith("smb://")) {
+            if (file.isLocal && !file.isNetworkMount && !rawLocalPath.startsWith("content://")) {
                 add(
                     SheetAction(
                         Icons.Outlined.FolderOpen,
