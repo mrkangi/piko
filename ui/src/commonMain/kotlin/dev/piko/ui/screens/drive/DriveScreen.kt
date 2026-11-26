@@ -4,14 +4,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.DriveFolderUpload
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FabPosition
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -23,7 +27,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -32,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -45,6 +49,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isBackPressed
 import androidx.compose.ui.input.pointer.isForwardPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
@@ -92,7 +97,6 @@ import dev.piko.shared.state.InstantSheetState
 import dev.piko.shared.upload.UploadSelection
 import dev.piko.shared.upload.isUploading
 import dev.piko.ui.LocalPikoServices
-import dev.piko.ui.LocalCompactAddController
 import dev.piko.ui.LocalRootSnackbar
 import dev.piko.ui.ObserveMessages
 import dev.piko.ui.adaptive.isDesktopLayout
@@ -831,7 +835,6 @@ private fun DriveScreenContent(
 
     val platform = LocalPikoPlatform.current
     val services = LocalPikoServices.current
-    val compactAdd = LocalCompactAddController.current
     val scope = rememberCoroutineScope()
     val desktop = isDesktopLayout()
     val pathInTopBar = desktop
@@ -1342,19 +1345,31 @@ private fun DriveScreenContent(
         commands.emptyPlace -> libraryPageActions(libraryView, state.files.isEmpty(), events.onRequestLibraryConfirm) { state.files.map { it.id } }.firstOrNull()
         else -> null
     }
-    SideEffect {
-        compactAdd?.let {
-            it.canAdd = placePrimaryAction != null || (!state.isSelectionMode && (commands.addLink || commands.create || commands.paste))
+    var addSheetOpen by rememberSaveable { mutableStateOf(false) }
+    val addSheetActions = buildList {
+        if (commands.addLink) {
+            add(
+                SheetAction(
+                    Icons.Outlined.Bolt,
+                    if (instantState != null) tr("继续添加链接", "Add more links", "リンクを追加する", "링크 계속 추가", "繼續新增連結") else tr("添加链接", "Add link", "リンクを追加", "링크 추가", "新增連結"),
+                    events.onOpenAddLink,
+                    group = ActionGroup.Create,
+                    pending = addLink.hasCollapsedWork,
+                ),
+            )
+        }
+        if (commands.create) {
+            add(SheetAction(Icons.Outlined.CreateNewFolder, tr("新建文件夹", "New folder", "新規フォルダー", "새 폴더", "新增資料夾"), events.onRequestNewFolder, group = ActionGroup.Create))
+            snapshot.mountAction?.let { add(it) }
+            add(SheetAction(Icons.Outlined.UploadFile, tr("上传文件", "Upload files", "ファイルをアップロード", "파일 업로드", "上傳檔案"), events.onPickFiles, group = ActionGroup.Create))
+            add(SheetAction(Icons.Outlined.DriveFolderUpload, tr("上传文件夹", "Upload folder", "フォルダーをアップロード", "폴더 업로드", "上傳資料夾"), events.onPickFolder, group = ActionGroup.Create))
+        }
+        if (commands.paste) {
+            add(SheetAction(Icons.Outlined.ContentPaste, tr("粘贴", "Paste", "貼り付け", "붙여넣기", "貼上"), state::paste, group = ActionGroup.Edit))
         }
     }
-    var addMenuOpenRequest by remember { mutableIntStateOf(0) }
-    var lastCompactAddRequest by remember { mutableIntStateOf(compactAdd?.request ?: 0) }
-    LaunchedEffect(compactAdd?.request) {
-        val request = compactAdd?.request ?: 0
-        if (request != lastCompactAddRequest) {
-            lastCompactAddRequest = request
-            if (placePrimaryAction != null) placePrimaryAction.onClick() else addMenuOpenRequest++
-        }
+    val compactAddAction = placePrimaryAction ?: addSheetActions.takeIf { it.isNotEmpty() }?.let {
+        SheetAction(Icons.Outlined.Add, tr("新建", "New", "新規", "새로 만들기", "新增"), { addSheetOpen = true })
     }
 
     val addressBar: @Composable () -> Unit = {
@@ -1410,14 +1425,44 @@ private fun DriveScreenContent(
         gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
     }
     var compactToolsCollapsed by remember { mutableStateOf(false) }
-    LaunchedEffect(gridState) {
-        snapshotFlow { gridState.firstVisibleItemIndex }.collect { index ->
-            if (index > 0) {
-                compactToolsCollapsed = true
-            } else if (gridState.firstVisibleItemScrollOffset == 0) {
-                compactToolsCollapsed = false
+    val toolsScrollThreshold = with(LocalDensity.current) { 12.dp.roundToPx() }
+    LaunchedEffect(gridState, toolsScrollThreshold) {
+        var lastIndex = gridState.firstVisibleItemIndex
+        var lastOffset = gridState.firstVisibleItemScrollOffset
+        var accumulated = 0
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                when {
+                    index == 0 && offset == 0 -> {
+                        compactToolsCollapsed = false
+                        accumulated = 0
+                    }
+                    index > lastIndex -> {
+                        compactToolsCollapsed = true
+                        accumulated = 0
+                    }
+                    index < lastIndex -> {
+                        compactToolsCollapsed = false
+                        accumulated = 0
+                    }
+                    else -> {
+                        val delta = offset - lastOffset
+                        accumulated = if (accumulated == 0 || (accumulated > 0) == (delta > 0)) accumulated + delta else delta
+                        when {
+                            accumulated >= toolsScrollThreshold -> {
+                                compactToolsCollapsed = true
+                                accumulated = 0
+                            }
+                            accumulated <= -toolsScrollThreshold -> {
+                                compactToolsCollapsed = false
+                                accumulated = 0
+                            }
+                        }
+                    }
+                }
+                lastIndex = index
+                lastOffset = offset
             }
-        }
     }
     val onDuplicateKindChange: (DuplicateKind) -> Unit = { kind ->
         state.exitSelection()
@@ -1494,7 +1539,6 @@ private fun DriveScreenContent(
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (pathInTopBar) MaterialTheme.colorScheme.frame else MaterialTheme.colorScheme.background,
-                floatingActionButtonPosition = if (pathInTopBar) FabPosition.End else FabPosition.Start,
                 snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                 topBar = {
                     if (pathInTopBar) {
@@ -1591,6 +1635,7 @@ private fun DriveScreenContent(
                             onViewModeChange = events.onSelectViewMode,
                             onTileSizeChange = events.onSelectTileSize,
                             onGalleryShowImagesChange = events.onSetGalleryShowImages,
+                            addAction = compactAddAction,
                             toolsCollapsed = compactToolsCollapsed,
                         )
                     }
@@ -1605,27 +1650,6 @@ private fun DriveScreenContent(
                             } else emptyList(),
                             onOpenSelectionActions = events.onOpenSelectionSheet,
                         )
-                    }
-                },
-                floatingActionButton = {
-                    if (!pathInTopBar) {
-                        Box(Modifier.offset(y = 6.dp)) {
-                            DriveAddFabMenu(
-                                acceptsNavigation = snapshot.acceptsNavigation,
-                                isSelectionMode = state.isSelectionMode,
-                                commands = commands,
-                                placePrimaryAction = placePrimaryAction,
-                                openRequest = addMenuOpenRequest,
-                                anchorOnly = !pathInTopBar,
-                                hasActiveInstantDraft = instantState != null,
-                                hasCollapsedAddLinkWork = addLink.hasCollapsedWork,
-                                mountAction = snapshot.mountAction,
-                                onPaste = state::paste,
-                                onOpenAddLink = events.onOpenAddLink,
-                                onNewFolder = events.onRequestNewFolder,
-                                onPickFiles = events.onPickFiles,
-                            )
-                        }
                     }
                 },
             ) { innerPadding ->
@@ -1744,6 +1768,13 @@ private fun DriveScreenContent(
         onOpenFromMap = ::openFromMap,
         onDismissSheet = events.onDismissSheet,
     )
+
+    if (addSheetOpen) {
+        DriveAddSheet(
+            actions = addSheetActions,
+            onDismiss = { addSheetOpen = false },
+        )
+    }
 }
 
 @Composable

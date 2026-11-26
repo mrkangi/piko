@@ -11,21 +11,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Sort
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -54,30 +57,21 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.SwipeVertical
 import androidx.compose.material.icons.outlined.Tab
 import androidx.compose.material.icons.outlined.UploadFile
-import androidx.compose.material3.FloatingActionButtonMenu
-import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.ToggleFloatingActionButton
-import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -108,21 +102,20 @@ import dev.piko.ui.components.ActionGroup
 import dev.piko.ui.components.AdaptiveBar
 import dev.piko.ui.components.BarItem
 import dev.piko.ui.components.ContributePaletteItems
+import dev.piko.ui.components.DetailActions
 import dev.piko.ui.components.OverflowMenu
 import dev.piko.ui.components.PaletteItem
-import dev.piko.ui.components.PendingBadge
 import dev.piko.ui.components.PinnedPriority
-import dev.piko.ui.components.PrimaryActionFab
+import dev.piko.ui.components.PikoSheet
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.TooltipIconButton
 import dev.piko.ui.components.iconBarItem
 import dev.piko.ui.components.islandTopStart
+import dev.piko.ui.components.layoutActions
 import dev.piko.ui.i18n.stringResource
 import dev.piko.ui.platform.ShortcutModifier
 import dev.piko.ui.resources.Res
-import dev.piko.ui.resources.text_new_folder
 import dev.piko.ui.resources.text_paste
-import dev.piko.ui.resources.text_upload_files
 import dev.piko.ui.theme.IslandCorner
 import dev.piko.ui.theme.IslandGap
 import dev.piko.ui.theme.islandHeader
@@ -351,7 +344,7 @@ internal fun DriveDesktopHeader(
     }
 }
 
-/** 手机浏览态顶栏：标题与分区放一行，搜索与标签总览贴右；工具条另起 40dp。 */
+/** 手机浏览态顶栏：标题与分区放一行，搜索、新建与标签总览贴右；工具条另起 40dp。 */
 @Composable
 private fun CompactBrowseTopBar(
     title: String,
@@ -360,10 +353,15 @@ private fun CompactBrowseTopBar(
     onSectionSelected: (Int) -> Unit,
     navigationIcon: (@Composable () -> Unit)?,
     onSearch: () -> Unit,
+    addAction: SheetAction?,
     collapsed: Boolean,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(if (collapsed) 52.dp else 56.dp).padding(start = 4.dp, end = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+            .height(if (collapsed) 52.dp else 56.dp)
+            .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         navigationIcon?.invoke()
@@ -377,6 +375,9 @@ private fun CompactBrowseTopBar(
             if (!collapsed) SectionJumper(currentSection, sections, onSectionSelected, compact = true)
         }
         CompactIconButton(Icons.Outlined.Search, tr("搜索", "Search", "検索", "검색", "搜尋"), onSearch, size = 40.dp)
+        addAction?.let { action ->
+            CompactIconButton(action.icon, action.label, action.onClick, destructive = action.destructive, size = 40.dp)
+        }
         WorkspaceControls(compact = true)
     }
 }
@@ -387,6 +388,7 @@ private fun CompactIconButton(
     label: String,
     onClick: () -> Unit,
     selected: Boolean = false,
+    destructive: Boolean = false,
     size: Dp = 32.dp,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -402,7 +404,11 @@ private fun CompactIconButton(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+            tint = when {
+                destructive -> colors.error
+                selected -> colors.onSecondaryContainer
+                else -> colors.onSurfaceVariant
+            },
             modifier = Modifier.size(18.dp),
         )
     }
@@ -531,6 +537,7 @@ internal fun DriveCompactHeader(
     onViewModeChange: (DriveViewMode) -> Unit,
     onTileSizeChange: (TileSize) -> Unit,
     onGalleryShowImagesChange: (Boolean) -> Unit,
+    addAction: SheetAction?,
     toolsCollapsed: Boolean,
 ) {
     val isSearchOpen = state.isSearchOpen
@@ -577,6 +584,7 @@ internal fun DriveCompactHeader(
                     else -> null
                 },
                 onSearch = state::openSearch,
+                addAction = addAction,
                 collapsed = toolsCollapsed,
             )
         }
@@ -708,107 +716,25 @@ internal fun DriveCompactSelectionBar(
     }
 }
 
-/**
- * 移动端添加菜单 FAB：菜单展开状态（UI element state）完全内聚于本叶子组件内部（遵循 Compose State Hoisting 最小公共祖先原则），
- * 展开/收起时不触发外层网盘列表重组。
- */
+/** 紧凑顶栏加号打开的新建面板：统一用全宽分段列表，避免锚定 FAB 时菜单宽度与按钮对不齐。 */
 @Composable
-internal fun DriveAddFabMenu(
-    acceptsNavigation: Boolean,
-    isSelectionMode: Boolean,
-    commands: DriveCommands,
-    placePrimaryAction: SheetAction?,
-    openRequest: Int = 0,
-    anchorOnly: Boolean = false,
-    hasActiveInstantDraft: Boolean,
-    hasCollapsedAddLinkWork: Boolean,
-    mountAction: SheetAction?,
-    onPaste: () -> Unit,
-    onOpenAddLink: () -> Unit,
-    onNewFolder: () -> Unit,
-    onPickFiles: () -> Unit,
+internal fun DriveAddSheet(
+    actions: List<SheetAction>,
+    onDismiss: () -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    var lastOpenRequest by remember { mutableStateOf(openRequest) }
-    LaunchedEffect(openRequest) {
-        if (openRequest != lastOpenRequest) {
-            lastOpenRequest = openRequest
-            expanded = true
-        }
-    }
-    BackHandler(enabled = acceptsNavigation && expanded) { expanded = false }
-
-    if (!anchorOnly && placePrimaryAction != null) {
-        PrimaryActionFab(placePrimaryAction)
-        return
-    }
-    if (!isSelectionMode && (commands.addLink || commands.create || commands.paste)) {
-        FloatingActionButtonMenu(
-            expanded = expanded,
-            modifier = Modifier,
-            button = {
-                ToggleFloatingActionButton(
-                    checked = expanded,
-                    onCheckedChange = { expanded = it },
-                    modifier = if (anchorOnly) Modifier.alpha(0f) else Modifier,
-                ) {
-                    val icon by remember { derivedStateOf { if (checkedProgress > 0.5f) Icons.Filled.Close else Icons.Filled.Add } }
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = if (expanded) tr("收起", "Collapse", "折りたたむ", "접기", "收合") else tr("快捷操作", "Quick actions", "クイック操作", "빠른 작업", "快速操作"),
-                        modifier = Modifier.animateIcon({ checkedProgress }),
-                    )
-                }
-            },
-        ) {
-            if (commands.paste) {
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        expanded = false
-                        onPaste()
-                    },
-                    icon = { Icon(Icons.Outlined.ContentPaste, contentDescription = null) },
-                    text = { Text(stringResource(Res.string.text_paste)) },
-                )
-            }
-            if (commands.addLink) {
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        expanded = false
-                        onOpenAddLink()
-                    },
-                    icon = { PendingBadge(shown = hasCollapsedAddLinkWork) { Icon(Icons.Outlined.Bolt, contentDescription = null) } },
-                    text = { Text(if (hasActiveInstantDraft) tr("继续添加链接", "Add more links", "リンクを追加する", "링크 계속 추가", "繼續新增連結") else tr("添加链接", "Add link", "リンクを追加", "링크 추가", "新增連結")) },
-                )
-            }
-            if (commands.create) {
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        expanded = false
-                        onNewFolder()
-                    },
-                    icon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
-                    text = { Text(stringResource(Res.string.text_new_folder)) },
-                )
-                mountAction?.let { action ->
-                    FloatingActionButtonMenuItem(
-                        onClick = {
-                            expanded = false
-                            action.onClick()
-                        },
-                        icon = { Icon(action.icon, contentDescription = null) },
-                        text = { Text(action.label) },
-                    )
-                }
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        expanded = false
-                        onPickFiles()
-                    },
-                    icon = { Icon(Icons.Outlined.UploadFile, contentDescription = null) },
-                    text = { Text(stringResource(Res.string.text_upload_files)) },
-                )
-            }
+    PikoSheet(
+        onDismissRequest = onDismiss,
+        skipPartiallyExpanded = false,
+        maxHeightFraction = 0.72f,
+    ) {
+        val sheet = this
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Text(
+                tr("新建", "New", "新規", "새로 만들기", "新增"),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp),
+            )
+            DetailActions(layoutActions(actions), onAction = { sheet.hideThen(it) })
         }
     }
 }

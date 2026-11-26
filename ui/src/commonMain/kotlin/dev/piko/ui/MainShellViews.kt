@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,7 +32,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.SwapVerticalCircle
 import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderShared
@@ -48,9 +46,7 @@ import androidx.compose.material.icons.outlined.SwipeVertical
 import androidx.compose.material.icons.outlined.SwapVerticalCircle
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -58,11 +54,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TonalToggleButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
@@ -171,14 +164,6 @@ internal fun MainFeedContent(
         )
     }
 }
-
-/** 文件页向底部 dock 暴露“新建”能力；菜单本身仍留在 DriveScreen，dock 只发请求。 */
-internal class CompactAddController {
-    var request by mutableIntStateOf(0)
-    var canAdd by mutableStateOf(false)
-}
-
-internal val LocalCompactAddController = compositionLocalOf<CompactAddController?> { null }
 
 @Composable
 internal fun MainHomeContent(
@@ -307,31 +292,26 @@ internal fun MainHomeContent(
             else -> null
         }
         val selectingFiles = currentTab == MainTab.FILES && activeDriveState?.isSelectionMode == true
-        val compactAdd = remember { CompactAddController() }
-        CompositionLocalProvider(LocalCompactAddController provides compactAdd) {
-            if (sidebarMode) {
-                mainContent()
-            } else {
-                val activity = rememberTransferActivity(pollCloud = false)
-                Box(Modifier.fillMaxSize()) {
-                    if (selectingFiles) {
+        if (sidebarMode) {
+            mainContent()
+        } else {
+            val activity = rememberTransferActivity(pollCloud = false)
+            Box(Modifier.fillMaxSize()) {
+                if (selectingFiles) {
+                    mainContent()
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(bottom = if (currentTab == MainTab.FILES) 0.dp else CompactDockHeight),
+                    ) {
                         mainContent()
-                    } else {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .padding(bottom = if (currentTab == MainTab.FILES) 0.dp else CompactDockHeight),
-                        ) {
-                            mainContent()
-                        }
-                        CompactBottomDock(
-                            currentTab = currentTab,
-                            addVisible = currentTab == MainTab.FILES && onHome && compactAdd.canAdd,
-                            transferCount = activity?.count,
-                            onAddClick = { compactAdd.request++ },
-                            onTabClick = onTabClick,
-                        )
                     }
+                    CompactBottomDock(
+                        currentTab = currentTab,
+                        transferCount = activity?.count,
+                        onTabClick = onTabClick,
+                    )
                 }
             }
         }
@@ -361,13 +341,11 @@ internal fun MainHomeContent(
 
 private val CompactDockHeight = 64.dp
 
-/** 手机底部 dock：图标与文字同行；文件页左侧留出 FAB 的位置，新建键本身就是 dock 的第一段。 */
+/** 手机底部 dock：图标与文字同行，三段等分；新建入口在紧凑顶栏，不再占用底部空间。 */
 @Composable
 private fun CompactBottomDock(
     currentTab: MainTab,
-    addVisible: Boolean,
     transferCount: Int?,
-    onAddClick: () -> Unit,
     onTabClick: (MainTab) -> Unit,
 ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
@@ -384,25 +362,6 @@ private fun CompactBottomDock(
                 modifier = Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (addVisible) {
-                    Box(Modifier.width(64.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                        FilledIconButton(
-                            onClick = onAddClick,
-                            shape = CircleShape,
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            ),
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Add,
-                                contentDescription = tr("新建", "New", "新規", "새로 만들기", "新增"),
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
                 MainTab.entries.forEach { tab ->
                     val selected = currentTab == tab
                     val badgeCount = transferCount?.takeIf { tab == MainTab.TRANSFERS && !selected && it > 0 }
