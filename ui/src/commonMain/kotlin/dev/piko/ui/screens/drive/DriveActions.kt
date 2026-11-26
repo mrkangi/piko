@@ -149,7 +149,13 @@ internal object DriveActions {
     fun openInExternalPlayer(onClick: () -> Unit) =
         SheetAction(Icons.Outlined.OndemandVideo, tr("用外部播放器打开", "Open in external player", "外部プレーヤーで開く", "외부 플레이어에서 열기", "使用外部播放器開啟"), onClick, group = ActionGroup.Open)
 
-    fun extract(onClick: () -> Unit) = SheetAction(Icons.Outlined.Unarchive, tr("解压到当前位置", "Extract here", "ここに解凍", "여기에 압축 해제", "解壓縮至目前位置"), onClick, group = ActionGroup.Open)
+    fun extract(onClick: () -> Unit) = SheetAction(
+        Icons.Outlined.Unarchive,
+        tr("解压到当前位置", "Extract here", "ここに解凍", "여기에 압축 해제", "解壓縮至目前位置"),
+        onClick,
+        group = ActionGroup.Open,
+        shortLabel = tr("全部解压", "Extract all", "すべて解凍", "모두 압축 해제", "全部解壓縮"),
+    )
 
     /** 在压缩包里解压选中的几项。不写「到当前位置」：当前位置是包里，解压出来的落在压缩包所在的文件夹。 */
     fun extractEntries(onClick: () -> Unit) = SheetAction(Icons.Outlined.Unarchive, tr("解压到压缩包旁", "Extract beside archive", "圧縮ファイルと同じ場所に解凍", "압축 파일 옆에 해제", "解壓縮至壓縮檔所在資料夾"), onClick, group = ActionGroup.Open)

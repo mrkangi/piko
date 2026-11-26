@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Piko · 移动端预览总览</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0;
+    background: #edf0f7;
+    color: #273044;
+    font: 15px/1.5 "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { padding: 34px 38px 42px; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -.02em; }
+  .sub { margin: 5px 0 26px; color: #5a6476; font-size: 14px; }
+  .row { display: flex; align-items: flex-start; gap: 24px; }
+  figure { margin: 0; }
+  img { width: 300px; display: block; border-radius: 20px; box-shadow: 0 14px 38px rgba(38, 55, 86, .14); }
+  figcaption { margin-top: 10px; color: #5a6476; font-size: 13px; }
+  .notes { margin-top: 28px; display: flex; gap: 18px; }
+  .note { flex: 1; background: #f7f8fc; border: 1px solid #dfe3ec; border-radius: 14px; padding: 14px 16px; }
+  .note strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .note span { color: #5a6476; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Piko · 移动端文件预览</h1>
+  <div class="sub">真实 HTML / Piko 主题色渲染 · 固定视频区 + 紧凑双列操作 · 412 × 892</div>
+  <div class="row">
+    <figure><img src="01-video-paused.png"><figcaption>视频：默认出首帧，不自动播放</figcaption></figure>
+    <figure><img src="02-video-playing.png"><figcaption>播放中：进度、静音、全屏入口</figcaption></figure>
+    <figure><img src="03-document.png"><figcaption>文档：类型图标占位</figcaption></figure>
+    <figure><img src="04-spoiler-blur.png"><figcaption>防窥：先模糊，显式显示预览</figcaption></figure>
+    <figure><img src="05-video-dark.png"><figcaption>深色主题</figcaption></figure>
+  </div>
+  <div class="notes">
+    <div class="note"><strong>操作密度</strong><span>4 个高频动作保持大触控面，其余动作收进 2 列，避免整页单列长列表。</span></div>
+    <div class="note"><strong>预览固定</strong><span>视频区不随操作区滚动，标题与元信息紧贴其下，长文件名不会压住画面。</span></div>
+    <div class="note"><strong>状态不跳动</strong><span>加载、播放失败、文档与防窥都占用同一 16:9 容器，面板高度保持稳定。</span></div>
+  </div>
+</main>
+</body>
+</html>

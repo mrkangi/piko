@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Piko · 文件类型预览总览</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0;
+    background: #edf0f7;
+    color: #273044;
+    font: 15px/1.5 "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { padding: 34px 38px 42px; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -.02em; }
+  .sub { margin: 5px 0 26px; color: #5a6476; font-size: 14px; }
+  .row { display: flex; align-items: flex-start; gap: 24px; }
+  figure { margin: 0; }
+  img { width: 300px; display: block; border-radius: 20px; box-shadow: 0 14px 38px rgba(38, 55, 86, .14); }
+  figcaption { margin-top: 10px; color: #5a6476; font-size: 13px; }
+  .notes { margin-top: 28px; display: flex; gap: 18px; }
+  .note { flex: 1; background: #f7f8fc; border: 1px solid #dfe3ec; border-radius: 14px; padding: 14px 16px; }
+  .note strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .note span { color: #5a6476; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Piko · 文件类型预览</h1>
+  <div class="sub">同一套预览面板 · 文件夹 / 图片 / 音频 / 压缩包 / 未知类型 · 412 × 892</div>
+  <div class="row">
+    <figure><img src="06-folder.png"><figcaption>文件夹：打开为主操作，查找重复进次级</figcaption></figure>
+    <figure><img src="07-image.png"><figcaption>图片：直接显示照片，查看原图为主操作</figcaption></figure>
+    <figure><img src="08-audio.png"><figcaption>音频：唱片 / 波形 + 播放</figcaption></figure>
+    <figure><img src="09-archive.png"><figcaption>压缩包：打开与全部解压前置</figcaption></figure>
+    <figure><img src="10-generic.png"><figcaption>未知类型：通用文件图标兜底</figcaption></figure>
+  </div>
+  <div class="notes">
+    <div class="note"><strong>动作随类型变化</strong><span>下载、打开、全部解压、查找重复按可用能力替换，其余位置保持不变。</span></div>
+    <div class="note"><strong>图片不做模糊</strong><span>已开启防窥时图片同样先遮住；只有用户点“显示预览”后才显示缩略图。</span></div>
+    <div class="note"><strong>高度稳定</strong><span>文件夹、图片、音频、压缩包和未知类型都复用同一 16:9 预览框。</span></div>
+  </div>
+</main>
+</body>
+</html>

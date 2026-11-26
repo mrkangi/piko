@@ -187,6 +187,7 @@ private class DriveViewEvents(
     val onOpenAddLink: () -> Unit,
     val onOpenMobileGoToPath: () -> Unit,
     val onOpenSingleItemSheet: (FileStat) -> Unit,
+    val onOpenFilePreview: (FileStat) -> Unit,
     val onOpenSelectionSheet: () -> Unit,
     val onDismissSheet: () -> Unit,
     val onSelectViewMode: (DriveViewMode) -> Unit,
@@ -719,6 +720,7 @@ fun DriveScreen(
         onOpenAddLink = ::openAddLink,
         onOpenMobileGoToPath = viewModel::openMobileGoToPath,
         onOpenSingleItemSheet = { viewModel.openSingleItemActions(it, displayedFiles) },
+        onOpenFilePreview = viewModel::openFilePreview,
         onOpenSelectionSheet = { viewModel.openSelectionActions(displayedFiles) },
         onDismissSheet = viewModel::dismissSheet,
         onSelectViewMode = { viewModel.selectViewMode(it, galleryActive) },
@@ -1131,23 +1133,33 @@ private fun DriveScreenContent(
         }
     }
     val latestOpenLeafFile by rememberUpdatedState(openLeafFile)
+    val openItem: (FileStat) -> Unit = { file ->
+        when {
+            state.libraryView == DriveLibrary.TRASH -> latestEvents.onOpenSingleItemSheet(file)
+            file.isFolder -> state.openFolder(file.id, file.name)
+            file.isUploading -> scope.launch {
+                snackbarHostState.showSnackbar(
+                    tr("文件仍在上传", "File is still uploading", "ファイルはアップロード中です", "파일 업로드 중입니다", "檔案仍在上傳"),
+                    withDismissAction = true,
+                )
+            }
+            file.isExtractableArchive && !file.isLocal && !file.isVaulted && !ArchiveEntryId.isEntry(file.id) ->
+                taskSlot.claim(
+                    tr("打开压缩包", "Open archive", "圧縮ファイルを開く", "압축 파일 열기", "開啟壓縮檔"),
+                    tr("打开压缩包", "Open archive", "圧縮ファイルを開く", "압축 파일 열기", "開啟壓縮檔"),
+                    task = null,
+                    conflictsWith = setOf(TaskSlot.Task.FEED),
+                ) { state.openArchive(file) }
+            ArchiveEntryId.isEntry(file.id) -> scope.launch { state.prepareArchiveEntry(file)?.let(latestOpenLeafFile) }
+            else -> latestOpenLeafFile(file)
+        }
+    }
+    val latestOpenItem by rememberUpdatedState(openItem)
     val latestItemActions by rememberUpdatedState<(FileStat, List<FileStat>, Boolean) -> List<SheetAction>>(::itemActions)
 
     val callbacks = remember(state) {
         DriveItemCallbacks(
-            onOpen = { file ->
-                when {
-                    state.libraryView == DriveLibrary.TRASH -> latestEvents.onOpenSingleItemSheet(file)
-                    file.isFolder -> state.openFolder(file.id, file.name)
-                    file.isUploading -> scope.launch {
-                        snackbarHostState.showSnackbar(tr("文件仍在上传", "File is still uploading", "ファイルはアップロード中です", "파일 업로드 중입니다", "檔案仍在上傳"), withDismissAction = true)
-                    }
-                    file.isExtractableArchive && !file.isLocal && !file.isVaulted && !ArchiveEntryId.isEntry(file.id) ->
-                        taskSlot.claim(tr("打开压缩包", "Open archive", "圧縮ファイルを開く", "압축 파일 열기", "開啟壓縮檔"), tr("打开压缩包", "Open archive", "圧縮ファイルを開く", "압축 파일 열기", "開啟壓縮檔"), task = null, conflictsWith = setOf(TaskSlot.Task.FEED)) { state.openArchive(file) }
-                    ArchiveEntryId.isEntry(file.id) -> scope.launch { state.prepareArchiveEntry(file)?.let(latestOpenLeafFile) }
-                    else -> latestOpenLeafFile(file)
-                }
-            },
+            onOpen = { latestOpenItem(it) },
             onRename = { file ->
                 if (!file.isVirtual && !file.isUploading && !file.isImportPreview && state.libraryView != DriveLibrary.TRASH) {
                     latestEvents.onRequestRename(file)
@@ -1160,7 +1172,14 @@ private fun DriveScreenContent(
             onLongClick = { file ->
                 if (state.libraryView == DriveLibrary.DUPLICATES && file.isFolder) latestEvents.onOpenSingleItemSheet(file)
                 else if (state.isSelectionMode) state.setSelected(file.id, file.id !in state.selectedFileIds)
-                else if (!latestDesktop) latestEvents.onOpenSingleItemSheet(file)
+                else if (!latestDesktop) {
+                    val usePreview = !file.isUploading &&
+                        !file.isVirtual &&
+                        state.libraryView != DriveLibrary.TRASH &&
+                        state.archiveView == null &&
+                        state.importPreviewView == null
+                    if (usePreview) latestEvents.onOpenFilePreview(file) else latestEvents.onOpenSingleItemSheet(file)
+                }
                 else state.enterSelection(file.id)
             },
             onSelect = { file, selected -> state.setSelected(file.id, selected) },
@@ -1678,6 +1697,8 @@ private fun DriveScreenContent(
                 showProperties(files, PanelAnchor.Centered)
             }
         },
+        isSpoilerBlurEnabled = snapshot.isSpoilerBlurEnabled,
+        onOpenItem = openItem,
         onEnterSelection = { state.enterSelection(it.id) },
         onCopySource = events.onCopySource,
         onUpdateFolderStack = navigation::updateFolderStack,

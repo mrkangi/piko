@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.piko.data.repository.PathBreadcrumb
 import dev.piko.data.repository.isPreviewableImage
+import dev.piko.data.repository.isPlayableVideo
 import dev.piko.shared.data.PikoDriveRepository
 import dev.piko.shared.data.isDriveFolderId
 import dev.piko.shared.download.PikoDownloadCoordinator
@@ -234,6 +235,8 @@ internal fun DriveSheetHost(
     addressBar: @Composable () -> Unit,
     itemActionsOf: (FileStat) -> List<SheetAction>,
     selectionActionsOf: (List<FileStat>) -> List<SheetAction>,
+    isSpoilerBlurEnabled: Boolean,
+    onOpenItem: (FileStat) -> Unit,
     onEnterSelection: (FileStat) -> Unit,
     onCopySource: (FileStat) -> Unit,
     onUpdateFolderStack: (List<PathBreadcrumb>) -> Unit,
@@ -282,6 +285,27 @@ internal fun DriveSheetHost(
                     onDismissSheet()
                     onCopySource(target)
                 },
+            )
+        }
+        is DriveSheet.FilePreview -> {
+            val target = sheet.file
+            val select = if (LocalPointerSource.current.isTouchLike && !state.isSelectionMode) {
+                { onEnterSelection(target) }
+            } else {
+                null
+            }
+            val isBlurred = isSpoilerBlurEnabled &&
+                !target.isFolder &&
+                (target.isPlayableVideo() || target.isPreviewableImage()) &&
+                target.id !in state.revealedFileIds
+            FilePreviewSheet(
+                name = state.itemName(target),
+                locationLabel = rowNotes[target.id],
+                actions = withSelectAction(itemActionsOf(target), select),
+                isBlurred = isBlurred,
+                onDismiss = onDismissSheet,
+                onOpen = { onOpenItem(target) },
+                onToggleBlur = { state.toggleSpoiler(target.id) },
             )
         }
         DriveSheet.MobileGoToPath -> {

@@ -96,6 +96,8 @@ internal sealed interface DriveDialog {
 /** 网盘页底部/侧边操作面板状态（Screen UI State）。 */
 @Stable
 internal sealed interface DriveSheet {
+    data class FilePreview(val file: FileStat) : DriveSheet
+
     data class SingleItemActions(val file: FileStat) : DriveSheet
 
     data class SelectionActions(val targetIds: Set<String>) : DriveSheet
@@ -347,6 +349,10 @@ internal class DriveViewModel(
         } else {
             activeSheet = DriveSheet.SingleItemActions(file)
         }
+    }
+
+    fun openFilePreview(file: FileStat) {
+        activeSheet = DriveSheet.FilePreview(file)
     }
 
     fun openSelectionActions(displayedFiles: List<FileStat>) {
