@@ -469,7 +469,12 @@ internal fun ExploreToggleGroup(
  * 目录没有分区时不出现。窄屏挂在顶栏标题下，宽窗口在命令栏里。
  */
 @Composable
-internal fun SectionJumper(currentSection: String?, sections: List<String>, onSectionSelected: (Int) -> Unit) {
+internal fun SectionJumper(
+    currentSection: String?,
+    sections: List<String>,
+    onSectionSelected: (Int) -> Unit,
+    compact: Boolean = false,
+) {
     if (currentSection == null || sections.isEmpty()) return
     var showMenu by remember { mutableStateOf(false) }
     Box {
@@ -483,7 +488,7 @@ internal fun SectionJumper(currentSection: String?, sections: List<String>, onSe
                 text = currentSection,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.labelLarge,
+                style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f, fill = false),
             )
@@ -491,7 +496,7 @@ internal fun SectionJumper(currentSection: String?, sections: List<String>, onSe
                 imageVector = Icons.Outlined.ArrowDropDown,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(if (compact) 16.dp else 20.dp),
             )
         }
         PikoDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {

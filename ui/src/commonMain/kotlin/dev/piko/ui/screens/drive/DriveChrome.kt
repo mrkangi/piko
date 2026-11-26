@@ -1,24 +1,34 @@
 package dev.piko.ui.screens.drive
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Close
@@ -31,9 +41,11 @@ import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.DriveFolderUpload
 import androidx.compose.material.icons.outlined.FileCopy
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RestoreFromTrash
@@ -55,6 +67,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,11 +77,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.piko.data.repository.PathBreadcrumb
+import dev.piko.data.repository.FileSortOrder
+import dev.piko.data.repository.label
 import dev.piko.shared.data.DriveLibrary
+import dev.piko.shared.data.field
 import dev.piko.shared.data.isDriveFolderId
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.naming.av.hasAvCode
@@ -85,6 +108,7 @@ import dev.piko.ui.components.ActionGroup
 import dev.piko.ui.components.AdaptiveBar
 import dev.piko.ui.components.BarItem
 import dev.piko.ui.components.ContributePaletteItems
+import dev.piko.ui.components.OverflowMenu
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PendingBadge
 import dev.piko.ui.components.PinnedPriority
@@ -102,6 +126,7 @@ import dev.piko.ui.resources.text_upload_files
 import dev.piko.ui.theme.IslandCorner
 import dev.piko.ui.theme.IslandGap
 import dev.piko.ui.theme.islandHeader
+import dev.piko.ui.workbench.WorkspaceControls
 import io.github.nihildigit.pikpak.FileStat
 
 @Composable
@@ -326,6 +351,147 @@ internal fun DriveDesktopHeader(
     }
 }
 
+/** 手机浏览态顶栏：标题与分区放一行，搜索与标签总览贴右；工具条另起 40dp。 */
+@Composable
+private fun CompactBrowseTopBar(
+    title: String,
+    currentSection: String?,
+    sections: List<String>,
+    onSectionSelected: (Int) -> Unit,
+    navigationIcon: (@Composable () -> Unit)?,
+    onSearch: () -> Unit,
+    collapsed: Boolean,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(if (collapsed) 52.dp else 56.dp).padding(start = 4.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        navigationIcon?.invoke()
+        Column(Modifier.weight(1f).padding(start = 8.dp, end = 4.dp)) {
+            Text(
+                text = title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = if (collapsed) MaterialTheme.typography.titleMediumEmphasized else MaterialTheme.typography.titleLargeEmphasized,
+            )
+            if (!collapsed) SectionJumper(currentSection, sections, onSectionSelected, compact = true)
+        }
+        CompactIconButton(Icons.Outlined.Search, tr("搜索", "Search", "検索", "검색", "搜尋"), onSearch, size = 40.dp)
+        WorkspaceControls(compact = true)
+    }
+}
+
+@Composable
+private fun CompactIconButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    selected: Boolean = false,
+    size: Dp = 32.dp,
+) {
+    val colors = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (selected) colors.secondaryContainer else Color.Transparent)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun CompactSortChip(state: DriveScreenState) {
+    var open by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable { open = true }
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.AutoMirrored.Outlined.Sort, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = state.sortOrder.field.label,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Icon(Icons.Outlined.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    OverflowMenu(
+        expanded = open,
+        onDismiss = { open = false },
+        actions = sortOverflowActions(
+            sortOrder = state.sortOrder,
+            onSortChange = state::changeSortOrder,
+            perFolderSort = state.perFolderSort,
+            onPerFolderSortChange = state::setPerFolderSortEnabled,
+            foldersFirst = state.foldersFirst,
+            onFoldersFirstChange = state::updateFoldersFirst,
+        ),
+    )
+}
+
+@Composable
+private fun CompactDriveTools(
+    state: DriveScreenState,
+    viewMode: DriveViewMode,
+    tileSize: TileSize,
+    onViewModeChange: (DriveViewMode) -> Unit,
+    onTileSizeChange: (TileSize) -> Unit,
+    moreActions: List<SheetAction>,
+) {
+    var filterOpen by remember { mutableStateOf(false) }
+    var viewOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
+    val showFilter = state.typeFilter != null || state.availableTypes.size > 1
+
+    Row(
+        modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        CompactSortChip(state)
+        if (showFilter) {
+            Box {
+                CompactIconButton(Icons.Outlined.FilterList, tr("筛选", "Filter", "絞り込み", "필터", "篩選"), { filterOpen = true })
+                OverflowMenu(
+                    expanded = filterOpen,
+                    onDismiss = { filterOpen = false },
+                    actions = typeFilterOverflowActions(state.typeFilter, state.availableTypes, state::updateTypeFilter),
+                )
+            }
+        }
+        Box {
+            CompactIconButton(viewMode.icon(selected = true), tr("视图", "View", "表示", "보기", "檢視"), { viewOpen = true })
+            OverflowMenu(
+                expanded = viewOpen,
+                onDismiss = { viewOpen = false },
+                actions = viewModeOverflowActions(viewMode, onViewModeChange) + tileSizeActions(viewMode, tileSize, onTileSizeChange),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (moreActions.isNotEmpty()) {
+            Box {
+                CompactIconButton(Icons.Outlined.MoreHoriz, tr("更多", "More", "その他", "더 보기", "更多"), { moreOpen = true })
+                OverflowMenu(expanded = moreOpen, onDismiss = { moreOpen = false }, actions = moreActions)
+            }
+        }
+    }
+}
+
 @Composable
 internal fun DriveCompactHeader(
     state: DriveScreenState,
@@ -348,6 +514,7 @@ internal fun DriveCompactHeader(
     feedShown: Boolean,
     feedStashed: Boolean,
     hasFeedEntry: Boolean,
+    viewMode: DriveViewMode,
     tileSize: TileSize,
     onSelectAll: () -> Unit,
     onOpenSelectionActions: () -> Unit,
@@ -361,8 +528,10 @@ internal fun DriveCompactHeader(
     onDuplicateKindChange: (DuplicateKind) -> Unit,
     onGalleryShownChange: ((Boolean) -> Unit)?,
     onFeedShownChange: ((Boolean) -> Unit)?,
+    onViewModeChange: (DriveViewMode) -> Unit,
     onTileSizeChange: (TileSize) -> Unit,
     onGalleryShowImagesChange: (Boolean) -> Unit,
+    toolsCollapsed: Boolean,
 ) {
     val isSearchOpen = state.isSearchOpen
     Column {
@@ -383,13 +552,11 @@ internal fun DriveCompactHeader(
                 onStartGlobalSearch = state::startGlobalSearch,
                 onCancelGlobalSearch = state::cancelGlobalSearch,
             )
-            else -> DriveBrowseTopBar(
-                scrollBehavior = scrollBehavior,
+            else -> CompactBrowseTopBar(
                 title = if (folderStack.size <= rootDepth) rootTitle ?: activeFolder.localizedName else activeFolder.localizedName,
                 currentSection = currentSection.takeUnless { galleryActive },
                 sections = if (galleryActive) emptyList() else state.sectionHeaders.map { it.value.menuLabel },
                 onSectionSelected = onJumpToSection,
-                moreActions = emptyList(),
                 navigationIcon = when {
                     inDuplicates && onCloseContext != null && folderStack.size <= rootDepth -> {
                         { TooltipIconButton(Icons.Outlined.Close, tr("结束查重", "End duplicate search", "重複検索を終了", "중복 검색 종료", "結束重複檔案搜尋"), onCloseContext) }
@@ -409,52 +576,33 @@ internal fun DriveCompactHeader(
                     }
                     else -> null
                 },
-                actions = listOf(
-                    iconBarItem(Icons.Outlined.Search, tr("搜索", "Search", "検索", "검색", "搜尋"), state::openSearch, priority = 30, shortcut = shortcuts.label("F")),
-                ),
+                onSearch = state::openSearch,
+                collapsed = toolsCollapsed,
             )
         }
-        val hasMobileCommands = commands.paste || commands.findDuplicates || commands.canonicalNaming ||
-            commands.gallery || galleryActive || (commands.feed && hasFeedEntry)
-        val showMobileCommandBar = !isSearchOpen &&
-            if (inDuplicates) duplicateState != null && !duplicateState.isScanning else hasMobileCommands
-        if (showMobileCommandBar) {
-            AdaptiveBar(
-                modifier = Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 8.dp),
-                leading = if (inDuplicates && duplicateState != null && !duplicateState.isScanning) {
-                    duplicateCommandBarLeading(
+        val showDuplicateBar = !isSearchOpen && inDuplicates && duplicateState != null && !duplicateState.isScanning
+        val showTools = !isSearchOpen && !state.isSelectionMode
+        AnimatedVisibility(
+            visible = showTools && !toolsCollapsed,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
+            if (showDuplicateBar) {
+                AdaptiveBar(
+                    modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 8.dp),
+                    leading = duplicateCommandBarLeading(
                         finder = duplicateState,
                         selectedKind = duplicateReport.kind,
                         onKindChange = onDuplicateKindChange,
                         reportView = duplicateReport,
                         selectedIds = selectedIdSet,
                         onSelectIds = { ids -> if (ids.isEmpty()) state.exitSelection() else state.selectOnly(ids) },
-                    )
-                } else buildList {
-                    if (commands.paste) {
-                        add(
-                            BarItem("paste", 80, listOf(SheetAction(Icons.Outlined.ContentPaste, tr("粘贴", "Paste", "貼り付け", "붙여넣기", "貼上"), state::paste, group = ActionGroup.Edit))) {
-                                BarTextButton(Icons.Outlined.ContentPaste, tr("粘贴", "Paste", "貼り付け", "붙여넣기", "貼上"), state::paste)
-                            },
-                        )
-                    }
-                    if (commands.findDuplicates) {
-                        val action = DriveActions.findDuplicates(onFindDuplicates)
-                        add(BarItem("findDuplicates", 60, listOf(action)) { BarTextButton(action.icon, action.label, onFindDuplicates) })
-                    }
-                    if (commands.canonicalNaming) {
-                        val action = DriveActions.canonicalName(onCanonicalNaming)
-                        add(BarItem("canonicalNaming", 55, listOf(action)) { BarTextButton(action.icon, action.label, onCanonicalNaming) })
-                    }
-                },
-                moreActions = if (inDuplicates && duplicateState != null) {
-                    listOf(
+                    ),
+                    moreActions = listOf(
                         SheetAction(Icons.Outlined.Refresh, tr("重新扫描", "Scan again", "再検索", "다시 검색", "重新掃描"), duplicateState::rescan, group = ActionGroup.Refresh),
                         SheetAction(Icons.Outlined.Close, tr("结束查重", "End duplicate search", "重複検索を終了", "중복 검색 종료", "結束重複檔案搜尋"), onCloseContext ?: onEndDuplicateSession, group = ActionGroup.Refresh),
-                    )
-                } else emptyList(),
-                trailing = buildList {
-                    if (commands.gallery || galleryActive || (commands.feed && hasFeedEntry)) {
+                    ),
+                    trailing = buildList {
                         add(
                             BarItem(key = "explore", priority = PinnedPriority) {
                                 ExploreToggleGroup(
@@ -469,12 +617,50 @@ internal fun DriveCompactHeader(
                                 )
                             },
                         )
+                    },
+                    moreAfterLeading = true,
+                    moreIcon = Icons.Outlined.MoreHoriz,
+                    gap = 4.dp,
+                )
+            } else {
+                val moreActions = buildList {
+                    if (commands.paste) {
+                        add(SheetAction(Icons.Outlined.ContentPaste, stringResource(Res.string.text_paste), state::paste, group = ActionGroup.Edit))
                     }
-                },
-                moreAfterLeading = true,
-                moreIcon = Icons.Outlined.MoreHoriz,
-                gap = 4.dp,
-            )
+                    if (commands.findDuplicates) add(DriveActions.findDuplicates(onFindDuplicates))
+                    if (commands.canonicalNaming) add(DriveActions.canonicalName(onCanonicalNaming))
+                    if ((commands.gallery || galleryActive) && onGalleryShownChange != null) {
+                        add(
+                            SheetAction(
+                                Icons.Outlined.PhotoLibrary,
+                                tr("瀑布流", "Gallery", "ギャラリー", "갤러리", "瀑布流"),
+                                { onGalleryShownChange(!galleryActive) },
+                                group = ActionGroup.View,
+                                checked = galleryActive,
+                            )
+                        )
+                    }
+                    if (commands.feed && hasFeedEntry && onFeedShownChange != null) {
+                        add(
+                            SheetAction(
+                                Icons.Outlined.SwipeVertical,
+                                tr("信息流", "Feed", "フィード", "피드", "資訊流"),
+                                { onFeedShownChange(!feedShown) },
+                                group = ActionGroup.View,
+                                checked = feedShown,
+                            )
+                        )
+                    }
+                }
+                CompactDriveTools(
+                    state = state,
+                    viewMode = viewMode,
+                    tileSize = tileSize,
+                    onViewModeChange = onViewModeChange,
+                    onTileSizeChange = onTileSizeChange,
+                    moreActions = moreActions,
+                )
+            }
         }
     }
 }
@@ -532,6 +718,8 @@ internal fun DriveAddFabMenu(
     isSelectionMode: Boolean,
     commands: DriveCommands,
     placePrimaryAction: SheetAction?,
+    openRequest: Int = 0,
+    anchorOnly: Boolean = false,
     hasActiveInstantDraft: Boolean,
     hasCollapsedAddLinkWork: Boolean,
     mountAction: SheetAction?,
@@ -541,18 +729,28 @@ internal fun DriveAddFabMenu(
     onPickFiles: () -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var lastOpenRequest by remember { mutableStateOf(openRequest) }
+    LaunchedEffect(openRequest) {
+        if (openRequest != lastOpenRequest) {
+            lastOpenRequest = openRequest
+            expanded = true
+        }
+    }
     BackHandler(enabled = acceptsNavigation && expanded) { expanded = false }
 
-    if (placePrimaryAction != null) {
+    if (!anchorOnly && placePrimaryAction != null) {
         PrimaryActionFab(placePrimaryAction)
-    } else if (!isSelectionMode && (commands.addLink || commands.create || commands.paste)) {
+        return
+    }
+    if (!isSelectionMode && (commands.addLink || commands.create || commands.paste)) {
         FloatingActionButtonMenu(
             expanded = expanded,
-            modifier = Modifier.offset(x = 16.dp, y = 16.dp),
+            modifier = Modifier,
             button = {
                 ToggleFloatingActionButton(
                     checked = expanded,
                     onCheckedChange = { expanded = it },
+                    modifier = if (anchorOnly) Modifier.alpha(0f) else Modifier,
                 ) {
                     val icon by remember { derivedStateOf { if (checkedProgress > 0.5f) Icons.Filled.Close else Icons.Filled.Add } }
                     Icon(

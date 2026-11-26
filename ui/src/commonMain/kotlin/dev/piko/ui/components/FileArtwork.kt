@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -32,7 +33,9 @@ internal enum class FileArtworkFormat { Icon, Leading, Poster }
 @Composable
 internal fun FileArtwork(
     file: FileVisual, format: FileArtworkFormat,
-    isSpoilerBlurred: Boolean = false, modifier: Modifier = Modifier,
+    isSpoilerBlurred: Boolean = false,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     when (format) {
         FileArtworkFormat.Icon -> Icon(file.typeIcon(), null, modifier, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -45,7 +48,7 @@ internal fun FileArtwork(
             var coverFailed by remember(file.thumbnail) { mutableStateOf(false) }
             val cover = file.thumbnail?.takeUnless { coverFailed }
             when {
-                file.isFolder -> StackedSheets(Modifier.fillMaxSize(), empty = file.isEmptyFolder,
+                file.isFolder -> StackedSheets(Modifier.fillMaxSize(), empty = file.isEmptyFolder, compact = compact,
                     cover = cover?.let { { SpoilerThumbnail(it, isSpoilerBlurred, PosterSpoilerBlur, Modifier.fillMaxSize(), onError = { coverFailed = true }) } })
                 cover != null -> SpoilerThumbnail(cover, isSpoilerBlurred, PosterSpoilerBlur, Modifier.fillMaxSize(), showBlurIcon = !file.isVideo, onError = { coverFailed = true })
                 else -> TypePlaceholder(file, Modifier.fillMaxSize())
@@ -59,6 +62,7 @@ internal fun FileArtwork(
 private fun StackedSheets(
     modifier: Modifier = Modifier,
     empty: Boolean = false,
+    compact: Boolean = false,
     cover: (@Composable () -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -68,6 +72,14 @@ private fun StackedSheets(
     val frontBottomColor = colors.secondary.copy(alpha = if (dark) 0.14f else 0.12f).compositeOver(colors.secondaryContainer)
     val cardBorder = Color.Black.copy(alpha = if (dark) 0.24f else 0.08f)
     val hasCover = cover != null
+    if (compact) {
+        CompactFolderSheets(
+            modifier = modifier,
+            empty = empty,
+            cover = cover,
+        )
+        return
+    }
     val yLeftFraction = if (hasCover) FRONT_OPEN_LEFT_TOP else FRONT_CLOSED_LEFT_TOP
     val yRightFraction = if (hasCover) FRONT_OPEN_RIGHT_TOP else FRONT_CLOSED_RIGHT_TOP
     val frontShape = remember(hasCover) { FolderFrontShape(yLeftFraction, yRightFraction) }
@@ -126,6 +138,80 @@ private fun StackedSheets(
                     )
                 },
         )
+    }
+}
+
+/**
+ * 手机三列下的文件夹：封面几乎铺满整张卡，只在左侧与底部留一条叠纸边。
+ * 文件夹身份由左上角残留的页签、右上角的小文件夹徽标维持，不再让前片压住缩略图下半部分。
+ */
+@Composable
+private fun CompactFolderSheets(
+    modifier: Modifier = Modifier,
+    empty: Boolean,
+    cover: (@Composable () -> Unit)?,
+) {
+    val colors = MaterialTheme.colorScheme
+    val backPlate = colors.secondary.copy(alpha = 0.28f).compositeOver(colors.secondaryContainer)
+    val sheetEdge = colors.surfaceContainerLowest
+    if (cover == null || empty) {
+        Box(
+            modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(colors.secondaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Folder,
+                contentDescription = null,
+                tint = colors.onSecondaryContainer.copy(alpha = 0.55f),
+                modifier = Modifier.size(36.dp),
+            )
+        }
+        return
+    }
+
+    Box(modifier) {
+        // 两层错开的纸张：只露上沿与右沿，封面仍几乎铺满整张卡
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(start = 7.dp, top = 3.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(backPlate),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(start = 4.dp, top = 1.dp, bottom = 4.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(sheetEdge),
+        )
+        val inner = RoundedCornerShape(9.dp)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(top = 5.dp, end = 5.dp, bottom = 7.dp)
+                .clip(inner)
+                .background(colors.surfaceContainerLowest)
+                .border(1.dp, Color.Black.copy(alpha = 0.08f), inner),
+        ) {
+            cover()
+        }
+        Surface(
+            shape = RoundedCornerShape(7.dp),
+            color = colors.secondaryContainer,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 10.dp, end = 10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Folder,
+                contentDescription = null,
+                tint = colors.onSecondaryContainer,
+                modifier = Modifier.padding(4.dp).size(16.dp),
+            )
+        }
     }
 }
 

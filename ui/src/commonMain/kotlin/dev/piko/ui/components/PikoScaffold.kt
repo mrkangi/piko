@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -54,6 +55,7 @@ fun PikoScaffold(
     bottomBar: @Composable () -> Unit = {},
     snackbarHost: @Composable () -> Unit = {},
     floatingActionButton: @Composable () -> Unit = {},
+    floatingActionButtonPosition: FabPosition = FabPosition.End,
     /** 有外框时内容卡片的形状。顶上接着标签的页（传输）在第一个标签活动时左上角不圆，见 IslandTab。 */
     cardShape: Shape = FrameCardShape,
     /** 有外框时换成岛的样子，[topBar] 与 [bottomBar] 只在没有外框时用，见 [IslandPage]。 */
@@ -71,6 +73,7 @@ fun PikoScaffold(
             bottomBar = bottomBar,
             snackbarHost = snackbarHost,
             floatingActionButton = floatingActionButton,
+            floatingActionButtonPosition = floatingActionButtonPosition,
             content = content,
         )
         return

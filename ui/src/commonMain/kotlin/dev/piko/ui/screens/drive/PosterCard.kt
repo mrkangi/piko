@@ -39,11 +39,14 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.piko.ui.components.focusIndication
 import dev.piko.ui.components.ownsClicks
@@ -138,12 +141,12 @@ internal fun PosterCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(COVER_ASPECT)
+                .aspectRatio(if (compact) COMPACT_COVER_ASPECT else COVER_ASPECT)
                 .clip(coverShape)
                 .then(if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, coverShape) else Modifier)
                 .locateHighlight(isHighlighted, coverShape),
         ) {
-            FileArtwork(item.visual, FileArtworkFormat.Poster, isSpoilerBlurred, Modifier.fillMaxSize())
+            FileArtwork(item.visual, FileArtworkFormat.Poster, isSpoilerBlurred, Modifier.fillMaxSize(), compact = compact)
             (file.jellyfinPlaybackFraction ?: file.plexPlaybackFraction)?.let { progress ->
                 Box(
                     modifier = Modifier
@@ -172,7 +175,11 @@ internal fun PosterCard(
                     modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
                 )
             }
-            val cornerTags = tags.filter { it != resolution }.take(COVER_CORNER_TAGS)
+            val cornerTags = if (compact) {
+                (listOfNotNull(code, resolution) + tags.filter { it != resolution }).distinct().take(COVER_CORNER_TAGS)
+            } else {
+                tags.filter { it != resolution }.take(COVER_CORNER_TAGS)
+            }
             if (cornerTags.isNotEmpty()) {
                 // 放不下的整个丢掉，不截半个标签
                 MediaTagRow(
@@ -185,7 +192,7 @@ internal fun PosterCard(
                         .wrapContentSize(Alignment.TopEnd),
                 )
             }
-            if (code != null || resolution != null) {
+            if (!compact && (code != null || resolution != null)) {
                 // 左右两角放在同一行：窄卡片上长番号会碰到清晰度，同一行里番号先让出位置
                 Row(
                     modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(6.dp),
@@ -198,7 +205,32 @@ internal fun PosterCard(
                     if (resolution != null) MediaTag(resolution, onMedia = true)
                 }
             }
+            if (compact) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.74f))))
+                        .padding(start = 8.dp, end = 8.dp, top = 20.dp, bottom = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (item.marks.isNotEmpty()) {
+                        FileItemMarks(item.marks)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = item.name.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
         }
+
+        if (compact) return@Column
 
         // 右端的勾选框或更多按钮浮在标题上，不另占一栏：原来的三点按钮占着 48dp 的一栏，
         // 又往右上偏移出卡片，被卡片的圆角裁掉一半，偏出去的部分也点不到。显示时给标题让出位置
@@ -237,7 +269,8 @@ internal fun PosterCardSkeleton(
     compact: Boolean = false,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        SkeletonBlock(Modifier.fillMaxWidth().aspectRatio(COVER_ASPECT), MaterialTheme.shapes.medium)
+        SkeletonBlock(Modifier.fillMaxWidth().aspectRatio(if (compact) COMPACT_COVER_ASPECT else COVER_ASPECT), MaterialTheme.shapes.medium)
+        if (compact) return@Column
         Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(TITLE_HEIGHT)) {
             // bodyMedium 行高 20dp、字形约 12dp，上留 4dp、行间 8dp，两条正好落在两行字的位置
             Column(
@@ -282,6 +315,7 @@ internal fun FolderCoverMark(modifier: Modifier = Modifier) {
 
 
 private const val COVER_ASPECT = 16f / 9f
+private const val COMPACT_COVER_ASPECT = 4f / 3f
 private const val TITLE_LINES = 2
 private const val COVER_CORNER_TAGS = 2
 private val CARD_TRAILING_SIZE = 32.dp

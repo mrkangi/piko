@@ -4,12 +4,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -21,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -89,6 +92,7 @@ import dev.piko.shared.state.InstantSheetState
 import dev.piko.shared.upload.UploadSelection
 import dev.piko.shared.upload.isUploading
 import dev.piko.ui.LocalPikoServices
+import dev.piko.ui.LocalCompactAddController
 import dev.piko.ui.LocalRootSnackbar
 import dev.piko.ui.ObserveMessages
 import dev.piko.ui.adaptive.isDesktopLayout
@@ -827,6 +831,7 @@ private fun DriveScreenContent(
 
     val platform = LocalPikoPlatform.current
     val services = LocalPikoServices.current
+    val compactAdd = LocalCompactAddController.current
     val scope = rememberCoroutineScope()
     val desktop = isDesktopLayout()
     val pathInTopBar = desktop
@@ -1335,6 +1340,20 @@ private fun DriveScreenContent(
         commands.emptyPlace -> libraryPageActions(libraryView, state.files.isEmpty(), events.onRequestLibraryConfirm) { state.files.map { it.id } }.firstOrNull()
         else -> null
     }
+    SideEffect {
+        compactAdd?.let {
+            it.canAdd = placePrimaryAction != null || (!state.isSelectionMode && (commands.addLink || commands.create || commands.paste))
+        }
+    }
+    var addMenuOpenRequest by remember { mutableIntStateOf(0) }
+    var lastCompactAddRequest by remember { mutableIntStateOf(compactAdd?.request ?: 0) }
+    LaunchedEffect(compactAdd?.request) {
+        val request = compactAdd?.request ?: 0
+        if (request != lastCompactAddRequest) {
+            lastCompactAddRequest = request
+            if (placePrimaryAction != null) placePrimaryAction.onClick() else addMenuOpenRequest++
+        }
+    }
 
     val addressBar: @Composable () -> Unit = {
         DriveAddressField(
@@ -1387,6 +1406,16 @@ private fun DriveScreenContent(
 
     val topBarScrollBehavior = rememberListScrollTint {
         gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+    }
+    var compactToolsCollapsed by remember { mutableStateOf(false) }
+    LaunchedEffect(gridState) {
+        snapshotFlow { gridState.firstVisibleItemIndex }.collect { index ->
+            if (index > 0) {
+                compactToolsCollapsed = true
+            } else if (gridState.firstVisibleItemScrollOffset == 0) {
+                compactToolsCollapsed = false
+            }
+        }
     }
     val onDuplicateKindChange: (DuplicateKind) -> Unit = { kind ->
         state.exitSelection()
@@ -1463,6 +1492,7 @@ private fun DriveScreenContent(
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = if (pathInTopBar) MaterialTheme.colorScheme.frame else MaterialTheme.colorScheme.background,
+                floatingActionButtonPosition = if (pathInTopBar) FabPosition.End else FabPosition.Start,
                 snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                 topBar = {
                     if (pathInTopBar) {
@@ -1542,6 +1572,7 @@ private fun DriveScreenContent(
                             feedShown = snapshot.feedShown,
                             feedStashed = snapshot.feedStashed,
                             hasFeedEntry = events.onFeedShownChange != null,
+                            viewMode = snapshot.viewMode,
                             tileSize = snapshot.tileSize,
                             onSelectAll = ::selectAllDisplayed,
                             onOpenSelectionActions = events.onOpenSelectionSheet,
@@ -1555,8 +1586,10 @@ private fun DriveScreenContent(
                             onDuplicateKindChange = onDuplicateKindChange,
                             onGalleryShownChange = changeGalleryShown,
                             onFeedShownChange = changeFeedShown,
+                            onViewModeChange = events.onSelectViewMode,
                             onTileSizeChange = events.onSelectTileSize,
                             onGalleryShowImagesChange = events.onSetGalleryShowImages,
+                            toolsCollapsed = compactToolsCollapsed,
                         )
                     }
                 },
@@ -1574,19 +1607,23 @@ private fun DriveScreenContent(
                 },
                 floatingActionButton = {
                     if (!pathInTopBar) {
-                        DriveAddFabMenu(
-                            acceptsNavigation = snapshot.acceptsNavigation,
-                            isSelectionMode = state.isSelectionMode,
-                            commands = commands,
-                            placePrimaryAction = placePrimaryAction,
-                            hasActiveInstantDraft = instantState != null,
-                            hasCollapsedAddLinkWork = addLink.hasCollapsedWork,
-                            mountAction = snapshot.mountAction,
-                            onPaste = state::paste,
-                            onOpenAddLink = events.onOpenAddLink,
-                            onNewFolder = events.onRequestNewFolder,
-                            onPickFiles = events.onPickFiles,
-                        )
+                        Box(Modifier.offset(y = 6.dp)) {
+                            DriveAddFabMenu(
+                                acceptsNavigation = snapshot.acceptsNavigation,
+                                isSelectionMode = state.isSelectionMode,
+                                commands = commands,
+                                placePrimaryAction = placePrimaryAction,
+                                openRequest = addMenuOpenRequest,
+                                anchorOnly = !pathInTopBar,
+                                hasActiveInstantDraft = instantState != null,
+                                hasCollapsedAddLinkWork = addLink.hasCollapsedWork,
+                                mountAction = snapshot.mountAction,
+                                onPaste = state::paste,
+                                onOpenAddLink = events.onOpenAddLink,
+                                onNewFolder = events.onRequestNewFolder,
+                                onPickFiles = events.onPickFiles,
+                            )
+                        }
                     }
                 },
             ) { innerPadding ->

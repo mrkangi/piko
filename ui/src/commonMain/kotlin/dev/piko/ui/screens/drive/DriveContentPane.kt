@@ -58,6 +58,8 @@ import dev.piko.shared.presentation.DuplicateReportViewModel
 import dev.piko.shared.state.DriveScreenState
 import dev.piko.shared.state.DuplicateFinderState
 import dev.piko.shared.state.DuplicateKind
+import dev.piko.ui.adaptive.WidthClass
+import dev.piko.ui.adaptive.currentWidthClass
 import dev.piko.shared.state.GallerySession
 import dev.piko.ui.components.BreadcrumbBar
 import dev.piko.ui.components.DetailHost
@@ -375,7 +377,8 @@ internal fun DriveContentBody(
             if (current is DrivePhase.Loading) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     breadcrumbs()
-                    if (!pathInTopBar) Spacer(modifier = Modifier.height(DriveListHeaderHeight))
+                    val compact = currentWidthClass() == WidthClass.Compact
+                    if (!pathInTopBar && !compact) Spacer(modifier = Modifier.height(DriveListHeaderHeight))
                     DriveGridSkeleton(viewMode = viewMode, tileSize = tileSize, modifier = Modifier.weight(1f))
                 }
                 return@Crossfade
@@ -400,6 +403,7 @@ internal fun DriveContentBody(
                     state.loadError?.let { reason ->
                         StaleDataBanner(reason = reason, onRetry = onRefresh)
                     }
+                    val compact = currentWidthClass() == WidthClass.Compact
                     val bottomPadding = innerPadding.calculateBottomPadding() + FabClearance
                     if (inDuplicates && duplicateState != null && !duplicateState.isScanning) {
                         DuplicatesBanner(
@@ -472,7 +476,7 @@ internal fun DriveContentBody(
                                             onPerFolderSortChange = state::setPerFolderSortEnabled,
                                             foldersFirst = state.foldersFirst,
                                             onFoldersFirstChange = state::updateFoldersFirst,
-                                            showControls = !pathInTopBar && !inDuplicates,
+                                            showControls = !pathInTopBar && !inDuplicates && !compact,
                                         )
                                     }
                                 }

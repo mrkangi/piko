@@ -452,11 +452,11 @@ private class StableColumns(private val minSize: Dp, private val referenceWidth:
 }
 
 private fun gridHorizontalPadding(viewMode: DriveViewMode, widthClass: WidthClass): Dp =
-    if (!viewMode.isGrid) 0.dp else if (widthClass == WidthClass.Compact) 12.dp else 16.dp
+    if (!viewMode.isGrid) 0.dp else if (widthClass == WidthClass.Compact) 8.dp else 16.dp
 
 private fun gridItemSpacing(viewMode: DriveViewMode, widthClass: WidthClass): Dp = when {
     viewMode == DriveViewMode.LIST -> 0.dp
-    widthClass == WidthClass.Compact -> 6.dp
+    widthClass == WidthClass.Compact -> 4.dp
     else -> 8.dp
 }
 
