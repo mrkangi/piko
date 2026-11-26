@@ -657,7 +657,7 @@ func (store *Store) ClaimNextTask(ctx context.Context, now int64) (*DownloadTask
 			AND t.bytes_total >= s.min_file_size_bytes
 			AND t.desired_action = ''
 			AND (t.state = 'QUEUED' OR (t.state = 'RETRY_WAIT' AND t.next_retry_at <= ?))
-		ORDER BY t.priority DESC, t.created_at ASC
+		ORDER BY t.priority DESC, t.created_at ASC, t.rowid ASC
 		LIMIT 1`, now).Scan(&taskID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -804,7 +804,7 @@ func (store *Store) ListTaskIDsByStates(ctx context.Context, sourceID string, st
 		query += ` AND source_id = ?`
 		args = append(args, strings.TrimSpace(sourceID))
 	}
-	query += ` ORDER BY created_at DESC, rowid DESC`
+	query += ` ORDER BY created_at ASC, rowid ASC`
 	rows, err := store.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

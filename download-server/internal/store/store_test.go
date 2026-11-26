@@ -350,3 +350,64 @@ func TestListTasksOrdersByCreationInsteadOfLastUpdate(t *testing.T) {
 		t.Fatalf("expected 3 queued tasks in totals, got %+v", stateTotals)
 	}
 }
+
+func TestQueueOrderUsesCreationTimeAndInsertionSequence(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	src, err := st.CreateSource(ctx, Source{
+		AccountID: "acct_1", RemoteRootID: "dir_1", RemoteRootPath: "/Movies", LocalAlias: "Movies",
+		InitialMode: InitialModeDownloadExisting, Enabled: true, ScanIntervalSec: 600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertTask := func(taskID string, createdAt int64) {
+		if _, err := st.db.ExecContext(ctx, `
+			INSERT INTO download_tasks(
+				id, source_id, remote_id, version_key, gcid, strong_version,
+				remote_path, target_rel_path, state, desired_action, attempt, max_attempts,
+				priority, bytes_total, bytes_done, staging_rel_path, commit_sha256,
+				error_code, error_message, next_retry_at, created_at, updated_at, started_at, finished_at
+			) VALUES(?,?,?,?,?,1,?,?,?,?,0,5,0,100,0,?,?,?,?,0,?,?,0,0)`,
+			taskID, src.ID, taskID, "gcid:"+taskID+":100", taskID,
+			taskID+".mkv", "Movies/"+taskID+".mkv", TaskQueued, DesiredNone,
+			"staging/"+taskID, "", "", "", createdAt, createdAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// created_at 是秒级时间戳；同一批入队的任务必须再由 rowid 保持稳定的入队顺序。
+	insertTask("tsk_late", 3000)
+	insertTask("tsk_early_first", 1000)
+	insertTask("tsk_early_second", 1000)
+	want := []string{"tsk_early_first", "tsk_early_second", "tsk_late"}
+
+	ids, err := st.ListTaskIDsByStates(ctx, "", []string{TaskQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != len(want) {
+		t.Fatalf("unexpected batch order: got %v want %v", ids, want)
+	}
+	for index := range want {
+		if ids[index] != want[index] {
+			t.Fatalf("unexpected batch order: got %v want %v", ids, want)
+		}
+	}
+
+	for index, wantID := range want {
+		claimed, err := st.ClaimNextTask(ctx, time.Now().Unix())
+		if err != nil || claimed == nil {
+			t.Fatalf("claim %d failed: task=%+v err=%v", index, claimed, err)
+		}
+		if claimed.ID != wantID {
+			t.Fatalf("claim %d picked %s, want %s", index, claimed.ID, wantID)
+		}
+	}
+}
