@@ -17,6 +17,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -98,6 +99,7 @@ import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -111,9 +113,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
@@ -577,6 +581,8 @@ internal fun PlayerBottomBar(
     positionMillis: Long,
     /** 画面上拖动进度的目标处，不为 null 时进度条与时间停在这里，见 PlayerSeekBar 的 previewMillis。 */
     previewPositionMillis: Long?,
+    /** 拖动时显示在进度条上方的当前帧；为 null 时仍只显示时间气泡。 */
+    seekPreview: SeekPreviewFrame? = null,
     durationMillis: Long,
     bufferedPositionMillis: Long,
     playbackSpeed: Float?,
@@ -622,6 +628,8 @@ internal fun PlayerBottomBar(
     embedded: Boolean = false,
     modifier: Modifier = Modifier,
     onScrubbingChange: (Boolean) -> Unit = {},
+    /** 进度条本身的拖动目标，供外部生成帧预览；松手时为 null。 */
+    onScrubPreview: (Long?) -> Unit = {},
     /** 当前音量，0 即静音；为 null 时不给音量键与滑块（移动端，或平台没有可调的音量）。 */
     volume: Float? = null,
     onVolumeChange: (Float) -> Unit = {},
@@ -663,6 +671,7 @@ internal fun PlayerBottomBar(
             PlayerSeekBar(
                 positionMillis = positionMillis,
                 previewMillis = previewPositionMillis,
+                seekPreview = seekPreview,
                 durationMillis = durationMillis,
                 bufferedPositionMillis = bufferedPositionMillis,
                 onSeek = onSeek,
@@ -670,6 +679,7 @@ internal fun PlayerBottomBar(
                 onScrub = { target ->
                     val wasScrubbing = scrubPositionMillis != null
                     scrubPositionMillis = target
+                    onScrubPreview(target)
                     if (wasScrubbing != (target != null)) onScrubbingChange(target != null)
                 },
                 modifier = Modifier
@@ -1378,6 +1388,8 @@ internal fun PlayerSeekBar(
     onScrub: (Long?) -> Unit = {},
     // 在别处拖动进度（播放器画面上的横滑）时的目标处：手柄与时间气泡照拖动进度条本身的样子显示在这里
     previewMillis: Long? = null,
+    /** 拖动或画面横滑时显示的当前帧；悬停仍只显示时间。 */
+    seekPreview: SeekPreviewFrame? = null,
     /** 贴住画面底边画：轨道落在布局最下方，展开态的圆点允许向画面外轻微溢出。 */
     edgeAligned: Boolean = false,
     /** 控制层是否展开。收起时轨道更细、更淡，让进度让回画面。 */
@@ -1561,30 +1573,103 @@ internal fun PlayerSeekBar(
             val inset = with(density) { SeekThumbDraggingRadius.toPx() }
             val trackWidthPx = constraints.maxWidth - 2 * inset
             val anchorPx = inset + shown * trackWidthPx
-            val gapPx = with(density) { 2.dp.roundToPx() }
             val dragging = scrubFraction != null
-            Surface(
-                shape = MaterialTheme.shapes.small,
-                // 拖动时是要跳过去的位置，用主题色强调；悬停只是看看，用中性的反色
-                color = if (dragging) scheme.primary else scheme.inverseSurface,
-                contentColor = if (dragging) scheme.onPrimary else scheme.inverseOnSurface,
-                modifier = Modifier.layout { measurable, constraints ->
-                    // 进度条本身只有 14dp 高；气泡要按完整文字高度测量，否则文字会被压扁裁掉。
-                    val placeable = measurable.measure(
-                        constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity),
-                    )
-                    val maxX = (constraints.maxWidth - placeable.width).coerceAtLeast(0)
-                    val x = (anchorPx - placeable.width / 2f).roundToInt().coerceIn(0, maxX)
-                    layout(0, 0) { placeable.place(x, -placeable.height - gapPx) }
-                },
-            ) {
-                Text(
-                    text = formatTime((shown * durationMillis).toLong()),
-                    style = TimeTextStyle(),
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            val timeText = formatTime((shown * durationMillis).toLong())
+            val preview = seekPreview?.takeIf { dragging }
+            if (preview != null) {
+                SeekPreviewBubble(
+                    frame = preview,
+                    timeText = timeText,
+                    anchorPx = anchorPx,
+                    barWidthPx = constraints.maxWidth,
+                    gapPx = with(density) { 6.dp.roundToPx() },
+                    liftPx = with(density) { if (edgeAligned) 56.dp.roundToPx() else 0 },
+                    compact = edgeAligned,
                 )
+            } else {
+                val gapPx = with(density) { 2.dp.roundToPx() }
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    // 拖动时是要跳过去的位置，用主题色强调；悬停只是看看，用中性的反色
+                    color = if (dragging) scheme.primary else scheme.inverseSurface,
+                    contentColor = if (dragging) scheme.onPrimary else scheme.inverseOnSurface,
+                    modifier = Modifier.layout { measurable, constraints ->
+                        // 进度条本身只有 14dp 高；气泡要按完整文字高度测量，否则文字会被压扁裁掉。
+                        val placeable = measurable.measure(
+                            constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity),
+                        )
+                        val maxX = (constraints.maxWidth - placeable.width).coerceAtLeast(0)
+                        val x = (anchorPx - placeable.width / 2f).roundToInt().coerceIn(0, maxX)
+                        layout(0, 0) { placeable.place(x, -placeable.height - gapPx) }
+                    },
+                ) {
+                    Text(
+                        text = timeText,
+                        style = TimeTextStyle(),
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
             }
+        }
+    }
+}
+
+/**
+ * 拖动时贴在进度条上方的预览卡。时间压在画面左下角，不再另起一枚气泡，
+ * 既保留读数又少占一截高度。两边按进度条宽度钳制，拖到尽头也不会探出画面。
+ */
+@Composable
+private fun SeekPreviewBubble(
+    frame: SeekPreviewFrame,
+    timeText: String,
+    anchorPx: Float,
+    barWidthPx: Int,
+    gapPx: Int,
+    liftPx: Int,
+    compact: Boolean,
+) {
+    val aspect = frame.aspectRatio.takeIf { it.isFinite() && it > 0f }?.coerceIn(0.45f, 2.6f) ?: (16f / 9f)
+    val maxWidth = if (compact) 132f else 176f
+    val maxHeight = if (compact) 74f else 112f
+    val cardWidth = if (aspect >= maxWidth / maxHeight) maxWidth else maxHeight * aspect
+    val cardHeight = cardWidth / aspect
+    val shape = RoundedCornerShape(10.dp)
+    Surface(
+        shape = shape,
+        color = Color.Black,
+        contentColor = Color.White,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+        shadowElevation = 8.dp,
+        modifier = Modifier.layout { measurable, constraints ->
+            val placeable = measurable.measure(
+                constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity),
+            )
+            val maxX = (barWidthPx - placeable.width).coerceAtLeast(0)
+            val x = (anchorPx - placeable.width / 2f).roundToInt().coerceIn(0, maxX)
+            layout(0, 0) { placeable.place(x, -placeable.height - gapPx - liftPx) }
+        },
+    ) {
+        Box(Modifier.width(cardWidth.dp).height(cardHeight.dp)) {
+            Image(
+                bitmap = frame.image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Text(
+                text = timeText,
+                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onPrimary,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.94f))
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+            )
         }
     }
 }
@@ -1752,6 +1837,13 @@ private val BottomScrim = listOf(
     Color.Transparent,
     Color.Black.copy(alpha = 0.45f),
     Color.Black.copy(alpha = 0.8f),
+)
+
+/** 拖动进度时显示在进度条上方的帧预览。画面比例取实际视频，加载中先留空由调用方沿用上一帧。 */
+@Immutable
+data class SeekPreviewFrame(
+    val image: ImageBitmap,
+    val aspectRatio: Float = 16f / 9f,
 )
 
 // 进度条的布局高度与轨道几何。布局高度决定它在底栏里占多少地方，ClipChrome 按它把细线挪到底边，

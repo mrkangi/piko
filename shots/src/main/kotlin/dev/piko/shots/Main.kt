@@ -692,6 +692,43 @@ private val standardSet: List<Shot> = buildList {
     addAll(playerShots("player-resume", PlayerShot(resumedFromMillis = 754_000)))
     addAll(playerShots("player-paused", PlayerShot(playing = false)))
     addAll(playerShots("player-fullscreen", PlayerShot(fullscreen = true)))
+    // 拖动进度时的帧预览：竖屏与横屏各一张，手指停在进度条上不松开
+    add(
+        Shot(
+            "player-seek-preview-phone-400x860", 400, 860, player = PlayerShot(playing = false),
+            mobile = true, waitFor = null,
+            steps = listOf(Step.Drag(Offset(40f, 780f), Offset(260f, 780f))),
+        ),
+    )
+    add(
+        Shot(
+            "player-seek-preview-phone-landscape-860x400", 860, 400, player = PlayerShot(playing = false),
+            mobile = true, waitFor = null,
+            steps = listOf(Step.Drag(Offset(48f, 327f), Offset(560f, 327f))),
+        ),
+    )
+    add(
+        Shot(
+            "player-seek-preview-edge-left-phone-400x860", 400, 860, player = PlayerShot(playing = false),
+            mobile = true, waitFor = null,
+            steps = listOf(Step.Drag(Offset(260f, 780f), Offset(10f, 780f))),
+        ),
+    )
+    add(
+        Shot(
+            "player-seek-preview-edge-right-phone-400x860", 400, 860, player = PlayerShot(playing = false),
+            mobile = true, waitFor = null,
+            steps = listOf(Step.Drag(Offset(40f, 780f), Offset(391f, 780f))),
+        ),
+    )
+    add(
+        Shot(
+            "player-seek-preview-detail-local-phone-400x860", 400, 860,
+            player = PlayerShot(playing = false, local = true, halfDetail = true),
+            mobile = true, waitFor = null,
+            steps = listOf(Step.Drag(Offset(40f, 243f), Offset(260f, 243f))),
+        ),
+    )
     addAll(
         playerShots(
             "player-episodes", PlayerShot(playing = false),

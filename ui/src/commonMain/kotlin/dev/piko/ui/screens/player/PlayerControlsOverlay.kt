@@ -90,6 +90,10 @@ fun MobilePlayerControls(
     positionMillis: Long,
     durationMillis: Long,
     bufferedPositionMillis: Long,
+    /** 拖动进度时显示在进度条上方的当前帧；null 时只显示时间气泡。 */
+    seekPreview: SeekPreviewFrame? = null,
+    /** 实际取帧与缓存；为 null 时只显示 [seekPreview]（截图与桌面预览用）。 */
+    seekPreviewController: SeekPreviewController? = null,
     playbackSpeed: Float?,
     aspectRatio: PlayerAspectRatio?,
     vrMode: VrModeState? = null,
@@ -223,11 +227,18 @@ fun MobilePlayerControls(
 
     val chromeVisible = ui.controlsVisible && !ui.isLocked && !ui.isEditingCropRegion
     val bottomBarVisible = (chromeVisible || seekPreviewMillis != null) && !ui.isEditingCropRegion
-    val centerVisible = ((chromeVisible && !ui.isBoosting) || isLoading || centerIndicator != null) &&
-        (!embedded || !isPlaying || isLoading || centerIndicator != null) &&
-        errorMessage == null && !ui.isEditingCropRegion
     // 内嵌详情页的贴底进度条独立于底栏：拖动它只临时点亮并露出圆点，不强行展开整套控件。
     var embeddedScrubPositionMillis by remember { mutableStateOf<Long?>(null) }
+    var barScrubPositionMillis by remember { mutableStateOf<Long?>(null) }
+    val seekPreviewTarget = barScrubPositionMillis ?: embeddedScrubPositionMillis ?: seekPreviewMillis
+    LaunchedEffect(seekPreviewTarget, seekPreviewController) {
+        seekPreviewController?.request(seekPreviewTarget)
+    }
+    val shownSeekPreview = seekPreviewController?.frame ?: seekPreview
+    val isSeeking = ui.isScrubbing || seekPreviewMillis != null || embeddedScrubPositionMillis != null
+    val centerVisible = ((chromeVisible && !ui.isBoosting) || isLoading || centerIndicator != null) &&
+        (!embedded || !isPlaying || isLoading || centerIndicator != null) &&
+        errorMessage == null && !ui.isEditingCropRegion && !isSeeking
 
     BackHandler(enabled = isFullscreen && !ui.isEditingCropRegion, onBack = onToggleFullscreen)
     BackHandler(enabled = ui.isEditingCropRegion) { ui.cancelCropEdit(onAspectRatioChange) }
@@ -364,7 +375,6 @@ fun MobilePlayerControls(
                 },
             )
 
-            val isSeeking = ui.isScrubbing || seekPreviewMillis != null
             PlayerBottomStack(controlsVisible = bottomBarVisible, isLandscape = isLandscape) {
                 snackbarHost()
                 QualitySwitchNotice(qualitySwitchTarget)
@@ -480,6 +490,7 @@ fun MobilePlayerControls(
                         thumbOnHoverOnly = seekThumbOnHoverOnly,
                         positionMillis = positionMillis,
                         previewPositionMillis = embeddedScrubPositionMillis ?: seekPreviewMillis,
+                        seekPreview = shownSeekPreview,
                         durationMillis = durationMillis,
                         bufferedPositionMillis = bufferedPositionMillis,
                         playbackSpeed = playbackSpeed,
@@ -559,6 +570,7 @@ fun MobilePlayerControls(
                             onToggleFullscreen()
                         },
                         onScrubbingChange = { ui.isScrubbing = it },
+                        onScrubPreview = { barScrubPositionMillis = it },
                         volume = volumeLevel,
                         onVolumeChange = {
                             ui.interacted()
@@ -585,6 +597,7 @@ fun MobilePlayerControls(
                 PlayerSeekBar(
                     positionMillis = positionMillis,
                     previewMillis = seekPreviewMillis,
+                    seekPreview = shownSeekPreview,
                     durationMillis = durationMillis,
                     bufferedPositionMillis = bufferedPositionMillis,
                     onSeek = {

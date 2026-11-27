@@ -37,6 +37,7 @@ import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.ui.LocalPikoServices
 import dev.piko.ui.components.formatTimeMs
 import dev.piko.ui.components.toReadableSize
+import dev.piko.ui.platform.LocalPikoPlatform
 import dev.piko.ui.platform.VideoPreviewHandoffs
 import dev.piko.ui.theme.LocalAppearance
 import dev.piko.ui.theme.isDark
@@ -145,8 +146,27 @@ fun MediampVideoPlayerScreen(
             defaultMaxHeight = { preferences.playbackMaxHeightFlow.first() },
         )
     }
+    val seekPreviewSupport = LocalPikoPlatform.current.seekPreviews
+    val seekPreviewController = remember(seekPreviewSupport) {
+        seekPreviewSupport?.let { SeekPreviewController(scope, it) }
+    }
     DisposableEffect(state) {
         onDispose { state.release() }
+    }
+    DisposableEffect(seekPreviewController) {
+        onDispose { seekPreviewController?.release() }
+    }
+    val seekPreviewSource = if (state.isImage) {
+        null
+    } else {
+        SeekPreviewSource(
+            fileId = state.fileId,
+            localPath = state.localPlaybackPath,
+            isLocal = state.isLocalPlayback,
+        )
+    }
+    LaunchedEffect(seekPreviewController, seekPreviewSource) {
+        seekPreviewController?.bind(seekPreviewSource)
     }
     DisposableEffect(backend, handoff) {
         onDispose {
@@ -519,6 +539,7 @@ fun MediampVideoPlayerScreen(
                 positionMillis = state.positionMillis,
                 durationMillis = state.durationMillis,
                 bufferedPositionMillis = state.bufferedPositionMillis,
+                seekPreviewController = seekPreviewController,
                 playbackSpeed = state.playbackSpeed,
                 aspectRatio = state.aspectRatio,
                 vrMode = state.vrMode.takeIf { state.supportsVrMode },

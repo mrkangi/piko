@@ -989,18 +989,33 @@ class PikoMediaRepository(
      * PikoFileCachePool.discard 放手：片段截取中断后再来，已读的部分不必重下。
      *
      * [mediaId] 不为 null 时读那一档转码（MPEG-TS），同样经下载暂存，与原画的暂存分开；返回的来源长度是转码流的长度。
+     * 拖动预览以 [StreamRole.BACKGROUND] 和较小的 [readAheadLimit] 打开，避免随机定位把主播放器的前台读挤慢。
      */
-    suspend fun openRandomAccess(fileId: String, retainedBy: String? = null, mediaId: String? = null): Result<RandomAccessMediaSource> =
+    suspend fun openRandomAccess(
+        fileId: String,
+        retainedBy: String? = null,
+        mediaId: String? = null,
+        role: StreamRole = StreamRole.FOREGROUND,
+        readAheadLimit: Long? = null,
+    ): Result<RandomAccessMediaSource> =
         withContext(Dispatchers.Default) {
             runSuspendCatching {
                 val client = client
-                if (mediaId != null) return@runSuspendCatching ReaderRandomAccessSource(transcodeSource(client, fileId, mediaId, retainedBy))
-                partialSource(client, fileId, retainedBy)?.let { return@runSuspendCatching ReaderRandomAccessSource(it.second) }
+                if (mediaId != null) {
+                    return@runSuspendCatching ReaderRandomAccessSource(
+                        transcodeSource(client, fileId, mediaId, retainedBy),
+                        role,
+                        readAheadLimit,
+                    )
+                }
+                partialSource(client, fileId, retainedBy)?.let {
+                    return@runSuspendCatching ReaderRandomAccessSource(it.second, role, readAheadLimit)
+                }
                 val detail = detailOf(client, fileId)
                 val resolved = detail.resolveVariant(VariantPreference.Original)
                 val source = openByteSource(client, detail, resolved, leased = LeasedFile.isLeased(fileId), retainedBy = retainedBy)
                     ?: error(tr("文件缺少内容哈希，无法读取", "File is missing content hash and cannot be read", "ファイルにハッシュ情報がないため読み込めません", "파일에 콘텐츠 해시가 없어 읽을 수 없습니다", "檔案缺少內容雜湊值，無法讀取"))
-                ReaderRandomAccessSource(source)
+                ReaderRandomAccessSource(source, role, readAheadLimit)
             }
         }
 

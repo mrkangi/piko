@@ -2,6 +2,7 @@ package dev.piko.shared.media
 
 import dev.piko.shared.media.proxy.ProxyByteSource
 import dev.piko.shared.media.proxy.ProxyReader
+import io.github.nihildigit.pikpak.StreamRole
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -25,6 +26,8 @@ interface RandomAccessMediaSource : AutoCloseable {
  */
 internal class ReaderRandomAccessSource(
     private val source: ProxyByteSource,
+    private val role: StreamRole = StreamRole.FOREGROUND,
+    private val readAheadLimit: Long? = null,
 ) : RandomAccessMediaSource {
     private val lock = Mutex()
     private var reader: ProxyReader? = null
@@ -33,7 +36,10 @@ internal class ReaderRandomAccessSource(
 
     override suspend fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int = lock.withLock {
         if (position >= size) return@withLock -1
-        val current = reader ?: source.openReader().also { reader = it }
+        val current = reader ?: source.openReader(role).also {
+            it.readAheadLimit = readAheadLimit
+            reader = it
+        }
         try {
             if (current.position != position) current.seekTo(position)
             current.read(buffer, offset, length)

@@ -45,6 +45,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import dev.piko.BuildConfig
+import dev.piko.PikoApplication
 import dev.piko.data.auth.AppLanguage
 import dev.piko.data.auth.SessionManager
 import dev.piko.shared.media.player.PlaybackBackend
@@ -68,6 +69,7 @@ import dev.piko.ui.theme.MotionStyle
 import dev.piko.ui.theme.PikoMotionScale
 import dev.piko.ui.screens.player.MpvPlaybackBackend
 import dev.piko.ui.screens.player.MpvVideoSurface
+import dev.piko.ui.screens.player.SeekPreviewSupport
 import dev.piko.ui.screens.player.findActivity
 import dev.piko.update.AppUpdateService
 import java.io.File
@@ -190,6 +192,9 @@ class AndroidPikoPlatform(
     }
 
     override val videoPreview: VideoPreviewSupport = MpvPreviewSupport()
+
+    override val seekPreviews: SeekPreviewSupport =
+        AndroidSeekPreviewSupport(context, PikoApplication.instance.mediampMediaRepository)
 
     // 清单里的 intent-filter 已让 Piko 出现在磁力链接与种子文件的选择器里，默认由用户在选择器里点「始终」。
     // 应用没有接口替用户设定：RoleManager 只管浏览器、电话、短信这类角色，「默认打开」页只管验证过的 http 链接

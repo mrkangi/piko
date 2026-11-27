@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import dev.piko.data.auth.AppLanguage
 import dev.piko.shared.media.player.PlaybackBackend
 import dev.piko.ui.adaptive.FormFactor
+import dev.piko.ui.screens.player.SeekPreviewSupport
 import dev.piko.ui.theme.MotionStyle
 import dev.piko.ui.theme.PikoMotionScale
 import dev.piko.update.AppUpdateService
@@ -116,6 +117,9 @@ interface PikoPlatform {
 
     /** 为 null 表示该平台不提供片段下载的画面预览，入口随之隐藏。 */
     val videoPreview: VideoPreviewSupport?
+
+    /** 为 null 表示该平台不支持拖动进度的帧预览；Android 用系统解码器，桌面端暂不提供。 */
+    val seekPreviews: SeekPreviewSupport? get() = null
 
     /** 为 null 表示该平台不能由应用自己登记为磁力链接与种子文件的打开方式，设置页不给入口。 */
     val linkAssociation: LinkAssociation?

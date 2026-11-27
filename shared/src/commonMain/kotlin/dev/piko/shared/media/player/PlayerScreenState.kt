@@ -92,6 +92,9 @@ class PlayerScreenState(
 
     var isLocalPlayback by mutableStateOf(false)
         private set
+    /** 当前实际打开的本地副本路径；云端播放或本地副本已失效时为 null。 */
+    var localPlaybackPath by mutableStateOf<String?>(null)
+        private set
     var mediaInfo by mutableStateOf<PlayableMediaInfo?>(null)
         private set
     var isPreparing by mutableStateOf(true)
@@ -322,6 +325,7 @@ class PlayerScreenState(
         mediaInfo = adopted.mediaInfo
         localPathHint = adopted.localPath ?: localPathHint
         isLocalPlayback = adopted.localPath != null
+        localPlaybackPath = adopted.localPath
         usingProxy = adopted.usingProxy
         activeQuality = adopted.mediaInfo?.transcodeName
         isPreparing = false
@@ -577,6 +581,7 @@ class PlayerScreenState(
         this.fileId = fileId
         title = fileName
         localPathHint = localPath
+        localPlaybackPath = null
         mediaInfo = null
         activeQuality = null
         requestedQuality = null
@@ -702,6 +707,7 @@ class PlayerScreenState(
             val localPath = resolveLocalPath(fileId, repository.localPath(fileId) ?: localPathHint)
             if (localPath != null) {
                 isLocalPlayback = true
+                localPlaybackPath = localPath
                 usingProxy = false
                 activeQuality = null
                 PikoLog.i(TAG, "打开本地副本：${logFile(fileId, title)}")
@@ -709,6 +715,7 @@ class PlayerScreenState(
                 sessionSpeed?.let(backend::setSpeed)
             } else {
                 isLocalPlayback = false
+                localPlaybackPath = null
                 val prepareStarted = TimeSource.Monotonic.markNow()
                 val playback = repository.preparePlayback(fileId, requestedQuality, sessionMaxHeight ?: defaultMaxHeight()).getOrThrow()
                 val prepareMillis = prepareStarted.elapsedNow().inWholeMilliseconds
