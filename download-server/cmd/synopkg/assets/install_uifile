@@ -1,0 +1,28 @@
+[
+  {
+    "step_title": "Piko Download Server",
+    "items": [
+      {
+        "type": "textfield",
+        "desc": "指定用于保存下载文件的共享文件夹。安装时会自动创建（已存在则复用），并授权给套件用户。",
+        "subitems": [
+          {
+            "key": "wizard_download_share",
+            "desc": "下载共享文件夹",
+            "defaultValue": "piko-downloads",
+            "validator": {
+              "allowBlank": false,
+              "regex": {
+                "expr": "/^[\\w _-]+$/",
+                "errorText": "只填写共享文件夹名称，不要填写 /volume1 等路径。"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "desc": "安装完成后打开套件中心里的 Piko Download Server，或访问 http://<NAS 地址>:7788/ 完成首次设置。首次启动的 Setup Token 可在套件日志中查看。"
+      }
+    ]
+  }
+]

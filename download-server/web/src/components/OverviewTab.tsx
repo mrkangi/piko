@@ -39,10 +39,12 @@ interface Props {
 
 const ACTIVE_STATES = new Set(['RUNNING', 'VERIFYING', 'COMMITTING', 'PAUSING'])
 
-function SourceHealth({ source }: { source: Source }) {
+function SourceHealth({ source, failureThreshold }: { source: Source; failureThreshold: number }) {
   const tone =
     source.last_scan_status === 'FAILED'
       ? 'danger'
+      : source.last_scan_status === 'RETRYING'
+        ? 'wait'
       : source.last_scan_status === 'RUNNING'
         ? 'active'
         : source.last_scan_status === 'SUCCEEDED'
@@ -60,6 +62,8 @@ function SourceHealth({ source }: { source: Source }) {
               ? '正在扫描'
               : source.last_scan_status === 'FAILED'
                 ? '上次扫描失败'
+                : source.last_scan_status === 'RETRYING'
+                  ? `扫描暂时失败 ${source.consecutive_failures}/${failureThreshold}，等待重试`
                 : `下次扫描 ${formatRelativeTime(source.next_scan_at)}`}
         </div>
       </div>
@@ -323,7 +327,7 @@ export function OverviewTab({
             ) : (
               <div className="divide-y divide-line">
                 {sources.slice(0, 5).map((source) => (
-                  <SourceHealth key={source.id} source={source} />
+                  <SourceHealth key={source.id} source={source} failureThreshold={settings?.scan_failure_threshold ?? 3} />
                 ))}
               </div>
             )}

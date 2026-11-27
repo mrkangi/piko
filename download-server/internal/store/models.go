@@ -72,6 +72,14 @@ type ScanRun struct {
 	FinishedAt   int64  `json:"finished_at"`
 }
 
+type ScanFailureResult struct {
+	Source              Source
+	ConsecutiveFailures int
+	Threshold           int
+	// Confirmed 仅在本次失败使来源首次达到阈值时为 true。
+	Confirmed bool
+}
+
 type ScanEntry struct {
 	ScanRunID        string
 	SourceID         string

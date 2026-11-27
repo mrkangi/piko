@@ -282,6 +282,12 @@ func (s *Service) remember(info Info, ttl time.Duration) {
 }
 
 func (s *Service) applyBlocker() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DOWNLOAD_SERVER_PACKAGE_MODE"))) {
+	case "synology":
+		return "当前为群晖套件安装，请通过套件中心升级"
+	case "fnos":
+		return "当前为飞牛应用，请通过应用中心升级"
+	}
 	if s.container() {
 		return "容器环境不支持自更新，请拉取新镜像后重启容器"
 	}

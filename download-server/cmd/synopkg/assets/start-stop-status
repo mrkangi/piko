@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/common.sh"
+
+case "${1:-}" in
+  start)
+    start_service
+    ;;
+  stop)
+    stop_service
+    ;;
+  restart)
+    stop_service
+    start_service
+    ;;
+  status)
+    if is_running; then
+      echo "${PKG_NAME} is running"
+      exit 0
+    fi
+    echo "${PKG_NAME} is not running"
+    exit 3
+    ;;
+  log)
+    printf '%s\n' "${SERVICE_LOG}"
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart|status|log}" >&2
+    exit 1
+    ;;
+esac

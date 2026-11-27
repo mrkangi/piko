@@ -142,6 +142,7 @@ export interface SystemSettings {
   segment_threads: number
   segment_min_size_mib: number
   default_scan_interval_sec: number
+  scan_failure_threshold: number
   min_free_space_mib: number
   notification_status_interval_minutes: number
 }

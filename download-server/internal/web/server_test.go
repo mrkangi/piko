@@ -239,7 +239,7 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 
 	// Settings read/update, local-dirs browse, and source delete.
 	nextDownloadDir := t.TempDir()
-	putSettingsReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/settings", bytes.NewBufferString(`{"download_dir":`+jsonQuote(nextDownloadDir)+`,"max_concurrent_downloads":4,"segment_threads":6,"segment_min_size_mib":8,"default_scan_interval_sec":120,"min_free_space_mib":256}`))
+	putSettingsReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/settings", bytes.NewBufferString(`{"download_dir":`+jsonQuote(nextDownloadDir)+`,"max_concurrent_downloads":4,"segment_threads":6,"segment_min_size_mib":8,"default_scan_interval_sec":120,"scan_failure_threshold":4,"min_free_space_mib":256}`))
 	putSettingsReq.Header.Set("Content-Type", "application/json")
 	putSettingsReq.Header.Set("X-CSRF-Token", loginPayload.CSRFToken)
 	for _, c := range cookies {
@@ -256,8 +256,12 @@ func TestAuthCSRFAndEndToEndWebFlow(t *testing.T) {
 		updatedSettings.MaxConcurrentDownloads != 4 ||
 		updatedSettings.SegmentThreads != 6 ||
 		updatedSettings.SegmentMinSizeMiB != 8 ||
-		updatedSettings.DefaultScanIntervalSec != 120 {
+		updatedSettings.DefaultScanIntervalSec != 120 ||
+		updatedSettings.ScanFailureThreshold != 4 {
 		t.Fatalf("unexpected updated settings: %+v", updatedSettings)
+	}
+	if cat.FailureThreshold() != 4 {
+		t.Fatalf("expected catalog failure threshold 4, got %d", cat.FailureThreshold())
 	}
 
 	putProxyReq, _ := http.NewRequest(http.MethodPut, httpSrv.URL+"/api/system/proxy", bytes.NewBufferString(`{"proxy_url":"socks5://alice:secret@127.0.0.1:1080"}`))

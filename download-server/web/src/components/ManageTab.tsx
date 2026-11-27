@@ -48,7 +48,7 @@ const NOTIFY_EVENTS = [
   { key: 'task.failed', label: '下载最终失败' },
   { key: 'task.completed', label: '下载完成' },
   { key: 'task.conflict', label: '本地路径冲突' },
-  { key: 'scan.failed', label: '来源扫描失败' },
+  { key: 'scan.failed', label: '来源扫描连续失败' },
   { key: 'system.low_disk', label: '磁盘空间不足' },
   { key: 'system.disk_ok', label: '磁盘空间恢复' },
   { key: 'status.report', label: '定时状态汇报' },
@@ -91,6 +91,7 @@ interface Props {
     segment_threads?: number
     segment_min_size_mib?: number
     default_scan_interval_sec?: number
+    scan_failure_threshold?: number
     min_free_space_mib?: number
   }) => Promise<void>
   onSaveProxy: (proxyURL: string | null) => Promise<void>
@@ -155,6 +156,10 @@ export function ManageTab({
   const [segmentThreads, setSegmentThreads] = useState(1)
   const [segmentMinMiB, setSegmentMinMiB] = useState(16)
   const [defaultIntervalSec, setDefaultIntervalSec] = useState(300)
+  const [scanFailureThreshold, setScanFailureThreshold] = useState(3)
+  const [scanPolicyDirty, setScanPolicyDirty] = useState(false)
+  const [scanPolicySaving, setScanPolicySaving] = useState(false)
+  const [scanPolicyError, setScanPolicyError] = useState('')
   const [minFreeMiB, setMinFreeMiB] = useState(512)
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsError, setSettingsError] = useState('')
@@ -213,7 +218,10 @@ export function ManageTab({
       setSegmentMinMiB(settings.segment_min_size_mib)
       setMinFreeMiB(settings.min_free_space_mib)
     }
-    setDefaultIntervalSec(settings.default_scan_interval_sec)
+    if (!scanPolicyDirty) {
+      setDefaultIntervalSec(settings.default_scan_interval_sec)
+      setScanFailureThreshold(settings.scan_failure_threshold ?? 3)
+    }
     if (!sourceIntervalDirty) {
       setIntervalSec(settings.default_scan_interval_sec)
     }
@@ -223,7 +231,7 @@ export function ManageTab({
     if (!pikpakUserDirty) {
       setPikpakUser(settings.pikpak_username || '')
     }
-  }, [settings, settingsDirty, sourceIntervalDirty, statusIntervalDirty, pikpakUserDirty])
+  }, [settings, settingsDirty, scanPolicyDirty, sourceIntervalDirty, statusIntervalDirty, pikpakUserDirty])
 
   async function handleSaveSettings(event: FormEvent) {
     event.preventDefault()
@@ -254,6 +262,23 @@ export function ManageTab({
     setMinFreeMiB(settings.min_free_space_mib)
     setSettingsDirty(false)
     setSettingsError('')
+  }
+
+  async function handleSaveScanPolicy(event: FormEvent) {
+    event.preventDefault()
+    setScanPolicyError('')
+    setScanPolicySaving(true)
+    try {
+      await onSaveSettings({
+        default_scan_interval_sec: Number(defaultIntervalSec) || 300,
+        scan_failure_threshold: Number(scanFailureThreshold) || 3,
+      })
+      setScanPolicyDirty(false)
+    } catch (err) {
+      setScanPolicyError(err instanceof Error ? err.message : '保存扫描策略失败')
+    } finally {
+      setScanPolicySaving(false)
+    }
   }
 
   async function handleCreateNotification(event: FormEvent) {
@@ -568,6 +593,55 @@ export function ManageTab({
             <div className="space-y-4">
               <Card>
                 <CardHeader
+                  title="扫描策略"
+                  description="全局默认扫描周期与失败判定。单次网络抖动只会进入重试，达到阈值后才标记异常并发送通知。"
+                  icon={<RefreshCw className="h-4 w-4" />}
+                />
+                <form onSubmit={handleSaveScanPolicy} className="space-y-4 p-4 sm:p-5">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="默认扫描周期（秒）" hint="新建来源默认使用，已添加来源可在卡片内单独调整。">
+                      <input
+                        type="number"
+                        min={10}
+                        required
+                        value={defaultIntervalSec}
+                        onChange={(event) => {
+                          setDefaultIntervalSec(Number(event.target.value))
+                          setScanPolicyDirty(true)
+                        }}
+                        className={cn(inputClassName, 'tabular-nums')}
+                      />
+                    </Field>
+                    <Field label="连续失败判定阈值" hint="连续失败达到该次数后才标记来源异常；成功扫描一次会立即清零。">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        required
+                        value={scanFailureThreshold}
+                        onChange={(event) => {
+                          setScanFailureThreshold(Number(event.target.value))
+                          setScanPolicyDirty(true)
+                        }}
+                        className={cn(inputClassName, 'tabular-nums')}
+                      />
+                    </Field>
+                  </div>
+                  {scanPolicyError && (
+                    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{scanPolicyError}</div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] leading-4 text-ink-3">失败重试会按 30 秒、1 分钟、2 分钟逐步退避，最长 1 小时。</p>
+                    <Button type="submit" variant="primary" loading={scanPolicySaving} disabled={!scanPolicyDirty}>
+                      <Save className="h-3.5 w-3.5" />
+                      {scanPolicySaving ? '保存中…' : '保存扫描策略'}
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+
+              <Card>
+                <CardHeader
                   title="监控来源"
                   description="只有远端 PikPak 目录需要定时轮询扫描；远端删除默认只做标记，不删本地文件。"
                   icon={<FolderCog className="h-4 w-4" />}
@@ -745,15 +819,18 @@ export function ManageTab({
                       const editingInterval = editingIntervalId === source.id
                       const editingMinSize = editingMinSizeId === source.id
                       const minSizeMiB = Math.round(source.min_file_size_bytes / (1024 * 1024))
+                      const failed = source.last_scan_status === 'FAILED'
+                      const retrying = source.last_scan_status === 'RETRYING'
+                      const failureThreshold = settings?.scan_failure_threshold ?? 3
                       return (
                         <article key={source.id} className="flex flex-col gap-3 rounded-xl border border-line bg-canvas/40 p-3.5">
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <h3 className="truncate text-sm font-semibold text-ink">{source.local_alias}</h3>
-                                <Badge tone={source.enabled ? 'success' : 'neutral'}>
-                                  <StatusDot tone={source.enabled ? 'success' : 'neutral'} />
-                                  {source.enabled ? '监控中' : '已停用'}
+                                <Badge tone={!source.enabled ? 'neutral' : failed ? 'danger' : retrying ? 'wait' : 'success'}>
+                                  <StatusDot tone={!source.enabled ? 'neutral' : failed ? 'danger' : retrying ? 'wait' : 'success'} />
+                                  {!source.enabled ? '已停用' : failed ? '扫描异常' : retrying ? '重试中' : '监控中'}
                                 </Badge>
                               </div>
                               <p className="mt-1 truncate font-mono text-[11px] text-ink-3" title={source.remote_root_path}>
@@ -773,14 +850,18 @@ export function ManageTab({
                               状态{' '}
                               <span
                                 className={
-                                  source.last_scan_status === 'FAILED'
+                                  failed
                                     ? 'text-rose-300'
+                                    : retrying
+                                      ? 'text-amber-300'
                                     : source.last_scan_status === 'SUCCEEDED'
                                       ? 'text-emerald-300'
                                       : 'text-ink-2'
                                 }
                               >
-                                {source.last_scan_status || '尚未运行'}
+                                {retrying
+                                  ? `等待重试（${source.consecutive_failures}/${failureThreshold}）`
+                                  : source.last_scan_status || '尚未运行'}
                               </span>
                             </div>
                             <div className="flex items-center gap-1">
@@ -861,8 +942,20 @@ export function ManageTab({
                           </div>
 
                           {source.last_scan_error && (
-                            <div className="rounded-lg border border-rose-500/25 bg-rose-500/8 px-2.5 py-2 text-[11px] leading-4 text-rose-200 break-words">
-                              {source.last_scan_error}
+                            <div
+                              className={cn(
+                                'rounded-lg border px-2.5 py-2 text-[11px] leading-4 break-words',
+                                retrying
+                                  ? 'border-amber-500/25 bg-amber-500/8 text-amber-100'
+                                  : 'border-rose-500/25 bg-rose-500/8 text-rose-200',
+                              )}
+                            >
+                              {retrying && (
+                                <div className="mb-1 font-medium">
+                                  临时错误（连续 {source.consecutive_failures}/{failureThreshold} 次，尚未确认异常）
+                                </div>
+                              )}
+                              <div>{source.last_scan_error}</div>
                             </div>
                           )}
 

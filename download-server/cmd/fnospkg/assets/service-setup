@@ -1,0 +1,32 @@
+#!/bin/bash
+
+service_preinst() {
+  ensure_dirs
+  ensure_env
+}
+
+service_postinst() {
+  ensure_dirs
+  ensure_env
+}
+
+service_preupgrade() {
+  :
+}
+
+service_postupgrade() {
+  ensure_dirs
+  ensure_env
+}
+
+service_preuninst() {
+  pkill -f "^${APP_BIN}" 2>/dev/null || true
+}
+
+service_postuninst() {
+  :
+}
+
+service_poststop() {
+  pkill -f "^${APP_BIN}" 2>/dev/null || true
+}

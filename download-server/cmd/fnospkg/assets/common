@@ -1,0 +1,220 @@
+#!/bin/bash
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+: "${TRIM_APPNAME:?TRIM_APPNAME is required}"
+: "${TRIM_PKGVAR:?TRIM_PKGVAR is required}"
+: "${TRIM_APPDEST:?TRIM_APPDEST is required}"
+
+PKG_ETC="${TRIM_PKGETC:-${TRIM_PKGVAR}/etc}"
+SHARE_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
+if [ -z "${SHARE_DIR}" ]; then
+  SHARE_DIR="${TRIM_PKGVAR}/PikoDownloads"
+fi
+
+APP_BIN="${TRIM_APPDEST}/bin/download-server"
+ENV_FILE="${PKG_ETC}/download-server.env"
+PID_FILE="${TRIM_PKGVAR}/download-server.pid"
+LOG_FILE="${TRIM_PKGVAR}/download-server.log"
+DATA_DIR="${TRIM_PKGVAR}/data"
+DOWNLOAD_DIR="${SHARE_DIR}/PikoDownloads"
+SERVICE_PORT="${TRIM_SERVICE_PORT:-7788}"
+SVC_WAIT_TIMEOUT="${SVC_WAIT_TIMEOUT:-15}"
+
+log_line() {
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "${LOG_FILE}"
+}
+
+fail_user() {
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    printf '%s\n' "$*" > "${TRIM_TEMP_LOGFILE}"
+  fi
+  printf '%s\n' "$*" >&2
+}
+
+ensure_dirs() {
+  mkdir -p "${TRIM_PKGVAR}" "${DATA_DIR}" "${PKG_ETC}" "${DOWNLOAD_DIR}"
+  chmod 700 "${DATA_DIR}" "${PKG_ETC}" 2>/dev/null || true
+}
+
+ensure_env() {
+  if [ -f "${ENV_FILE}" ]; then
+    chmod 600 "${ENV_FILE}" 2>/dev/null || true
+    return 0
+  fi
+  umask 077
+  cat > "${ENV_FILE}" <<EOF
+# Piko Download Server environment configuration for fnOS
+DOWNLOAD_SERVER_HOST="0.0.0.0"
+DOWNLOAD_SERVER_PORT="${SERVICE_PORT}"
+DOWNLOAD_SERVER_DATA_DIR="${DATA_DIR}"
+DOWNLOAD_SERVER_HOME="${SHARE_DIR}"
+DOWNLOAD_SERVER_PACKAGE_MODE="fnos"
+EOF
+  chmod 600 "${ENV_FILE}" 2>/dev/null || true
+}
+
+load_env() {
+  if [ -f "${ENV_FILE}" ]; then
+    . "${ENV_FILE}"
+  fi
+}
+
+apply_env() {
+  load_env
+  export HOME="${DOWNLOAD_SERVER_HOME:-${SHARE_DIR}}"
+  export DOWNLOAD_SERVER_HOST="${DOWNLOAD_SERVER_HOST:-0.0.0.0}"
+  export DOWNLOAD_SERVER_PORT="${DOWNLOAD_SERVER_PORT:-${SERVICE_PORT}}"
+  export DOWNLOAD_SERVER_DATA_DIR="${DOWNLOAD_SERVER_DATA_DIR:-${DATA_DIR}}"
+  export DOWNLOAD_SERVER_PACKAGE_MODE="${DOWNLOAD_SERVER_PACKAGE_MODE:-fnos}"
+  mkdir -p "${DOWNLOAD_DIR}" 2>/dev/null || true
+}
+
+daemon_status() {
+  [ -f "${PID_FILE}" ] || return 1
+  local pid
+  pid="$(cat "${PID_FILE}" 2>/dev/null)" || return 1
+  case "${pid}" in
+    ''|*[!0-9]*)
+      rm -f "${PID_FILE}"
+      return 1
+      ;;
+  esac
+  if kill -0 "${pid}" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "${PID_FILE}"
+  return 1
+}
+
+start_daemon() {
+  ensure_dirs
+  ensure_env
+  apply_env
+
+  if daemon_status; then
+    echo "${TRIM_APPNAME} is already running"
+    return 0
+  fi
+  if [ ! -x "${APP_BIN}" ]; then
+    fail_user "download-server binary is missing: ${APP_BIN}"
+    return 1
+  fi
+
+  cd "${TRIM_PKGVAR}" || return 1
+  log_line "starting ${APP_BIN}"
+  nohup "${APP_BIN}" >> "${LOG_FILE}" 2>&1 &
+  local pid=$!
+  printf '%s' "${pid}" > "${PID_FILE}"
+
+  local waited=0
+  while [ "${waited}" -lt "${SVC_WAIT_TIMEOUT}" ]; do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      break
+    fi
+    if [ "${waited}" -ge 1 ]; then
+      echo "${TRIM_APPNAME} started (pid ${pid})"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "${TRIM_APPNAME} started (pid ${pid})"
+    return 0
+  fi
+
+  rm -f "${PID_FILE}"
+  fail_user "${TRIM_APPNAME} failed to start; see ${LOG_FILE}"
+  tail -n 40 "${LOG_FILE}" >&2 2>/dev/null || true
+  return 1
+}
+
+stop_daemon() {
+  if ! daemon_status; then
+    rm -f "${PID_FILE}"
+    echo "${TRIM_APPNAME} is not running"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "${PID_FILE}")"
+  log_line "stopping pid ${pid}"
+  kill -TERM "${pid}" 2>/dev/null || true
+
+  local waited=0
+  while [ "${waited}" -lt 20 ]; do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -KILL "${pid}" 2>/dev/null || true
+  fi
+  rm -f "${PID_FILE}"
+  call_func service_poststop
+  echo "${TRIM_APPNAME} stopped"
+}
+
+call_func() {
+  local fn="$1"
+  if declare -F "${fn}" >/dev/null 2>&1; then
+    "${fn}"
+  fi
+}
+
+install_init() {
+  call_func validate_preinst
+  call_func service_preinst
+  exit 0
+}
+
+install_callback() {
+  ensure_dirs
+  ensure_env
+  call_func service_postinst
+  exit 0
+}
+
+upgrade_init() {
+  stop_daemon
+  call_func validate_preupgrade
+  call_func service_preupgrade
+  exit 0
+}
+
+upgrade_callback() {
+  ensure_dirs
+  ensure_env
+  call_func service_postupgrade
+  exit 0
+}
+
+uninstall_init() {
+  stop_daemon
+  call_func service_preuninst
+  exit 0
+}
+
+uninstall_callback() {
+  call_func service_postuninst
+  if [ "${wizard_delete_data:-false}" = "true" ]; then
+    case "${TRIM_PKGVAR}" in
+      /vol*|/usr/local/apps/@appdata/*)
+        find "${TRIM_PKGVAR}" -mindepth 1 -delete 2>/dev/null || true
+        ;;
+    esac
+  fi
+  exit 0
+}
+
+config_init() {
+  call_func service_preconfig
+  exit 0
+}
+
+config_callback() {
+  call_func service_postconfig
+  exit 0
+}

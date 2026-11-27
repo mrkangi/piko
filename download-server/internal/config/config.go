@@ -13,19 +13,20 @@ import (
 )
 
 const (
-	DefaultHost               = "0.0.0.0"
-	DefaultPort               = 7788
-	DefaultMaxConcurrent      = 2
-	DefaultSegmentThreads     = 1
-	DefaultSegmentMinBytes    = 16 * 1024 * 1024
-	DefaultScanInterval       = 5 * time.Minute
-	DefaultMinFreeSpaceBytes  = 512 * 1024 * 1024
-	DefaultNoProgressTimeout  = 5 * time.Minute
-	DefaultMaxRetries         = 5
-	DefaultAPIRatePerSecond   = 5
-	DefaultAPIRateBurst       = 10
-	DefaultDownloadSubdirName = "PikoDownloads"
-	DefaultDataSubdirName     = ".pikpak/downloader"
+	DefaultHost                 = "0.0.0.0"
+	DefaultPort                 = 7788
+	DefaultMaxConcurrent        = 2
+	DefaultSegmentThreads       = 1
+	DefaultSegmentMinBytes      = 16 * 1024 * 1024
+	DefaultScanInterval         = 5 * time.Minute
+	DefaultScanFailureThreshold = 3
+	DefaultMinFreeSpaceBytes    = 512 * 1024 * 1024
+	DefaultNoProgressTimeout    = 5 * time.Minute
+	DefaultMaxRetries           = 5
+	DefaultAPIRatePerSecond     = 5
+	DefaultAPIRateBurst         = 10
+	DefaultDownloadSubdirName   = "PikoDownloads"
+	DefaultDataSubdirName       = ".pikpak/downloader"
 )
 
 type Config struct {

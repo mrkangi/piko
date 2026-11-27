@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/common.sh"
+
+echo "==> Piko Download Server removed"
+echo "    Data and downloads were kept at:"
+echo "      ${PKG_VAR}"
+echo "    Remove that directory manually if you want a clean uninstall."

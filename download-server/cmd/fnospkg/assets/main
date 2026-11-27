@@ -1,0 +1,29 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/common"
+. "${SCRIPT_DIR}/service-setup"
+
+case "${1:-}" in
+  start)
+    start_daemon
+    ;;
+  stop)
+    stop_daemon
+    ;;
+  status)
+    if daemon_status; then
+      echo "${TRIM_APPNAME} is running"
+      exit 0
+    fi
+    echo "${TRIM_APPNAME} is not running"
+    exit 3
+    ;;
+  log)
+    tail -n "${2:-100}" "${LOG_FILE}" 2>/dev/null || true
+    ;;
+  *)
+    fail_user "Unknown command: ${1:-}"
+    exit 1
+    ;;
+esac

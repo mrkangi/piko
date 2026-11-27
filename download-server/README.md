@@ -84,6 +84,8 @@ npm run dev
 - Windows：`amd64`、`arm64`
 - FreeBSD：`amd64`
 - Android/Termux：`arm64` 二进制、`termux-aarch64.deb` 安装包与 `install-termux.sh` 一键常驻脚本
+- 群晖 DSM 7：`x86_64`、`armv8`、`armv7` 三个 `.spk` 套件包
+- 飞牛 fnOS：`x86`、`arm` 两个原生 `.fpk` 应用包
 
 产物在 `download-server/bin/`，并生成 `SHA256SUMS.txt`、`BUILD-INFO.txt` 以及 Termux 用的 apt 源元数据 `Packages`、`Packages.gz`、`Release`（本机有 `dpkg-deb` 时）。已构建前端时可用 `SKIP_WEB=1 ./scripts/build-all.sh` 跳过 Node 构建。
 
@@ -186,6 +188,8 @@ cat $PREFIX/var/log/sv/download-server/current  # 查看日志与首次启动 Se
 - 当前程序会备份为同目录的 `download-server.prev`；Termux、systemd 等常驻方式会在替换成功后原地重启，下载任务由启动恢复逻辑继续。
 - Termux 的 `.deb`、`install-termux.sh` 和直接运行二进制都支持自更新；需要 `$PREFIX/bin` 对当前用户可写，并且能访问 GitHub。
 - Docker 容器内不支持自更新，请在宿主机执行 `docker compose pull && docker compose up -d`。
+- 群晖套件内不执行二进制自更新，请在套件中心手动安装新版本 `.spk`。
+- 飞牛 fnOS 应用内不执行二进制自更新，请在应用中心手动安装新版本 `.fpk`。
 - GitHub API 未登录请求有频率限制，服务端会缓存检查结果 10 分钟；手动点「重新检查」会强制刷新。
 - 可用 `download-server --version` 查看当前二进制版本与构建时间。
 
@@ -216,12 +220,97 @@ sv up download-server
 
 升级后的版本在共享存储上可直接启动，也可以留在外部目录。
 
+## 群晖 DSM 7 套件（SPK）
+
+构建会生成三个架构的套件包：
+
+```text
+download-server-<版本>-synology-x86_64.spk   # Intel / AMD 机型
+download-server-<版本>-synology-armv8.spk   # ARM64 机型
+download-server-<版本>-synology-armv7.spk   # 较老的 ARMv7 机型
+```
+
+只支持 DSM 7.0 及以上。套件以 DSM 内部用户 `sc-piko-download-server` 运行，不使用 root。
+
+### 安装
+
+1. 在套件中心打开「设置 → 常规 → 信任级别」，选择允许安装任何发行者的套件。当前构建没有 Synology 官方签名。
+2. 套件中心 → 手动安装 → 选择对应架构的 `.spk`。
+3. 安装向导里填写下载共享文件夹名，默认 `piko-downloads`；不存在时会创建，并授权给套件用户。
+4. 安装完成后打开 `http://<NAS 地址>:7788/` 或套件中心里的 Piko Download Server。
+
+首次启动的 Setup Token 会写入套件日志：
+
+```bash
+tail -f /var/packages/piko-download-server/var/logs/service.log
+```
+
+也可以从套件中心的服务日志入口查看。
+
+### 路径与配置
+
+- 数据目录：`/var/packages/piko-download-server/var/data`，包含 SQLite、`secret.key`、实例锁和 PikPak 会话。
+- 环境配置：`/var/packages/piko-download-server/var/etc/download-server.env`。
+- 服务日志：`/var/packages/piko-download-server/var/logs/service.log`。
+- 默认下载目录：安装向导选择的共享文件夹下的 `PikoDownloads`；没有选择时回退到套件 `var/PikoDownloads`。
+- 监听端口：`0.0.0.0:7788`，套件会同时登记 DSM 防火墙端口。
+
+修改 `download-server.env` 后执行：
+
+```bash
+synopkg stop piko-download-server
+synopkg start piko-download-server
+```
+
+### 升级与卸载
+
+- 升级：直接手动安装新版本 `.spk`，`preupgrade`/`postupgrade` 会停启服务并保留 `var` 数据。
+- 套件内不执行二进制自更新；管理页会提示通过套件中心升级，避免绕过套件脚本和权限。
+- 卸载默认保留 `/var/packages/piko-download-server/var` 与共享目录中的下载文件；彻底清理时手动删除该目录。
+- 不建议把 7788 直接暴露到公网，推荐使用 DSM 反向代理加 HTTPS。
+
+## 飞牛 fnOS 应用（FPK）
+
+构建会生成原生 `.fpk`：
+
+```text
+download-server-<版本>-fnos-x86.fpk   # x86_64 设备
+download-server-<版本>-fnos-arm.fpk   # ARM64 设备
+```
+
+`.fpk` 是飞牛应用中心使用的 tar.gz 包，包含 `manifest`、`app.tgz`、`cmd`、`config`、`wizard`、图标和防火墙声明。桌面入口配置与图标按 fnOS 规范放在 `app.tgz` 的 `ui/` 下，安装后落在 `target/ui`，应用中心卡片的「打开」可直接跳到 `http://<NAS 地址>:7788/`。应用以专用用户运行，不依赖 Docker。
+
+### 安装
+
+1. 在飞牛应用中心选择手动安装，上传对应架构的 `.fpk`。
+2. 安装完成后在应用中心点击「打开」，或访问 `http://<NAS 地址>:7788/`。
+3. 首次启动的 Setup Token 写入应用日志。
+
+### 路径与配置
+
+- 应用目录：`/var/apps/piko-download-server`。
+- 数据目录：`/var/apps/piko-download-server/var/data`。
+- 配置目录：`/var/apps/piko-download-server/etc`，环境文件为 `download-server.env`。
+- 日志：`/var/apps/piko-download-server/var/download-server.log`。
+- 下载共享目录：`piko-download-server/downloads`，可在文件管理器中访问；默认下载子目录为 `PikoDownloads`。
+- 监听端口：`0.0.0.0:7788`，并通过 `piko-download-server.sc` 登记防火墙规则。
+
+修改环境文件后，在应用中心停止再启动应用即可生效。
+
+### 升级与卸载
+
+- 升级：在应用中心手动安装新版本 `.fpk`，`upgrade_init`/`upgrade_callback` 会停启服务并保留数据。
+- 应用内不执行二进制自更新；管理页会提示通过应用中心升级。
+- 卸载时可以选择保留或删除应用数据；默认保留下载共享目录中的文件。
+- 不建议把 7788 直接暴露到公网，推荐放在 HTTPS 反向代理后。
+
 ## 管理页
 
 - **下载目录**：设置服务端下载根目录、最大并发和最低保留空间。
 - **分片下载**：默认单流下载。手动把单文件分片连接数调到 2 以上且文件达到两倍最小分片大小时，才使用多个 Range 连接并行下载；改回 1 会立即降级为真正的单流。下载节点返回 429/503 时停止派发新分片，已连接分片完成当前传输后退出，自适应减半并发并带抖动退避；单连接仍遇 503 会刷新直链有限重试。每个下载节点最多同时保留 5 条连接，建议分片连接数设为 4–5，过高不会更快，只会更容易触发节点限流；不支持 Range 时自动回退单流。
 - **网络代理**：可配置 HTTP、HTTPS 或 SOCKS5 代理，统一用于 PikPak API 和原始文件下载节点；支持在 URL 中携带认证信息。代理地址加密保存，页面只显示脱敏结果；关闭后恢复直连。
 - **PikPak 目录**：批量勾选或单个添加监控目录，设置首次扫描策略和扫描间隔。
+- **扫描失败防抖**：可设置连续失败判定阈值（默认 3 次）。单次网络波动只进入 `RETRYING` 并自动退避重试，不显示为来源异常；连续失败达到阈值后才标记 `FAILED` 并发送通知，任意一次成功扫描会立即清零。
 - **最小文件大小**：每个来源可设置 MiB 阈值，小于阈值的文件只建立索引，不生成下载任务；填 0 表示不限。
 - **手动扫描**：单来源「立即扫描」；顶部「扫描全部已启用」安排所有启用来源立即扫描。
 - **PikPak 账号**：验证并更新账号密码；有活动下载任务时需先暂停。
@@ -232,7 +321,7 @@ sv up download-server
 - **运行日志**：页面内直接查看服务端标准日志，支持关键词搜索、自动刷新、加载更早和回到最新。日志只保存在内存环形缓冲中（默认最多 4000 条 / 2 MiB，单行最多 8 KiB），页面最多渲染 500 条；服务重启后清空，不会因日志过多拖垮浏览器或占满磁盘。
 - **文件名隐藏**：默认脱敏。右上角眼睛按钮可在明文与脱敏模式之间切换；隐藏后任务、文件索引和详情抽屉中的路径只保留目录层级与扩展名，设置保存在当前浏览器本地，不影响服务端数据或其他设备。
 
-默认扫描周期为 5 分钟。扫描仍由服务端单线程调度，避免同时打满 PikPak API。
+默认扫描周期为 5 分钟。扫描仍由服务端单线程调度，避免同时打满 PikPak API。失败重试按 30 秒、1 分钟、2 分钟逐步退避，最长 1 小时；阈值内的失败不会触发通知或概览告警。
 
 ## 通知
 
@@ -244,7 +333,7 @@ sv up download-server
 - `task.failed`：最终失败
 - `task.completed`：下载完成
 - `task.conflict`：本地路径冲突
-- `scan.failed`：来源扫描失败
+- `scan.failed`：来源连续扫描失败达到阈值（仅跨过阈值时通知一次，恢复后重新计数）
 - `system.low_disk` / `system.disk_ok`：下载卷空间不足与恢复
 
 通知正文只包含事件类型、数量和来源，不包含文件名、文件路径或错误详情；开始/完成/失败/重试/冲突等任务事件会在短窗口内按渠道和来源汇总为“N 个任务”。
