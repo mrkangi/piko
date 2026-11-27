@@ -196,12 +196,8 @@ interface PikoUserPreferences {
     suspend fun loadDownloadTasks(): String
     suspend fun saveDownloadTasks(serialized: String)
 
-    /** 远程下载开关与设备身份。设备身份只保存在本机，不进入设置同步。 */
-    val remoteDownloadEnabledFlow: Flow<Boolean> get() = flowOf(false)
-    suspend fun setRemoteDownloadEnabled(enabled: Boolean) {}
-    suspend fun loadOrCreateRemoteDeviceId(): String = ""
-    suspend fun loadRemoteDeviceName(): String = ""
-    suspend fun saveRemoteDeviceName(name: String) {}
+    /** 本机稳定设备身份。只保存在本机，不进入设置同步。 */
+    suspend fun loadOrCreateClientDeviceId(): String = ""
 
     /** 上传任务表的 JSON，见 PikoUploadCoordinator。会话里的 OSS 凭据已抹去，另存在 [loadUploadCredentials]。空串表示从未保存。 */
     suspend fun loadUploadTasks(): String

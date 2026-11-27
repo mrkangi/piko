@@ -34,7 +34,6 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
@@ -45,7 +44,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Minimize
 import androidx.compose.material.icons.outlined.OpenInNew
@@ -170,11 +168,6 @@ fun SettingsScreen(
     val isClipAutoExtendEnabled by sessionManager.clipAutoExtendFlow.collectAsStateWithLifecycle(initialValue = true)
     val isSyncPlayHistoryEnabled by sessionManager.syncPlayHistoryFlow.collectAsStateWithLifecycle(initialValue = true)
     val isSettingsSyncEnabled by sessionManager.settingsSyncFlow.collectAsStateWithLifecycle(initialValue = true)
-    val isRemoteDownloadEnabled by sessionManager.remoteDownloadEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
-    val remoteRealtimeConfig by services.remoteRealtimeConfig.collectAsStateWithLifecycle(initialValue = null)
-    val remoteRealtimeConnected by services.remoteRealtimeConnected.collectAsStateWithLifecycle(initialValue = false)
-    var showRemoteRealtime by remember { mutableStateOf(false) }
-    var enableRemoteAfterRealtime by remember { mutableStateOf(false) }
     val settingsSync = services.settingsSync
     val syncStatus by settingsSync.status.collectAsStateWithLifecycle()
     val lastSynced by settingsSync.lastSynced.collectAsStateWithLifecycle()
@@ -185,9 +178,6 @@ fun SettingsScreen(
     val appLanguage by sessionManager.appLanguageFlow.collectAsStateWithLifecycle(initialValue = AppLanguage.SYSTEM)
     var showLanguage by remember { mutableStateOf(false) }
     val systemLanguageLabel = tr("跟随系统", "System", "システムに従う", "시스템 설정 따르기", "跟隨系統")
-    LaunchedEffect(showRemoteRealtime) {
-        if (showRemoteRealtime) services.refreshRemoteRealtimeConfig()
-    }
     if (showLanguage) SettingsChoiceDialog(
         icon = Icons.Outlined.Language,
         title = tr("语言", "Language", "言語", "언어", "語言"),
@@ -612,38 +602,6 @@ fun SettingsScreen(
                                 checked = isConcurrentAccelerationEnabled,
                                 onCheckedChange = { scope.launch { sessionManager.setConcurrentAccelerationEnabled(it) } },
                             )
-                            SettingsSwitchRow(
-                                icon = Icons.Outlined.DevicesOther,
-                                title = tr("远程下载", "Remote downloads", "リモートダウンロード", "원격 다운로드", "遠端下載"),
-                                supporting = tr(
-                                    "通过 MQTT 允许同一 PikPak 账号的其他设备向本机发送下载任务",
-                                    "Allow other devices on this PikPak account to send downloads here over MQTT",
-                                    "MQTT 経由で同じ PikPak アカウントの他の端末からこの端末へダウンロードを送信できるようにします",
-                                    "MQTT를 통해 같은 PikPak 계정의 다른 기기에서 이 기기로 다운로드를 보낼 수 있게 합니다",
-                                    "透過 MQTT 允許同一 PikPak 帳號的其他裝置向本機傳送下載工作",
-                                ),
-                                checked = isRemoteDownloadEnabled,
-                                onCheckedChange = { on ->
-                                    if (on && remoteRealtimeConfig == null) {
-                                        enableRemoteAfterRealtime = true
-                                        showRemoteRealtime = true
-                                    } else {
-                                        scope.launch { sessionManager.setRemoteDownloadEnabled(on) }
-                                    }
-                                },
-                            )
-                            SettingsNavigationRow(
-                                icon = Icons.Outlined.Sensors,
-                                title = tr("实时同步通道", "Realtime channel", "リアルタイム同期", "실시간 동기화", "即時同步通道"),
-                                supporting = when {
-                                    remoteRealtimeConfig == null -> tr("未配置，远程下载不可用", "Not configured; remote downloads are unavailable", "未設定のためリモートダウンロードは利用できません", "설정되지 않아 원격 다운로드를 사용할 수 없습니다", "未設定，遠端下載無法使用")
-                                    !isRemoteDownloadEnabled -> tr("已配置；打开远程下载后生效", "Configured; takes effect when remote downloads are on", "設定済み。リモートダウンロードを有効にすると反映されます", "설정됨. 원격 다운로드를 켜면 적용됩니다", "已設定；開啟遠端下載後生效")
-                                    remoteRealtimeConnected -> tr("已连接，实时同步中", "Connected; realtime sync is active", "接続済み・リアルタイム同期中", "연결됨 · 실시간 동기화 중", "已連線，即時同步中")
-                                    else -> tr("未连接，请检查 MQTT 地址与账号密码", "Disconnected; check the MQTT URL and credentials", "未接続です。MQTT アドレスと認証情報を確認してください", "연결되지 않았습니다. MQTT 주소와 계정 정보를 확인하세요", "未連線，請檢查 MQTT 位址與帳號密碼")
-                                },
-                                onClick = { showRemoteRealtime = true },
-                                trailingIcon = null,
-                            )
                             if (backgroundTransferAccess != null) {
                                 SettingsNavigationRow(
                                     icon = Icons.Outlined.PowerSettingsNew,
@@ -743,30 +701,6 @@ fun SettingsScreen(
                 }
             }
         }
-    }
-
-    if (showRemoteRealtime) {
-        RemoteRealtimeDialog(
-            initial = remoteRealtimeConfig,
-            onDismiss = {
-                showRemoteRealtime = false
-                enableRemoteAfterRealtime = false
-            },
-            onTest = { services.testRemoteRealtime(it) },
-            onSave = { config ->
-                val result = services.saveRemoteRealtimeConfig(config)
-                if (result.isSuccess && enableRemoteAfterRealtime) {
-                    sessionManager.setRemoteDownloadEnabled(true)
-                    enableRemoteAfterRealtime = false
-                }
-                result
-            },
-            onClear = {
-                val result = services.clearRemoteRealtimeConfig()
-                if (result.isSuccess) sessionManager.setRemoteDownloadEnabled(false)
-                result
-            },
-        )
     }
 
     if (showMetaTubeDialog && metaTube != null) {

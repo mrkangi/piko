@@ -111,7 +111,7 @@ class DesktopLanShareHost(
     private suspend fun startServer() = startLock.withLock {
         if (running) return
         settings.ensureLoaded()
-        deviceId = preferences.loadOrCreateRemoteDeviceId()
+        deviceId = preferences.loadOrCreateClientDeviceId()
         val desiredPort = settings.current().port.takeIf { it in 1..65535 } ?: LanLocalSettings.DEFAULT_PORT
         var bound: HttpServer? = null
         var boundPort = desiredPort

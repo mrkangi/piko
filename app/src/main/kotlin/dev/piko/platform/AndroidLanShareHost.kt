@@ -141,7 +141,7 @@ class AndroidLanShareHost(
         startLock.withLock {
             if (running || !settings.current().enabled) return
             settings.ensureLoaded()
-            deviceId = preferences.loadOrCreateRemoteDeviceId()
+            deviceId = preferences.loadOrCreateClientDeviceId()
             val desiredPort = settings.current().port.takeIf { it in 1..65535 } ?: LanLocalSettings.DEFAULT_PORT
             var bound: ServerSocket? = null
             var boundPort = desiredPort

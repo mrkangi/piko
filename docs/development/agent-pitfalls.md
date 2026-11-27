@@ -1,6 +1,6 @@
 # 开发验证踩坑记录
 
-记录最近一次远程下载页、应用锁与生物识别改动中实际遇到的问题。适用于当前 Orca 开发容器；换机器时以实际 JDK/SDK 路径为准。
+记录最近一次应用锁与生物识别改动中实际遇到的问题。适用于当前 Orca 开发容器；换机器时以实际 JDK/SDK 路径为准。
 
 ## 环境与构建
 
@@ -53,30 +53,6 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
 本次以上命令均通过。若多个工作区的 Gradle 同时运行，Kotlin 编译可能长时间无输出；
 先确认没有其他构建占用 daemon，不要误判为代码死循环。
 
-## 远程下载页
-
-- **不要把“远程”塞进 `TransferKind`**：`TransferKind` 表示文件任务类型，
-  远程请求是独立的数据源。新增 `TransferTab`（`Kind` + `Remote`）承载顶层页签，
-  远程页单独渲染，避免污染 `TransfersState.sectionsOf` 与本地任务统计。
-- **`TransfersScreen` 的 phase 必须特判远程页**：本地任务为空时原逻辑会进入
-  `TransfersPhase.EMPTY`，导致 pager 根本不组合远程页。远程页应强制 `CONTENT`，
-  空态由远程页自己处理。
-- **三个入口都要传 tab 状态**：`TaskPageHeader`、`TaskIslandHeader`、
-  `TaskIslandSubHeader` 的 `selectedTab/remoteCount/onSelectTab` 必须一致；
-  只改其中一个会出现“顶栏切了、岛页签没切”或 pager 与 tab 不同步。
-- **`Modifier.animateItem()` 只能在 `LazyItemScope` 内使用**。如果把 `items` 的
-  内容转发给普通 `@Composable (item) -> Unit`，接收方没有 LazyItemScope，
-  会报 unresolved。远程任务列表当前不使用行动画。
-- **远程页空态不要用 `fillMaxSize()` 直接放在 Column 里**：应使用
-  `Modifier.weight(1f).fillMaxWidth()`，否则空态可能与顶部设备筛选重叠或把 Column
-  撑出视口。
-- **发送与任务管理拆开**：文件操作进入 `RemoteSendDialog`，只选择设备/画质并发送；
-  任务查看、暂停、继续、重试、取消在「远程」tab。不要再把任务列表塞回发送弹窗。
-- **目标设备离线时远程 tab 仍要能看历史**：设备下拉保留离线设备，只是发出动作不可用；
-  “全部设备”筛选不能因为 offline 而隐藏记录。
-- **接收任务的控制仍在「下载」页**：远程 tab 展示的是 request 级视图，目标设备实际
-  落盘的 `DownloadTask` 仍在下载页管理；不要把两套状态强行合成一个列表。
-
 ## 应用锁与生物识别
 
 - **`AppLock` 是跨平台接口**：新增能力必须提供默认实现，桌面端保持空实现；
@@ -106,7 +82,6 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
 
 ## 可复用的验证清单
 
-- 远程页：空设备、离线设备、无任务、发出任务、接收任务、目标设备断连各看一遍。
 - 应用锁：冷启动、切后台超过阈值、立即锁定、生物识别取消、PIN 错误、播放器窗口锁定。
 - 双端：`ui` 桌面编译与 Android app 编译都要跑；只跑其中一端会漏掉
   Material 3 或平台 API 差异。

@@ -56,7 +56,6 @@ internal class TaskPresenter(private val state: TransfersState, private val vaul
             task.displayName, tr("下载", "Downloads", "ダウンロード", "다운로드", "下載"), task.statusLabel() ?: tr("正在下载", "Downloading", "ダウンロード中", "다운로드 중", "正在下載"),
             downloadMeter(task.status, task.progress, task.totalBytes > 0 || task.isSegment),
             buildList {
-                if (task.remoteRequestId.isNotBlank()) add(tr("来自其他设备", "From another device", "別の端末から", "다른 기기에서", "來自其他裝置"))
                 if (task.status == DownloadStatus.FAILED) add(task.failureReason()) else addAll(task.statusDetails())
             }.joinToString(partSeparator),
             tr("本机", "This device", "この端末", "이 기기", "本機"), Icons.Outlined.Download,

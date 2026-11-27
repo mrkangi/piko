@@ -77,7 +77,6 @@ import dev.piko.shared.jellyfin.createDesktopJellyfinRepository
 import dev.piko.shared.plex.PlexSettings
 import dev.piko.shared.plex.createPlexRepository
 import dev.piko.shared.plex.ZxingPlexQrEncoder
-import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.PikoClientManager
 import dev.piko.shared.state.InstantSheetState
 import dev.piko.shared.state.TorrentMagnet
@@ -281,7 +280,6 @@ fun main(args: Array<String>) {
             .collectAsState(initial = services.hasBackgroundWork())
         val keepSessionAlive by remember(services) { services.desktopSessionChanges() }
             .collectAsState(initial = services.hasBackgroundWork() || services.hasDesktopResumeContext())
-        val remoteReceiverEnabled by services.preferences.remoteDownloadEnabledFlow.collectAsState(initial = false)
         // 执行结束但仍有待输入、报告或未知结果时保留托盘，避免自动退出丢失恢复入口。
         var isInBackground by remember { mutableStateOf(false) }
         var manualTraySession by remember { mutableStateOf(false) }
@@ -308,9 +306,9 @@ fun main(args: Array<String>) {
         LaunchedEffect(isInBackground) {
             if (!isInBackground) manualTraySession = false
         }
-        LaunchedEffect(isInBackground, manualTraySession, keepSessionAlive, closeToTray, hasDetachedWindows, remoteReceiverEnabled) {
+        LaunchedEffect(isInBackground, manualTraySession, keepSessionAlive, closeToTray, hasDetachedWindows) {
             if (isInBackground && !manualTraySession && !(closeToTray && isTraySupported) && !keepSessionAlive && !hasDetachedWindows &&
-                !services.hasBackgroundWork() && !services.hasDesktopResumeContext() && !remoteReceiverEnabled
+                !services.hasBackgroundWork() && !services.hasDesktopResumeContext()
             ) quitNow()
         }
         // 更新脚本等本进程退出后才替换文件。下载会被中断，更新对话框已先征得用户同意
@@ -386,7 +384,7 @@ fun main(args: Array<String>) {
         }
 
         val closeMainWindow = {
-            if (services.hasBackgroundWork() || services.hasDesktopResumeContext() || hasDetachedWindows || remoteReceiverEnabled || (closeToTray && isTraySupported)) {
+            if (services.hasBackgroundWork() || services.hasDesktopResumeContext() || hasDetachedWindows || (closeToTray && isTraySupported)) {
                 hideToTray(closeToTray && isTraySupported)
             } else if (isTraySupported && platform.closeToTray != null && settings.get(CLOSE_BEHAVIOR_ASKED_KEY) != "true") {
                 askCloseBehavior = true
@@ -678,14 +676,14 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
     val lanPlatform = System.getProperty("os.name").orEmpty()
     val pikoVersion = System.getProperty("jpackage.app-version") ?: "dev"
     val lanDeviceName = "$lanPlatform · Piko $pikoVersion"
-    val remoteDeviceId = runBlocking { preferences.loadOrCreateRemoteDeviceId() }
+    val clientDeviceId = runBlocking { preferences.loadOrCreateClientDeviceId() }
     val jellyfin = createDesktopJellyfinRepository(
         settings = JellyfinSettings(preferences, appScope),
         secrets = sessionStore,
         scope = appScope,
         clientVersion = pikoVersion,
         deviceName = lanDeviceName,
-        deviceId = remoteDeviceId,
+        deviceId = clientDeviceId,
     )
     val plex = createPlexRepository(
         http = HttpClient(OkHttp),
@@ -694,7 +692,7 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         scope = appScope,
         clientVersion = pikoVersion,
         deviceName = lanDeviceName,
-        deviceId = remoteDeviceId,
+        deviceId = clientDeviceId,
         platform = lanPlatform,
     )
     return PikoServices(
@@ -722,7 +720,6 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
         jellyfin = jellyfin,
         plex = plex,
         plexQrEncoder = ZxingPlexQrEncoder,
-        remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
         cacheStore = cacheStore,
         treeDatabaseFactory = dev.piko.shared.data.DesktopPikoTreeDatabaseFactory(),
         syncCipher = JvmSyncCipher(),
@@ -745,7 +742,7 @@ private fun createServices(settings: DesktopSettingsStore, preferences: DesktopP
                 http = HttpClient(OkHttp),
                 settings = settings,
                 scope = scope,
-                clientDeviceId = { preferences.loadOrCreateRemoteDeviceId() },
+                clientDeviceId = { preferences.loadOrCreateClientDeviceId() },
                 clientName = { lanDeviceName },
                 clientPlatform = lanPlatform,
             )

@@ -27,7 +27,6 @@ import dev.piko.shared.data.PikoClientManager
 import dev.piko.shared.data.PreviewTempFolder
 import dev.piko.shared.data.TaskRepository
 import dev.piko.shared.download.PikoDownloadCoordinator
-import dev.piko.shared.download.RemoteDownloadCoordinator
 import dev.piko.shared.data.PikoDriveRepository
 import dev.piko.shared.lan.LanShareHost
 import dev.piko.shared.lan.LanShareRepository
@@ -93,8 +92,6 @@ class PikoServices(
     plex: PlexRepository? = null,
     /** 二维码矩阵生成器；截图环境可为空。 */
     val plexQrEncoder: PlexQrEncoder? = null,
-    /** 远程下载的实时通道；为 null 时远程下载不可用。 */
-    remoteRealtime: dev.piko.shared.download.RemoteRealtimeTransport? = null,
     treeDatabaseFactory: PikoTreeDatabaseFactory? = null,
     deviceName: String = "Piko",
     platformName: String = "unknown",
@@ -112,7 +109,6 @@ class PikoServices(
 
     // 不随任何界面结束的后台工作：离线任务的跟踪与 Piko-Temp 的清理
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val remoteRealtimeTransport = remoteRealtime
 
     /** 平台偏好，其中记着文件夹 ID 的几项换成按账号存的，见 AccountScopedPreferences。 */
     val preferences: PikoUserPreferences =
@@ -158,55 +154,6 @@ class PikoServices(
     }
     val lanShareHost: LanShareHost? = lanShareHostFactory?.invoke(driveRepository, preferences, lanShareSettings, deviceName)
         ?.also { it.start() }
-    val remoteRealtimeConfigStore: dev.piko.shared.download.RemoteRealtimeConfigStore? = syncCipher?.let { cipher ->
-        dev.piko.shared.download.RemoteRealtimeConfigStore(
-            clients = clientManager,
-            driveRepo = driveRepository,
-            passwordOf = clientManager::savedPassword,
-            cipher = cipher,
-            scope = backgroundScope,
-        ).also { it.start() }
-    }
-    val remoteRealtimeConfig: StateFlow<dev.piko.shared.download.RemoteRealtimeConfig?> =
-        remoteRealtimeConfigStore?.config ?: MutableStateFlow(null)
-    val remoteRealtimeConnected: StateFlow<Boolean> =
-        remoteRealtimeTransport?.connected ?: MutableStateFlow(false)
-
-    val remoteDownloads: RemoteDownloadCoordinator = RemoteDownloadCoordinator(
-        clients = clientManager,
-        driveRepo = driveRepository,
-        executor = downloadManager,
-        preferences = preferences,
-        deviceName = deviceName,
-        platformName = platformName,
-        scope = backgroundScope,
-        cacheStore = cacheStore,
-        realtime = remoteRealtimeTransport,
-    ).also { it.start() }
-    init {
-        backgroundScope.launch {
-            remoteRealtimeConfig.collect { config ->
-                remoteRealtimeTransport?.updateConfig(config)
-                remoteDownloads.refreshRealtime()
-            }
-        }
-    }
-
-    suspend fun testRemoteRealtime(config: dev.piko.shared.download.RemoteRealtimeConfig): Result<Unit> =
-        remoteRealtimeTransport?.testConnection(config)
-            ?: Result.failure(IllegalStateException("当前环境不支持实时通道"))
-
-    suspend fun saveRemoteRealtimeConfig(config: dev.piko.shared.download.RemoteRealtimeConfig): Result<Unit> =
-        remoteRealtimeConfigStore?.save(config)
-            ?: Result.failure(IllegalStateException("当前环境无法保存实时配置"))
-
-    suspend fun clearRemoteRealtimeConfig(): Result<Unit> =
-        remoteRealtimeConfigStore?.clear()
-            ?: Result.failure(IllegalStateException("当前环境无法清除实时配置"))
-
-    suspend fun refreshRemoteRealtimeConfig() {
-        remoteRealtimeConfigStore?.refresh()
-    }
     internal val presentationStores = dev.piko.ui.workbench.AccountPresentationStores()
     val fileExecutionScopes = dev.piko.shared.state.AccountExecutionScopes(
         driveRepository, CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Main.immediate),
@@ -286,7 +233,6 @@ class PikoServices(
             launch { sourceLedgerSync.syncNow() }
             launch { archivePasswordSync?.syncNow() }
             launch { metaTubeSync?.syncNow() }
-            launch { remoteDownloads.refresh() }
         }
     }
 
@@ -300,7 +246,6 @@ class PikoServices(
                 pinnedTabSync.syncNow()
                 settingsSync.syncNow()
                 metaTubeSync?.syncNow()
-                remoteDownloads.refresh()
             }
         }
     }

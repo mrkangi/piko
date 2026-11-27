@@ -75,20 +75,16 @@ internal fun TaskKindFilter(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
     compact: Boolean = false,
-    selectedTab: TransferTab = TransferTab.Kind(state.filter),
-    remoteCount: Int = 0,
-    onSelectTab: (TransferTab) -> Unit = { tab ->
-        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
-    },
+    selectedKind: TransferKind = state.filter,
+    onSelectKind: (TransferKind) -> Unit = state::changeFilter,
 ) {
-    val tabs = transferTabs
+    val tabs = TransferKind.entries
     if (compact) {
         CompactTaskTabStrip(
             state = state,
             tabs = tabs,
-            selectedTab = selectedTab,
-            remoteCount = remoteCount,
-            onSelectTab = onSelectTab,
+            selectedKind = selectedKind,
+            onSelectKind = onSelectKind,
             modifier = modifier.padding(contentPadding),
         )
         return
@@ -101,12 +97,12 @@ internal fun TaskKindFilter(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         tabs.forEachIndexed { index, tab ->
-            val selected = tab == selectedTab
-            val count = tab.count(state, remoteCount)
+            val selected = tab == selectedKind
+            val count = state.counts[tab] ?: 0
             val label = if (count > 0) "${tab.label} $count" else tab.label
             TonalToggleButton(
                 checked = selected,
-                onCheckedChange = { if (!selected) onSelectTab(tab) },
+                onCheckedChange = { if (!selected) onSelectKind(tab) },
                 shapes = connectedToggleShapes(index, tabs.size),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                 modifier = Modifier.heightIn(min = 36.dp),
@@ -134,10 +130,9 @@ internal fun TaskKindFilter(
 @Composable
 private fun CompactTaskTabStrip(
     state: TransfersState,
-    tabs: List<TransferTab>,
-    selectedTab: TransferTab,
-    remoteCount: Int,
-    onSelectTab: (TransferTab) -> Unit,
+    tabs: List<TransferKind>,
+    selectedKind: TransferKind,
+    onSelectKind: (TransferKind) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -150,8 +145,8 @@ private fun CompactTaskTabStrip(
                 .selectableGroup(),
         ) {
             tabs.forEach { tab ->
-                val selected = tab == selectedTab
-                val count = tab.count(state, remoteCount)
+                val selected = tab == selectedKind
+                val count = state.counts[tab] ?: 0
                 val textColor = if (selected) colors.primary else colors.onSurfaceVariant
                 Column(
                     modifier = Modifier
@@ -160,7 +155,7 @@ private fun CompactTaskTabStrip(
                         .selectable(
                             selected = selected,
                             role = Role.Tab,
-                            onClick = { if (!selected) onSelectTab(tab) },
+                            onClick = { if (!selected) onSelectKind(tab) },
                         )
                         .padding(horizontal = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,

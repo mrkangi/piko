@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import dev.piko.shared.state.TransferKind
 import dev.piko.shared.state.TransfersState
 import dev.piko.ui.components.IslandHeaderSpace
 import dev.piko.ui.components.IslandTitle
@@ -39,11 +40,8 @@ internal fun RowScope.TaskIslandHeader(
     selectedCount: Int,
     actions: List<SheetAction>,
     inlineFilter: Boolean = true,
-    selectedTab: TransferTab = TransferTab.Kind(state.filter),
-    remoteCount: Int = 0,
-    onSelectTab: (TransferTab) -> Unit = { tab ->
-        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
-    },
+    selectedKind: TransferKind = state.filter,
+    onSelectKind: (TransferKind) -> Unit = state::changeFilter,
 ) {
     if (selectedCount > 0) {
         TooltipIconButton(Icons.Outlined.Close, tr("取消选择", "Deselect", "選択を解除", "선택 해제", "取消選取"), state::clearSelection)
@@ -53,9 +51,8 @@ internal fun RowScope.TaskIslandHeader(
         Spacer(Modifier.width(8.dp))
         TaskKindFilter(
             state = state,
-            selectedTab = selectedTab,
-            remoteCount = remoteCount,
-            onSelectTab = onSelectTab,
+            selectedKind = selectedKind,
+            onSelectKind = onSelectKind,
         )
     }
     IslandHeaderSpace()
@@ -89,11 +86,8 @@ internal fun RowScope.TaskIslandHeader(
 @Composable
 internal fun TaskIslandSubHeader(
     state: TransfersState,
-    selectedTab: TransferTab = TransferTab.Kind(state.filter),
-    remoteCount: Int = 0,
-    onSelectTab: (TransferTab) -> Unit = { tab ->
-        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
-    },
+    selectedKind: TransferKind = state.filter,
+    onSelectKind: (TransferKind) -> Unit = state::changeFilter,
 ) {
     Row(
         modifier = Modifier
@@ -106,9 +100,8 @@ internal fun TaskIslandSubHeader(
         TaskKindFilter(
             state = state,
             compact = true,
-            selectedTab = selectedTab,
-            remoteCount = remoteCount,
-            onSelectTab = onSelectTab,
+            selectedKind = selectedKind,
+            onSelectKind = onSelectKind,
             modifier = Modifier.weight(1f),
         )
         if (state.downloadSpeed > 0 || state.uploadSpeed > 0 || state.downloadEtaSeconds != null) {

@@ -17,7 +17,6 @@ import dev.piko.data.auth.SessionManager
 import dev.piko.data.repository.DriveRepository
 import dev.piko.download.AndroidPikoDownloadStorage
 import dev.piko.download.AndroidPikoSegmentDownloader
-import dev.piko.download.RemoteDownloadService
 import dev.piko.download.WorkResultNotifier
 import dev.piko.platform.AndroidLanShareHost
 import dev.piko.platform.AndroidLanShareService
@@ -35,7 +34,6 @@ import dev.piko.shared.jellyfin.createAndroidJellyfinRepository
 import dev.piko.shared.plex.PlexSettings
 import dev.piko.shared.plex.createPlexRepository
 import dev.piko.shared.plex.ZxingPlexQrEncoder
-import dev.piko.shared.download.MqttRemoteRealtimeTransport
 import dev.piko.shared.data.InstantMagnetRepository
 import dev.piko.shared.data.PikoClientManager
 import java.io.File
@@ -202,7 +200,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             jsonCodec = Json { ignoreUnknownKeys = true }.streamingCodec(),
         )
         val pikoDeviceName = "${Build.MODEL} · Android · Piko ${BuildConfig.VERSION_NAME}"
-        val remoteDeviceId = runBlocking { sessionManager.loadOrCreateRemoteDeviceId() }
+        val clientDeviceId = runBlocking { sessionManager.loadOrCreateClientDeviceId() }
         val jellyfin = createAndroidJellyfinRepository(
             context = this,
             settings = JellyfinSettings(sessionManager, appScope),
@@ -210,7 +208,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             scope = appScope,
             clientVersion = BuildConfig.VERSION_NAME,
             deviceName = pikoDeviceName,
-            deviceId = remoteDeviceId,
+            deviceId = clientDeviceId,
         )
         val plex = createPlexRepository(
             http = HttpClient(OkHttp),
@@ -219,7 +217,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             scope = appScope,
             clientVersion = BuildConfig.VERSION_NAME,
             deviceName = pikoDeviceName,
-            deviceId = remoteDeviceId,
+            deviceId = clientDeviceId,
             platform = "Android",
         )
         services = PikoServices(
@@ -247,7 +245,6 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             jellyfin = jellyfin,
             plex = plex,
             plexQrEncoder = ZxingPlexQrEncoder,
-            remoteRealtime = MqttRemoteRealtimeTransport(scope = appScope),
             cacheStore = cacheStore,
             treeDatabaseFactory = dev.piko.shared.data.AndroidPikoTreeDatabaseFactory(File(cacheDir, "piko/trees")),
             syncCipher = JvmSyncCipher(),
@@ -270,7 +267,7 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
                     http = HttpClient(OkHttp),
                     settings = settings,
                     scope = scope,
-                    clientDeviceId = { sessionManager.loadOrCreateRemoteDeviceId() },
+                    clientDeviceId = { sessionManager.loadOrCreateClientDeviceId() },
                     clientName = { pikoDeviceName },
                     clientPlatform = "android",
                 )
@@ -280,11 +277,6 @@ class PikoApplication : Application(), SingletonImageLoader.Factory {
             },
             lanDiscovery = UdpLanDiscovery(),
         )
-        appScope.launch {
-            sessionManager.remoteDownloadEnabledFlow.distinctUntilChanged().collect { enabled ->
-                if (enabled) RemoteDownloadService.start(this@PikoApplication) else RemoteDownloadService.stop(this@PikoApplication)
-            }
-        }
         // 独立播放窗口不在主界面之下，换号或退出登录时要一起关掉：它们放的是上一个账号的文件
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launchOnAccountLeave(clientManager) {
             MultiWindowPlayerCoordinator.closeAll()

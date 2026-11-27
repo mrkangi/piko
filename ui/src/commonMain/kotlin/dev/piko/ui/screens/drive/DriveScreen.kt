@@ -109,7 +109,6 @@ import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.LocalShowExtensions
 import dev.piko.ui.components.PaletteItem
 import dev.piko.ui.components.PanelAnchor
-import dev.piko.ui.components.RemoteSendDialog
 import dev.piko.ui.components.LanShareDialog
 import dev.piko.ui.components.SheetAction
 import dev.piko.ui.components.SmbMountDialog
@@ -861,7 +860,6 @@ private fun DriveScreenContent(
     var keyboardFocusTarget by remember { mutableStateOf<String?>(null) }
     var searchFocusRequests by remember { mutableIntStateOf(0) }
     var addressEditRequests by remember { mutableIntStateOf(0) }
-    var remoteDownloadTargets by remember { mutableStateOf<List<FileStat>?>(null) }
     var showLanShare by remember { mutableStateOf(false) }
 
     fun goHome() = navigation.updateFolderStack(listOf(PikoDriveRepository.ROOT_BREADCRUMB))
@@ -1053,7 +1051,6 @@ private fun DriveScreenContent(
         fullyVaultedFolders = snapshot.fullyVaultedFolders,
         pinnedFolders = snapshot.pinnedFolders,
         onDownload = events.onRequestDownload,
-        onRemoteDownload = { targets -> remoteDownloadTargets = targets.filterNot { it.isFolder || it.isUploading } },
         onExtractArchives = events.onExtractArchives,
         onExtractFromArchive = events.onExtractFromArchive,
         onShare = events.onRequestShare,
@@ -1103,9 +1100,6 @@ private fun DriveScreenContent(
         onScanJellyfinLibrary = events.onScanJellyfinLibrary,
         onScanPlexLibrary = events.onScanPlexLibrary,
     )
-    remoteDownloadTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
-        RemoteSendDialog(files = targets, onDismiss = { remoteDownloadTargets = null })
-    }
     if (showLanShare) {
         LanShareDialog(onDismiss = { showLanShare = false })
     }

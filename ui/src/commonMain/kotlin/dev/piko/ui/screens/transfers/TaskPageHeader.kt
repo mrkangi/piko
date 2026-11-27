@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
+import dev.piko.shared.state.TransferKind
 import dev.piko.shared.state.TransfersState
 import dev.piko.ui.components.*
 import dev.piko.ui.adaptive.isDesktopLayout
@@ -40,21 +41,13 @@ internal fun taskPageActions(
     }
 }
 
-/** 远程页没有本地多选与暂停全部，只保留刷新；设备选择在页内完成。 */
-internal fun remotePageActions(onRefresh: () -> Unit): List<SheetAction> = listOf(
-    SheetAction(Icons.Outlined.Refresh, tr("刷新", "Refresh", "更新", "새로고침", "重新整理"), onRefresh),
-)
-
 @Composable
 internal fun TaskPageHeader(
     state: TransfersState,
     selectedCount: Int,
     actions: List<SheetAction>,
-    selectedTab: TransferTab = TransferTab.Kind(state.filter),
-    remoteCount: Int = 0,
-    onSelectTab: (TransferTab) -> Unit = { tab ->
-        if (tab is TransferTab.Kind) state.changeFilter(tab.kind)
-    },
+    selectedKind: TransferKind = state.filter,
+    onSelectKind: (TransferKind) -> Unit = state::changeFilter,
 ) {
     Column(Modifier.fillMaxWidth()) {
         PikoTopBar(
@@ -72,9 +65,8 @@ internal fun TaskPageHeader(
         TaskKindFilter(
             state = state,
             compact = true,
-            selectedTab = selectedTab,
-            remoteCount = remoteCount,
-            onSelectTab = onSelectTab,
+            selectedKind = selectedKind,
+            onSelectKind = onSelectKind,
             modifier = Modifier.fillMaxWidth(),
         )
     }

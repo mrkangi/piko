@@ -15,7 +15,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import dev.piko.shared.download.newRemoteDeviceId
+import dev.piko.shared.data.newClientDeviceId
 import dev.piko.shared.log.PikoLog
 import dev.piko.shared.net.ProxySetting
 import kotlinx.coroutines.flow.Flow
@@ -100,9 +100,8 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         val SAVE_AS_REFERENCE = booleanPreferencesKey("save_as_reference")
         val CONCURRENT_ACCELERATION = booleanPreferencesKey("concurrent_acceleration")
         val DOWNLOAD_DIR_PATH = stringPreferencesKey("download_dir_path")
-        val REMOTE_DOWNLOAD_ENABLED = booleanPreferencesKey("remote_download_enabled")
-        val REMOTE_DEVICE_ID = stringPreferencesKey("remote_device_id")
-        val REMOTE_DEVICE_NAME = stringPreferencesKey("remote_device_name")
+        /** 沿用旧键值，避免升级后更换本机在 Jellyfin、Plex 与局域网共享中的身份。 */
+        val CLIENT_DEVICE_ID = stringPreferencesKey("remote_device_id")
         val SPOILER_BLUR_ENABLED = booleanPreferencesKey("spoiler_blur_enabled")
         val AUTO_CHECK_UPDATES = booleanPreferencesKey("auto_check_updates")
         val AUTO_DETECT_CLIPBOARD_LINKS = booleanPreferencesKey("auto_detect_clipboard_links")
@@ -570,35 +569,16 @@ class SessionManager(private val context: Context) : PikoUserPreferences {
         }
     }
 
-    override val remoteDownloadEnabledFlow: Flow<Boolean> = preference { preferences ->
-        preferences[PreferencesKeys.REMOTE_DOWNLOAD_ENABLED] ?: false
-    }
-
-    override suspend fun setRemoteDownloadEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.REMOTE_DOWNLOAD_ENABLED] = enabled
-        }
-    }
-
-    override suspend fun loadOrCreateRemoteDeviceId(): String {
-        val current = context.dataStore.data.first()[PreferencesKeys.REMOTE_DEVICE_ID]
+    override suspend fun loadOrCreateClientDeviceId(): String {
+        val current = context.dataStore.data.first()[PreferencesKeys.CLIENT_DEVICE_ID]
         if (!current.isNullOrBlank()) return current
-        val created = newRemoteDeviceId()
+        val created = newClientDeviceId()
         context.dataStore.edit { preferences ->
-            if (preferences[PreferencesKeys.REMOTE_DEVICE_ID].isNullOrBlank()) {
-                preferences[PreferencesKeys.REMOTE_DEVICE_ID] = created
+            if (preferences[PreferencesKeys.CLIENT_DEVICE_ID].isNullOrBlank()) {
+                preferences[PreferencesKeys.CLIENT_DEVICE_ID] = created
             }
         }
-        return context.dataStore.data.first()[PreferencesKeys.REMOTE_DEVICE_ID].orEmpty().ifBlank { created }
-    }
-
-    override suspend fun loadRemoteDeviceName(): String =
-        context.dataStore.data.first()[PreferencesKeys.REMOTE_DEVICE_NAME].orEmpty()
-
-    override suspend fun saveRemoteDeviceName(name: String) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.REMOTE_DEVICE_NAME] = name
-        }
+        return context.dataStore.data.first()[PreferencesKeys.CLIENT_DEVICE_ID].orEmpty().ifBlank { created }
     }
 
     override suspend fun loadUploadTasks(): String =

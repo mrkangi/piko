@@ -176,15 +176,6 @@
             android:foregroundServiceType="dataSync" />
 
         <service
-            android:name=".download.RemoteDownloadService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="remote_download_receiver" />
-        </service>
-
-        <service
             android:name=".platform.AndroidLanShareService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

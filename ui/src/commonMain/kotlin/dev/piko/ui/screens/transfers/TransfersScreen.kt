@@ -102,7 +102,6 @@ import dev.piko.ui.components.PikoItemGrid
 import dev.piko.ui.components.PikoScaffold
 import dev.piko.ui.components.RefreshBox
 import dev.piko.ui.components.fullLineItem
-import dev.piko.ui.components.isTerminal
 import dev.piko.ui.components.itemPanelAnchorArea
 import dev.piko.ui.components.marqueeSelection
 import dev.piko.ui.components.pageFocusTarget
@@ -218,22 +217,10 @@ fun TransfersScreen(
 
     var confirmingDeleteKeys by remember { mutableStateOf<Set<String>?>(null) }
     var confirmingClearCompleted by remember { mutableStateOf(false) }
-    val remoteDownloads by services.remoteDownloads.remoteDownloads.collectAsStateWithLifecycle()
-    val remoteActiveCount = remoteDownloads.count { !it.status.isTerminal }
-    var remoteTabSelected by rememberSaveable { mutableStateOf(false) }
-    val tabs = transferTabs
-    val selectedTab = if (remoteTabSelected) TransferTab.Remote else TransferTab.Kind(state.filter)
-    val selectTab: (TransferTab) -> Unit = { tab ->
-        when (tab) {
-            is TransferTab.Kind -> {
-                remoteTabSelected = false
-                if (state.filter != tab.kind) state.changeFilter(tab.kind)
-            }
-            TransferTab.Remote -> {
-                state.clearSelection()
-                remoteTabSelected = true
-            }
-        }
+    val tabs = TransferKind.entries
+    val selectedKind = state.filter
+    val selectKind: (TransferKind) -> Unit = { kind ->
+        if (state.filter != kind) state.changeFilter(kind)
     }
 
     val density = LocalDensity.current
@@ -360,24 +347,15 @@ fun TransfersScreen(
         if (scrollToTopRequests != initialScrollRequests) gridStates.getValue(state.filter).animateScrollToItem(0)
     }
 
-    val pagerState = rememberPagerState(initialPage = tabs.indexOf(selectedTab).coerceAtLeast(0)) { tabs.size }
+    val pagerState = rememberPagerState(initialPage = tabs.indexOf(selectedKind).coerceAtLeast(0)) { tabs.size }
     LaunchedEffect(state, pagerState) {
         snapshotFlow { pagerState.settledPage }.collect { page ->
-            when (val tab = tabs.getOrNull(page)) {
-                is TransferTab.Kind -> {
-                    if (remoteTabSelected) remoteTabSelected = false
-                    if (state.filter != tab.kind) state.changeFilter(tab.kind)
-                }
-                TransferTab.Remote -> if (!remoteTabSelected) {
-                    state.clearSelection()
-                    remoteTabSelected = true
-                }
-                null -> Unit
-            }
+            val kind = tabs.getOrNull(page) ?: return@collect
+            if (state.filter != kind) state.changeFilter(kind)
         }
     }
-    LaunchedEffect(state, state.filter, remoteTabSelected) {
-        val page = tabs.indexOf(selectedTab).coerceAtLeast(0)
+    LaunchedEffect(state, state.filter) {
+        val page = tabs.indexOf(selectedKind).coerceAtLeast(0)
         if (pagerState.targetPage != page) pagerState.animateScrollToPage(page)
     }
 
@@ -393,22 +371,18 @@ fun TransfersScreen(
         if (detailsKey != null && detailsItem == null) detailState.close()
     }
 
-    val headerActions = if (selectedTab is TransferTab.Remote) {
-        remotePageActions { services.remoteDownloads.refreshNow() }
-    } else {
-        taskPageActions(
-            state = state,
-            selectedCount = bulkSelected.size,
-            onSelectAll = { state.selectAll(visibleOrder) },
-            onDelete = { confirmingDeleteKeys = state.selectedKeys.toSet() },
-            onPause = pauseSelected,
-            onResume = resumeSelected,
-            pauseCount = bulkSelected.count(state::isPausable),
-            resumeCount = bulkSelected.count(state::isResumable),
-            onRequestClearCompleted = { confirmingClearCompleted = true },
-        )
-    }
-    val headerSelectedCount = if (selectedTab is TransferTab.Remote) 0 else bulkSelected.size
+    val headerActions = taskPageActions(
+        state = state,
+        selectedCount = bulkSelected.size,
+        onSelectAll = { state.selectAll(visibleOrder) },
+        onDelete = { confirmingDeleteKeys = state.selectedKeys.toSet() },
+        onPause = pauseSelected,
+        onResume = resumeSelected,
+        pauseCount = bulkSelected.count(state::isPausable),
+        resumeCount = bulkSelected.count(state::isResumable),
+        onRequestClearCompleted = { confirmingClearCompleted = true },
+    )
+    val headerSelectedCount = bulkSelected.size
 
     val inlineIslandFilter = with(density) { taskContentWidth.toDp() } >= 820.dp
     PikoScaffold(
@@ -418,9 +392,8 @@ fun TransfersScreen(
                 state = state,
                 selectedCount = headerSelectedCount,
                 actions = headerActions,
-                selectedTab = selectedTab,
-                remoteCount = remoteActiveCount,
-                onSelectTab = selectTab,
+                selectedKind = selectedKind,
+                onSelectKind = selectKind,
             )
         },
         island = IslandPage(
@@ -430,17 +403,15 @@ fun TransfersScreen(
                     selectedCount = headerSelectedCount,
                     actions = headerActions,
                     inlineFilter = inlineIslandFilter,
-                    selectedTab = selectedTab,
-                    remoteCount = remoteActiveCount,
-                    onSelectTab = selectTab,
+                    selectedKind = selectedKind,
+                    onSelectKind = selectKind,
                 )
             },
             belowHeader = if (!inlineIslandFilter) ({
                 TaskIslandSubHeader(
                     state = state,
-                    selectedTab = selectedTab,
-                    remoteCount = remoteActiveCount,
-                    onSelectTab = selectTab,
+                    selectedKind = selectedKind,
+                    onSelectKind = selectKind,
                 )
             }) else null,
         ),
@@ -457,17 +428,10 @@ fun TransfersScreen(
                 Box(Modifier.fillMaxSize().semantics { contentDescription = tr("任务列表", "Task list", "タスク一覧", "작업 목록", "任務清單") }) {
                     RefreshBox(
                         isRefreshing = state.isRefreshing,
-                        onRefresh = {
-                            if (selectedTab is TransferTab.Remote) {
-                                services.remoteDownloads.refreshNow()
-                            } else {
-                                state.refresh()
-                            }
-                        },
+                        onRefresh = state::refresh,
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         val phase = when {
-                            selectedTab is TransferTab.Remote -> TransfersPhase.CONTENT
                             !state.isEmpty -> TransfersPhase.CONTENT
                             state.isLoading -> TransfersPhase.LOADING
                             else -> TransfersPhase.EMPTY
@@ -482,7 +446,7 @@ fun TransfersScreen(
                                 TransfersPhase.CONTENT -> HorizontalPager(
                                     state = pagerState,
                                     userScrollEnabled = LocalPointerSource.current.isTouchLike,
-                                    key = { tabs[it].saveKey },
+                                    key = { tabs[it].name },
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .pageFocusTarget(listFocus)
@@ -500,27 +464,22 @@ fun TransfersScreen(
                                             true
                                         },
                                 ) { page ->
-                                    val tab = tabs[page]
-                                    if (tab is TransferTab.Remote) {
-                                        RemoteTasksPage(modifier = Modifier.fillMaxSize())
-                                    } else {
-                                        val kind = (tab as TransferTab.Kind).kind
-                                        val sections = if (kind == state.filter) currentSections else state.sectionsOf(kind)
-                                        TransfersList(
-                                            state = state,
-                                            kind = kind,
-                                            sections = sections,
-                                            completedExpanded = completedExpanded(kind, sections),
-                                            onToggleCompleted = { completedExpansion[kind] = !completedExpanded(kind, sections) },
-                                            sidePadding = SidePadding,
-                                            deletedExpanded = deletedExpanded,
-                                            onToggleDeleted = { deletedExpanded = !deletedExpanded },
-                                            expandedBatches = expandedBatches,
-                                            renderItem = renderItem,
-                                            gridState = gridStates.getValue(kind),
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
-                                    }
+                                    val kind = tabs[page]
+                                    val sections = if (kind == state.filter) currentSections else state.sectionsOf(kind)
+                                    TransfersList(
+                                        state = state,
+                                        kind = kind,
+                                        sections = sections,
+                                        completedExpanded = completedExpanded(kind, sections),
+                                        onToggleCompleted = { completedExpansion[kind] = !completedExpanded(kind, sections) },
+                                        sidePadding = SidePadding,
+                                        deletedExpanded = deletedExpanded,
+                                        onToggleDeleted = { deletedExpanded = !deletedExpanded },
+                                        expandedBatches = expandedBatches,
+                                        renderItem = renderItem,
+                                        gridState = gridStates.getValue(kind),
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
                                 }
                                 TransfersPhase.LOADING -> FileListSkeleton(
                                     modifier = Modifier.padding(start = SidePadding, end = SidePadding, top = 8.dp + SectionHeaderHeight),

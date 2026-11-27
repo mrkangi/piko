@@ -104,23 +104,17 @@ class MemoryPreferences : PikoUserPreferences {
     override suspend fun saveDownloadTasks(serialized: String) {
         downloadTasks = serialized
     }
-    private val remoteEnabled = MutableStateFlow(false)
-    override val remoteDownloadEnabledFlow: Flow<Boolean> = remoteEnabled
-    override suspend fun setRemoteDownloadEnabled(enabled: Boolean) { remoteEnabled.value = enabled }
     private val lanShareSettings = MutableStateFlow("")
     override val lanShareSettingsFlow: Flow<String> = lanShareSettings
     override suspend fun saveLanShareSettings(serialized: String) { lanShareSettings.value = serialized }
     private val jellyfinServers = MutableStateFlow("")
     override val jellyfinServersFlow: Flow<String> = jellyfinServers
     override suspend fun saveJellyfinServers(serialized: String) { jellyfinServers.value = serialized }
-    private var remoteDeviceId: String = ""
-    private var remoteDeviceName: String = ""
-    override suspend fun loadOrCreateRemoteDeviceId(): String {
-        if (remoteDeviceId.isBlank()) remoteDeviceId = dev.piko.shared.download.newRemoteDeviceId()
-        return remoteDeviceId
+    private var clientDeviceId: String = ""
+    override suspend fun loadOrCreateClientDeviceId(): String {
+        if (clientDeviceId.isBlank()) clientDeviceId = dev.piko.shared.data.newClientDeviceId()
+        return clientDeviceId
     }
-    override suspend fun loadRemoteDeviceName(): String = remoteDeviceName
-    override suspend fun saveRemoteDeviceName(name: String) { remoteDeviceName = name }
     @Volatile var uploadTasks: String = ""
     override suspend fun loadUploadTasks(): String = uploadTasks
     override suspend fun saveUploadTasks(serialized: String) {
