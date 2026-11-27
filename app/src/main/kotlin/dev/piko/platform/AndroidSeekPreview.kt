@@ -52,16 +52,25 @@ internal class AndroidSeekPreviewSupport(
                     }
                 }
 
-                source.fileId.isNotBlank() -> {
+                source.preferRandomAccess && source.fileId.isNotBlank() -> {
                     val randomAccess = repository.openRandomAccess(
                         fileId = source.fileId,
                         role = StreamRole.BACKGROUND,
                         readAheadLimit = 0L,
-                    ).getOrNull() ?: run {
+                    ).getOrNull()
+                    if (randomAccess != null) {
+                        dataSource = RandomAccessDataSource(randomAccess).also { retriever.setDataSource(it) }
+                    } else if (source.remoteUrl != null) {
+                        // 分块缓存打开失败时仍可退到当前直链，不让预览整块消失。
+                        retriever.setDataSource(source.remoteUrl.orEmpty(), REMOTE_HEADERS)
+                    } else {
                         retriever.release()
                         return@withContext null
                     }
-                    dataSource = RandomAccessDataSource(randomAccess).also { retriever.setDataSource(it) }
+                }
+
+                !source.remoteUrl.isNullOrBlank() -> {
+                    retriever.setDataSource(source.remoteUrl.orEmpty(), REMOTE_HEADERS)
                 }
 
                 else -> {
@@ -77,14 +86,21 @@ internal class AndroidSeekPreviewSupport(
         } catch (e: Exception) {
             retriever.release()
             dataSource?.close()
-            PikoLog.w(TAG, "打开拖动预览取帧源失败：${if (source.isLocal) "本地" else "网盘"}", e)
+            PikoLog.w(TAG, "打开拖动预览取帧源失败：${source.kindLabel()} fileId=${source.fileId}", e)
             null
         }
     }
 
     private companion object {
         const val TAG = "SeekPreview"
+        val REMOTE_HEADERS = mapOf("User-Agent" to "Piko/1.0")
     }
+}
+
+private fun SeekPreviewSource.kindLabel(): String = when {
+    isLocal -> "本地"
+    preferRandomAccess -> "PikPak"
+    else -> "HTTP 挂载"
 }
 
 private class AndroidSeekPreviewExtractor(

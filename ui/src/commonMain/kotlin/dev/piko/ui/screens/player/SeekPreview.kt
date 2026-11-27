@@ -3,6 +3,7 @@ package dev.piko.ui.screens.player
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.piko.shared.log.PikoLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,11 +14,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
-/** 拖动预览的取帧来源。网盘始终读原画：系统解码器对转码 MPEG-TS 的视频轨支持不稳。 */
+/** 拖动预览的取帧来源。PikPak 走原画随机读，Plex/Jellyfin/SMB/LAN 等直接读当前 HTTP 流。 */
 data class SeekPreviewSource(
     val fileId: String,
     val localPath: String?,
     val isLocal: Boolean,
+    /** 当前播放地址，仅用于系统解码器直接读取 HTTP 挂载源；不写日志。 */
+    val remoteUrl: String? = null,
+    /** PikPak 文件优先复用分块缓存；其他挂载源直接读 [remoteUrl]。 */
+    val preferRandomAccess: Boolean = false,
 )
 
 /** 平台提供的抽帧会话。一个会话只对应一个文件与一档画质，关闭时释放解码器与读源。 */
@@ -139,6 +144,7 @@ class SeekPreviewController(
                     }
                     val result = load(activeSource, request.bucketMillis) ?: continue
                     cache[request.bucketMillis] = result
+                    PikoLog.d("SeekPreview", "抽帧完成：${activeSource.kindLabel()}，档位 ${request.bucketMillis} ms")
                     if (request.serial == serial) frame = result
                 }
             } finally {
@@ -186,6 +192,12 @@ class SeekPreviewController(
         extractor = null
         closeScope.launch { runCatching { old.close() } }
     }
+}
+
+private fun SeekPreviewSource.kindLabel(): String = when {
+    isLocal -> "本地"
+    preferRandomAccess -> "PikPak"
+    else -> "HTTP 挂载"
 }
 
 /** 拖动目标取固定 5 秒档；时间读数仍用精确位置，只有缩略图按档位复用。 */

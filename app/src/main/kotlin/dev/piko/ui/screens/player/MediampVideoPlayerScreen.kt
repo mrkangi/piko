@@ -163,6 +163,8 @@ fun MediampVideoPlayerScreen(
             fileId = state.fileId,
             localPath = state.localPlaybackPath,
             isLocal = state.isLocalPlayback,
+            remoteUrl = state.mediaInfo?.currentUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") },
+            preferRandomAccess = state.mediaInfo?.gcid?.isNotBlank() == true,
         )
     }
     LaunchedEffect(seekPreviewController, seekPreviewSource) {
