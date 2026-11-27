@@ -197,11 +197,7 @@ fun PlayerTopBar(
 ) {
     // 桌面端独立的播放窗口没有标题栏：关窗按钮放在右上角，与其他按钮同款，左边的返回键与它重复，不再显示
     val framelessWindow = LocalFramelessWindow.current
-    val buttonContainer = if (compact) {
-        IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow)
-    } else {
-        null
-    }
+    val buttonContainer = if (compact) CompactPlayerIconButtonSize else null
     val buttonIconSize = if (compact) 20.dp else 24.dp
     Row(
         modifier = modifier
@@ -635,11 +631,7 @@ internal fun PlayerBottomBar(
     var scrubPositionMillis by remember { mutableStateOf<Long?>(null) }
     val shownPosition = scrubPositionMillis ?: previewPositionMillis ?: positionMillis
     val compactRow = compactWidth || embedded
-    val iconContainer = if (embedded) {
-        IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow)
-    } else {
-        null
-    }
+    val iconContainer = if (embedded) CompactPlayerIconButtonSize else null
     val iconSize = if (embedded) 20.dp else 24.dp
     val timeStyle = if (embedded) {
         MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum")
@@ -1577,7 +1569,10 @@ internal fun PlayerSeekBar(
                 color = if (dragging) scheme.primary else scheme.inverseSurface,
                 contentColor = if (dragging) scheme.onPrimary else scheme.inverseOnSurface,
                 modifier = Modifier.layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+                    // 进度条本身只有 14dp 高；气泡要按完整文字高度测量，否则文字会被压扁裁掉。
+                    val placeable = measurable.measure(
+                        constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity),
+                    )
                     val maxX = (constraints.maxWidth - placeable.width).coerceAtLeast(0)
                     val x = (anchorPx - placeable.width / 2f).roundToInt().coerceIn(0, maxX)
                     layout(0, 0) { placeable.place(x, -placeable.height - gapPx) }
@@ -1764,6 +1759,7 @@ private val BottomScrim = listOf(
 private val SeekBarHeight = 32.dp
 private val SeekTouchHeight = 48.dp
 internal val EmbeddedSeekBarHeight = 14.dp
+private val CompactPlayerIconButtonSize = DpSize(32.dp, 32.dp)
 private val SeekFocusRingWidth = 3.dp
 private val SeekFocusRingGap = 2.dp
 private val SeekTrackThickness = 4.dp
