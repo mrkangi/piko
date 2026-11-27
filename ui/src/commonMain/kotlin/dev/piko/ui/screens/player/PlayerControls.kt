@@ -217,7 +217,7 @@ fun PlayerTopBar(
                 label = tr("返回", "Back", "戻る", "뒤로", "返回"),
                 onClick = onBackClick,
                 tooltipBelow = true,
-                containerSize = IconButtonDefaults.smallContainerSize(IconButtonDefaults.IconButtonWidthOption.Narrow),
+                containerSize = buttonContainer,
                 iconSize = buttonIconSize,
             )
         }
