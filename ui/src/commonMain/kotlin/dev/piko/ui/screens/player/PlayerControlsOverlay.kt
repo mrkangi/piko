@@ -5,7 +5,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -58,7 +56,6 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
-import androidx.compose.ui.zIndex
 import dev.piko.data.auth.PlayerGestureDefaults
 import dev.piko.shared.i18n.tr
 import dev.piko.shared.media.player.MediaTrack
@@ -231,7 +228,6 @@ fun MobilePlayerControls(
         errorMessage == null && !ui.isEditingCropRegion
     // 内嵌详情页的贴底进度条独立于底栏：拖动它只临时点亮并露出圆点，不强行展开整套控件。
     var embeddedScrubPositionMillis by remember { mutableStateOf<Long?>(null) }
-    var embeddedSeekFraction by remember { mutableStateOf(0f) }
 
     BackHandler(enabled = isFullscreen && !ui.isEditingCropRegion, onBack = onToggleFullscreen)
     BackHandler(enabled = ui.isEditingCropRegion) { ui.cancelCropEdit(onAspectRatioChange) }
@@ -602,33 +598,10 @@ fun MobilePlayerControls(
                     },
                     edgeAligned = true,
                     emphasized = barEmphasized,
-                    // 进度条自己的绘制边界会裁掉下半圆；圆点交给下面同级的 Canvas 画。
-                    thumbVisible = false,
-                    onVisualFraction = { embeddedSeekFraction = it },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth(),
                 )
-                if (barEmphasized) {
-                    val thumbColor = MaterialTheme.colorScheme.primary
-                    Canvas(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(EmbeddedSeekBarHeight)
-                            .zIndex(2f),
-                    ) {
-                        val inset = EmbeddedSeekBarInset.toPx()
-                        drawCircle(
-                            color = thumbColor,
-                            radius = EmbeddedSeekBarThumbRadius.toPx(),
-                            center = Offset(
-                                x = inset + (size.width - 2 * inset) * embeddedSeekFraction,
-                                y = size.height,
-                            ),
-                        )
-                    }
-                }
             }
 
             PlayerHud(

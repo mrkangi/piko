@@ -99,7 +99,6 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1369,7 +1368,7 @@ private fun PlayerChipButton(
  * 压在画面上又粗又闷。细轨道不在 M3 滑块的规格里，是视频播放器的通行做法。已播放段不用波浪：
  * M3 的波浪是进度指示器表示「过程在进行」的外观，滑块没有这一项；克制版也试过，在画面上仍然显得多余。
  * [thumbOnHoverOnly] 时手柄平时隐藏、悬停才出现（鼠标）；触屏没有悬停，手柄一直显示，否则看不出能拖。
- * [edgeAligned] 让轨道贴住画面底边，[emphasized] 控制收起态的淡化与细线，[thumbVisible] 隐藏静止时的圆点。
+ * [edgeAligned] 让轨道贴住画面底边，[emphasized] 控制收起态的淡化与细线；圆点始终以轨道中心线为圆心。
  *
  * 不用 Material 的 Slider：换手柄与轨道的重载两端没有交集（Android 的 1.5.0-alpha28 与桌面的
  * 1.12.0-alpha03 各缺一半），手柄固定是 44dp 高的竖条，配不了细轨道。手势自己接：按下即跳到该处，
@@ -1391,10 +1390,6 @@ internal fun PlayerSeekBar(
     edgeAligned: Boolean = false,
     /** 控制层是否展开。收起时轨道更细、更淡，让进度让回画面。 */
     emphasized: Boolean = true,
-    /** 是否由进度条自己画手柄。内嵌详情页把它关掉，交给画面级覆盖层画，才能越过播放器边界。 */
-    thumbVisible: Boolean = true,
-    /** 把当前视觉进度交给外部覆盖层，拖动预览与回退等待都算在内。 */
-    onVisualFraction: ((Float) -> Unit)? = null,
 ) {
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     var hoverFraction by remember { mutableStateOf<Float?>(null) }
@@ -1419,7 +1414,6 @@ internal fun PlayerSeekBar(
     val scrubFraction = dragFraction ?: previewMillis?.let(::fractionOf)
     val fraction = scrubFraction ?: fractionOf(pendingSeekMillis ?: positionMillis)
     val bufferedFraction = fractionOf(bufferedPositionMillis)
-    SideEffect { onVisualFraction?.invoke(fraction) }
     val focusInteraction = remember { MutableInteractionSource() }
     val isFocused by focusInteraction.collectIsFocusedAsState()
     val isEngaged = scrubFraction != null || hoverFraction != null || isFocused
@@ -1451,9 +1445,10 @@ internal fun PlayerSeekBar(
         if (isEngaged) SeekTrackEngagedThickness else restingThickness,
         motion.fastSpatialSpec(),
     )
+    val showThumb = !edgeAligned || emphasized || isEngaged
     val thumbRadius by animateDpAsState(
         when {
-            !thumbVisible -> 0.dp
+            !showThumb -> 0.dp
             scrubFraction != null -> SeekThumbDraggingRadius
             // 键盘停在进度条上时手柄要露出来，否则看不出焦点在这里、方向键会动它
             thumbOnHoverOnly && hoverFraction == null && !isFocused -> 0.dp
@@ -1769,8 +1764,6 @@ private val BottomScrim = listOf(
 private val SeekBarHeight = 32.dp
 private val SeekTouchHeight = 48.dp
 internal val EmbeddedSeekBarHeight = 14.dp
-internal val EmbeddedSeekBarInset = 9.dp
-internal val EmbeddedSeekBarThumbRadius = 6.dp
 private val SeekFocusRingWidth = 3.dp
 private val SeekFocusRingGap = 2.dp
 private val SeekTrackThickness = 4.dp
