@@ -1,9 +1,11 @@
 package dev.piko.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -95,6 +97,27 @@ private const val LOADING_APPEAR_DELAY_MS = 200L
 @Composable
 fun MediaLoadingIndicator(modifier: Modifier = Modifier) {
     if (rememberLoadingVisible()) ContainedLoadingIndicator(modifier = modifier)
+}
+
+/**
+ * 压在视频画面角落的等待：比 [MediaLoadingIndicator] 小一圈，不遮画面中心。
+ * 仍然延后出现，短暂的 seek 缓冲不会闪一下；深色圆底保证在亮画面上也看得清。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun CompactMediaLoadingIndicator(
+    modifier: Modifier = Modifier,
+    color: Color = Color.White,
+) {
+    if (!rememberLoadingVisible()) return
+    Box(
+        modifier = modifier
+            .size(28.dp)
+            .background(Color.Black.copy(alpha = 0.34f), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        PikoLoadingIndicator(size = 16.dp, color = color)
+    }
 }
 
 /** 形状说不准的整屏首载。占位的 Box 无条件铺满，指示器出现前这一屏也不让下面的东西顶上来。 */

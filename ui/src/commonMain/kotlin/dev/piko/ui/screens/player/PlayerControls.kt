@@ -676,6 +676,7 @@ internal fun PlayerBottomBar(
                 bufferedPositionMillis = bufferedPositionMillis,
                 onSeek = onSeek,
                 thumbOnHoverOnly = thumbOnHoverOnly,
+                relativeTouchScrub = true,
                 onScrub = { target ->
                     val wasScrubbing = scrubPositionMillis != null
                     scrubPositionMillis = target
@@ -1373,8 +1374,9 @@ private fun PlayerChipButton(
  * [edgeAligned] 让轨道贴住画面底边，[emphasized] 控制收起态的淡化与细线；圆点始终以轨道中心线为圆心。
  *
  * 不用 Material 的 Slider：换手柄与轨道的重载两端没有交集（Android 的 1.5.0-alpha28 与桌面的
- * 1.12.0-alpha03 各缺一半），手柄固定是 44dp 高的竖条，配不了细轨道。手势自己接：按下即跳到该处，
- * 拖动期间只预览时间，松手才 seek，网络流每次 seek 都要重开 range 请求，跟手 seek 会连续打断缓冲。
+ * 1.12.0-alpha03 各缺一半），手柄固定是 44dp 高的竖条，配不了细轨道。手势自己接：按下不立刻跳，
+ * 拖动期间只预览目标，松手才 seek，网络流每次 seek 都要重开 range 请求，跟手 seek 会连续打断缓冲。
+ * [relativeTouchScrub] 让触屏从按下处开始按位移进退，而不是把轨道当作绝对位置；鼠标与轻点仍按绝对位置。
  * 读屏的进度与「设置进度」动作也自己补上。桌面上鼠标悬停在轨道上时，指针上方显示该处的时间。
  */
 @Composable
@@ -1394,6 +1396,11 @@ internal fun PlayerSeekBar(
     edgeAligned: Boolean = false,
     /** 控制层是否展开。收起时轨道更细、更淡，让进度让回画面。 */
     emphasized: Boolean = true,
+    /**
+     * 触屏按住轨道后横向拖动时，以按下时的进度为起点按位移进退，划满轨道走 [SEEK_FULL_WIDTH_MILLIS]。
+     * 鼠标不受影响，照旧拖到哪跳到哪；轻点松手也仍跳到点下的位置。信息流的切片进度条保持绝对拖动。
+     */
+    relativeTouchScrub: Boolean = false,
 ) {
     var dragFraction by remember { mutableStateOf<Float?>(null) }
     var hoverFraction by remember { mutableStateOf<Float?>(null) }
@@ -1462,21 +1469,31 @@ internal fun PlayerSeekBar(
     )
     val positionText = formatTime((fraction * durationMillis).toLong())
     val durationText = formatTime(durationMillis)
+    val currentPositionMillis by rememberUpdatedState(positionMillis)
     val currentDurationMillis by rememberUpdatedState(durationMillis)
     val currentOnSeek by rememberUpdatedState(onSeek)
     val currentOnScrub by rememberUpdatedState(onScrub)
 
-    fun commitSeek(target: Float) {
-        val millis = (target * currentDurationMillis).toLong()
-        pendingSeekMillis = millis
-        currentOnSeek(millis)
+    fun commitSeekMillis(millis: Long) {
+        val clamped = millis.coerceIn(0L, currentDurationMillis.coerceAtLeast(0L))
+        pendingSeekMillis = clamped
+        currentOnSeek(clamped)
+    }
+
+    fun commitSeek(target: Float) = commitSeekMillis((target * currentDurationMillis).toLong())
+
+    fun publishScrub(millis: Long) {
+        val duration = currentDurationMillis.coerceAtLeast(0L)
+        val clamped = millis.coerceIn(0L, duration)
+        dragFraction = if (duration > 0L) clamped.toFloat() / duration else 0f
+        currentOnScrub(clamped)
     }
 
     // 方向键一步 SEEK_STEP_MILLIS，与播放器其余地方的进退同一步长，每按一下即提交，相当于拖动后松手。
     // 连按时从上一步的目标接着算，位置回报还没跟上也不会原地打转
     fun stepBy(deltaMillis: Long): Boolean {
         if (!enabled) return false
-        val base = pendingSeekMillis ?: positionMillis
+        val base = pendingSeekMillis ?: currentPositionMillis
         commitSeek(fractionOf(base + deltaMillis))
         return true
     }
@@ -1491,26 +1508,47 @@ internal fun PlayerSeekBar(
                 // 不能指望 Compose 的最小触控区自动外扩：它只在别处都没接住时才生效，而进度条底下铺着整屏的手势层
                 .requiredHeight(if (edgeAligned) EmbeddedSeekBarHeight else SeekTouchHeight)
                 .handCursor(enabled)
-                // 按下即跳到该处并开始拖动，松手才真正 seek
+                // 按下不立刻跳；拖动期间只预览目标，松手才真正 seek。触屏横滑按位移进退，见 relativeTouchScrub。
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     val inset = SeekThumbDraggingRadius.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         down.consume()
-                        fun follow(x: Float) {
-                            val target = seekFractionAt(x, size.width.toFloat(), inset)
-                            dragFraction = target
-                            currentOnScrub((target * currentDurationMillis).toLong())
-                        }
-                        follow(down.position.x)
+                        val widthPx = size.width.toFloat()
+                        val trackWidthPx = (widthPx - 2 * inset).coerceAtLeast(1f)
+                        val relative = relativeTouchScrub && down.type != PointerType.Mouse
+                        val baseMillis = (pendingSeekMillis ?: currentPositionMillis)
+                            .coerceIn(0L, currentDurationMillis.coerceAtLeast(0L))
+                        var moved = false
+                        var lastTargetMillis = baseMillis
                         while (true) {
                             val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) break
-                            follow(change.position.x)
+                            val deltaX = change.position.x - down.position.x
+                            if (!moved && abs(deltaX) > viewConfiguration.touchSlop) moved = true
+                            if (moved) {
+                                lastTargetMillis = if (relative) {
+                                    relativeSeekTargetMillis(
+                                        baseMillis = baseMillis,
+                                        deltaX = deltaX,
+                                        trackWidthPx = trackWidthPx,
+                                        spanMillis = SEEK_FULL_WIDTH_MILLIS,
+                                        durationMillis = currentDurationMillis,
+                                    )
+                                } else {
+                                    (seekFractionAt(change.position.x, widthPx, inset) * currentDurationMillis).toLong()
+                                }
+                                publishScrub(lastTargetMillis)
+                            }
                             change.consume()
                         }
-                        dragFraction?.let(::commitSeek)
+                        // 没越过触摸阈值的轻点仍跳到点下的位置；越过阈值后提交横滑得到的目标
+                        if (moved) {
+                            commitSeekMillis(lastTargetMillis)
+                        } else {
+                            commitSeekMillis((seekFractionAt(down.position.x, widthPx, inset) * currentDurationMillis).toLong())
+                        }
                         dragFraction = null
                         currentOnScrub(null)
                     }
@@ -1677,6 +1715,18 @@ private fun SeekPreviewBubble(
 /** 指针横坐标对应的进度。两端各让出手柄放大后的半径，拖到头时手柄不出界。 */
 private fun seekFractionAt(x: Float, width: Float, inset: Float): Float =
     ((x - inset) / (width - 2 * inset).coerceAtLeast(1f)).coerceIn(0f, 1f)
+
+/** 触屏在进度条上横滑的落点：从按下时的进度起算，划满整条轨道等于 [spanMillis]。 */
+internal fun relativeSeekTargetMillis(
+    baseMillis: Long,
+    deltaX: Float,
+    trackWidthPx: Float,
+    spanMillis: Long,
+    durationMillis: Long,
+): Long {
+    val deltaMillis = (deltaX / trackWidthPx.coerceAtLeast(1f) * spanMillis.toFloat()).toLong()
+    return (baseMillis + deltaMillis).coerceIn(0L, durationMillis.coerceAtLeast(0L))
+}
 
 private class SeekTrackColors(val active: Color, val inactive: Color, val buffered: Color)
 
@@ -1866,7 +1916,7 @@ private const val IDLE_INACTIVE_TRACK_ALPHA = 0.14f
 private const val IDLE_BUFFERED_TRACK_ALPHA = 0.24f
 
 private const val CONTAINER_ALPHA = 0.72f
-private const val LOADING_INDICATOR_FRACTION = 0.75f
+private const val LOADING_INDICATOR_FRACTION = 0.58f
 
 // 中央按钮的玻璃底：深色半透明，加一道很淡的白边把边界勾出来，亮画面上也看得清
 private val GLASS_SCRIM = Color.Black.copy(alpha = 0.34f)

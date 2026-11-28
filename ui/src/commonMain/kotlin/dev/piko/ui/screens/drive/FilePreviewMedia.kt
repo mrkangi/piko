@@ -63,9 +63,10 @@ import dev.piko.shared.data.isExtractableArchive
 import dev.piko.shared.media.PlayableMediaInfo
 import dev.piko.shared.media.PreparedPlayback
 import dev.piko.shared.media.player.AdoptedPlayback
+import dev.piko.shared.media.player.PlaybackBackendEvent
 import dev.piko.shared.media.player.PlaybackTarget
 import dev.piko.ui.LocalPikoServices
-import dev.piko.ui.components.MediaLoadingIndicator
+import dev.piko.ui.components.PikoLoadingIndicator
 import dev.piko.ui.components.PosterSpoilerBlur
 import dev.piko.ui.components.SpoilerThumbnail
 import dev.piko.ui.components.extensionLabel
@@ -79,6 +80,7 @@ import dev.piko.ui.platform.VideoPreviewHandoffs
 import dev.piko.ui.platform.VideoPreviewSupport
 import io.github.nihildigit.pikpak.FileStat
 import io.github.nihildigit.pikpak.videoThumbnailUrlOf
+import kotlinx.coroutines.launch
 
 /**
  * 预览播放器与播放详情页之间的交接。
@@ -207,11 +209,18 @@ private fun VideoPreviewHero(
     var scrubbing by remember { mutableStateOf(false) }
     var scrubTarget by remember { mutableStateOf(0L) }
     var wasPlayingBeforeScrub by remember { mutableStateOf(false) }
-    LaunchedEffect(source) {
+    // 首帧出来之前用封面顶着；之后缓冲不再把画面层藏起来，否则 seek 后一缓冲就会闪回封面（往往就是视频首帧）
+    var frameReady by remember { mutableStateOf(false) }
+    LaunchedEffect(player, source) {
+        frameReady = false
         val openSource = source
-        if (openSource != null) {
-            runCatching { player.open(openSource.target, startMillis = 0L, playWhenReady = false) }
+        if (openSource == null) return@LaunchedEffect
+        launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            player.events.collect { event ->
+                if (event == PlaybackBackendEvent.Ready) frameReady = true
+            }
         }
+        runCatching { player.open(openSource.target, startMillis = 0L, playWhenReady = false) }
     }
     LaunchedEffect(muted) { player.setVolume(if (muted) 0f else 1f) }
     DisposableEffect(player) { onDispose { if (!playback.handedOff) player.release() } }
@@ -220,6 +229,7 @@ private fun VideoPreviewHero(
     val position = player.positionMillis.coerceIn(0L, duration.takeIf { it > 0L } ?: Long.MAX_VALUE)
     val shownPosition = if (scrubbing) scrubTarget else position
     val fraction = if (duration > 0L) shownPosition.toFloat() / duration else 0f
+    val loading = !frameReady || player.isBuffering
     val togglePlayback = {
         if (source != null) {
             if (player.isPlaying) player.pause() else player.play()
@@ -238,7 +248,7 @@ private fun VideoPreviewHero(
         if (source != null) {
             support.Surface(
                 player,
-                Modifier.fillMaxSize().alpha(if (player.isBuffering) 0f else 1f),
+                Modifier.fillMaxSize().alpha(if (frameReady) 1f else 0f),
             )
         }
         Box(
@@ -274,9 +284,6 @@ private fun VideoPreviewHero(
                     detectTapGestures(onDoubleTap = { togglePlayback() })
                 },
         )
-        if (source == null || player.isBuffering) {
-            MediaLoadingIndicator(Modifier.align(Alignment.Center))
-        }
         PreviewMediaChip(file.extensionLabel() ?: tr("视频", "Video", "動画", "동영상", "影片"), Modifier.align(Alignment.TopStart).padding(10.dp))
         PreviewExpandButton(
             onClick = { onOpenDetail(player.positionMillis.coerceAtLeast(0L)) },
@@ -314,11 +321,15 @@ private fun VideoPreviewHero(
                     modifier = Modifier.size(30.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                            if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
-                            Modifier.size(18.dp),
-                        )
+                        if (loading) {
+                            PikoLoadingIndicator(size = 16.dp, color = Color.White)
+                        } else {
+                            Icon(
+                                if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                if (player.isPlaying) tr("暂停", "Pause", "一時停止", "일시정지", "暫停") else tr("播放", "Play", "再生", "재생", "播放"),
+                                Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.width(8.dp))

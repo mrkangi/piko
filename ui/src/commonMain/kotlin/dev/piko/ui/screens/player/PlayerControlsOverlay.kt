@@ -65,6 +65,7 @@ import dev.piko.shared.media.player.PlaylistEntry
 import dev.piko.shared.media.player.VideoCropRegion
 import dev.piko.shared.media.player.VideoDecodeMode
 import dev.piko.shared.media.player.VrModeState
+import dev.piko.ui.components.CompactMediaLoadingIndicator
 import dev.piko.ui.components.LocalPointerSource
 import dev.piko.ui.components.SheetAction
 import io.github.nihildigit.pikpak.FileStat
@@ -236,8 +237,10 @@ fun MobilePlayerControls(
     }
     val shownSeekPreview = seekPreviewController?.frame ?: seekPreview
     val isSeeking = ui.isScrubbing || seekPreviewMillis != null || embeddedScrubPositionMillis != null
-    val centerVisible = ((chromeVisible && !ui.isBoosting) || isLoading || centerIndicator != null) &&
-        (!embedded || !isPlaying || isLoading || centerIndicator != null) &&
+    // 收起控件后加载只留角落的小指示，不再用画面中央的大按钮托着转圈遮住内容
+    val compactLoadingVisible = isLoading && !chromeVisible && !isSeeking && errorMessage == null && !ui.isEditingCropRegion
+    val centerVisible = ((chromeVisible && !ui.isBoosting) || centerIndicator != null) &&
+        (!embedded || !isPlaying || centerIndicator != null) &&
         errorMessage == null && !ui.isEditingCropRegion && !isSeeking
 
     BackHandler(enabled = isFullscreen && !ui.isEditingCropRegion, onBack = onToggleFullscreen)
@@ -605,6 +608,7 @@ fun MobilePlayerControls(
                         onSeek(it)
                     },
                     thumbOnHoverOnly = false,
+                    relativeTouchScrub = true,
                     onScrub = { target ->
                         embeddedScrubPositionMillis = target
                         if (target != null) ui.interacted()
@@ -624,6 +628,15 @@ fun MobilePlayerControls(
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
                     .padding(top = HUD_TOP_PADDING),
             )
+
+            if (compactLoadingVisible) {
+                CompactMediaLoadingIndicator(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.End))
+                        .padding(12.dp),
+                )
+            }
 
             PlayerCenterControls(
                 visible = centerVisible,

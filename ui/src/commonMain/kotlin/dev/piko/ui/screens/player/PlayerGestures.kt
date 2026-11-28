@@ -390,8 +390,8 @@ private fun levelFor(
 internal const val SIDE_ZONE_FRACTION = 0.35f
 
 // 划过整个宽度跳的时长。Animeko 取 97 秒，为的是划满一屏刚好跳过番剧 90 秒的片头片尾；网盘里放的多是电影，
-// 两个小时的片子一屏只走一分半太慢，取 5 分钟
-private const val SEEK_FULL_WIDTH_MILLIS = 300_000L
+// 两个小时的片子一屏只走一分半太慢，取 5 分钟。进度条上的触屏横滑也用同一量程，见 PlayerSeekBar。
+internal const val SEEK_FULL_WIDTH_MILLIS = 300_000L
 
 // 横滑途中手指往上挪开多远取消这次进退，同取 Animeko 的值
 private val SEEK_CANCEL_DISTANCE = 144.dp
